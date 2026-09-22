@@ -1,15 +1,39 @@
 from __future__ import annotations
 
+from collections.abc import KeysView
 from datetime import datetime
 from pathlib import Path
+from types import MappingProxyType
+from typing import Mapping
 
 import duckdb
 
 from predictor.config import settings
 
-POINT_IN_TIME_TABLES = frozenset(
-    {"games", "injury_status", "odds_snapshots", "news_items"}
+# Logical name (what feature code and AsOfView callers use) -> physical
+# table name (what actually exists in the DuckDB catalog). The physical
+# names are deliberately NOT "games", "injury_status", etc. -- see FIX 1 in
+# the task-6 hardening report: con.sql()/.project()/.aggregate()/.filter()/
+# .query()/.join()/.union() all resolve identifiers against the connection's
+# catalog, completely bypassing AsOfView's observed_at <= cutoff filter, for
+# ANY caller who happens to name a real table in a SQL fragment passed to
+# one of those methods. Renaming the physical tables to a "_raw" suffix that
+# nobody would type by accident makes that mistake structurally impossible:
+# there is no table literally named "games" for a stray "FROM games" to
+# resolve to.
+POINT_IN_TIME_TABLES: Mapping[str, str] = MappingProxyType(
+    {
+        "games": "games_raw",
+        "injury_status": "injury_status_raw",
+        "odds_snapshots": "odds_snapshots_raw",
+        "news_items": "news_items_raw",
+    }
 )
+
+
+def point_in_time_logical_names() -> KeysView[str]:
+    """The logical point-in-time table names (what callers pass to AsOfView)."""
+    return POINT_IN_TIME_TABLES.keys()
 
 
 def require_utc(value: datetime, field: str = "observed_at") -> datetime:
@@ -33,7 +57,7 @@ def require_utc(value: datetime, field: str = "observed_at") -> datetime:
 
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS games (
+CREATE TABLE IF NOT EXISTS games_raw (
     game_id       VARCHAR NOT NULL,
     season        VARCHAR NOT NULL,
     game_date     DATE NOT NULL,
@@ -55,7 +79,7 @@ CREATE TABLE IF NOT EXISTS games (
 -- primary key; if a row's game date is unparseable, ingestion must
 -- substitute the report's own publication (report_date) rather than
 -- dropping the row -- losing an injury row is worse than an imperfect date.
-CREATE TABLE IF NOT EXISTS injury_status (
+CREATE TABLE IF NOT EXISTS injury_status_raw (
     report_date   DATE NOT NULL,
     game_date     DATE NOT NULL,
     matchup       VARCHAR,
@@ -68,7 +92,7 @@ CREATE TABLE IF NOT EXISTS injury_status (
     PRIMARY KEY (observed_at, team, player, game_date)
 );
 
-CREATE TABLE IF NOT EXISTS odds_snapshots (
+CREATE TABLE IF NOT EXISTS odds_snapshots_raw (
     game_key      VARCHAR NOT NULL,
     book          VARCHAR NOT NULL,
     home_team     VARCHAR NOT NULL,
@@ -81,7 +105,7 @@ CREATE TABLE IF NOT EXISTS odds_snapshots (
     PRIMARY KEY (game_key, book, observed_at)
 );
 
-CREATE TABLE IF NOT EXISTS news_items (
+CREATE TABLE IF NOT EXISTS news_items_raw (
     item_key      VARCHAR NOT NULL,
     feed          VARCHAR NOT NULL,
     title         VARCHAR,

@@ -20,7 +20,12 @@ def test_connect_pins_session_timezone_to_utc(tmp_path):
 
 def test_migrate_creates_expected_tables(con):
     names = {r[0] for r in con.execute("SHOW TABLES").fetchall()}
-    assert {"games", "injury_status", "odds_snapshots", "news_items"} <= names
+    assert {
+        "games_raw",
+        "injury_status_raw",
+        "odds_snapshots_raw",
+        "news_items_raw",
+    } <= names
 
 
 def test_migrate_is_idempotent(con):
@@ -34,63 +39,65 @@ def test_migrate_is_idempotent(con):
     """
     moment = datetime(2025, 1, 15, 12, 0, tzinfo=UTC)
     con.execute(
-        "INSERT INTO games (game_id, season, game_date, home_team, away_team,"
+        "INSERT INTO games_raw (game_id, season, game_date, home_team, away_team,"
         " status, observed_at) VALUES (?,?,?,?,?,?,?)",
         ["g1", "2024-25", moment.date(), "LAL", "BOS", "scheduled", moment],
     )
     con.execute(
-        "INSERT INTO injury_status (report_date, game_date, team, player,"
+        "INSERT INTO injury_status_raw (report_date, game_date, team, player,"
         " status, observed_at) VALUES (?,?,?,?,?,?)",
         [moment.date(), moment.date(), "LAL", "someone", "Out", moment],
     )
     con.execute(
-        "INSERT INTO odds_snapshots (game_key, book, home_team, away_team,"
+        "INSERT INTO odds_snapshots_raw (game_key, book, home_team, away_team,"
         " observed_at) VALUES (?,?,?,?,?)",
         ["g1", "draftkings", "LAL", "BOS", moment],
     )
     con.execute(
-        "INSERT INTO news_items (item_key, feed, observed_at) VALUES (?,?,?)",
+        "INSERT INTO news_items_raw (item_key, feed, observed_at) VALUES (?,?,?)",
         ["n1", "rss", moment],
     )
 
     db.migrate(con)
     db.migrate(con)
 
-    assert con.execute("SELECT count(*) FROM games").fetchone()[0] == 1
-    assert con.execute("SELECT count(*) FROM injury_status").fetchone()[0] == 1
-    assert con.execute("SELECT count(*) FROM odds_snapshots").fetchone()[0] == 1
-    assert con.execute("SELECT count(*) FROM news_items").fetchone()[0] == 1
+    assert con.execute("SELECT count(*) FROM games_raw").fetchone()[0] == 1
+    assert con.execute("SELECT count(*) FROM injury_status_raw").fetchone()[0] == 1
+    assert con.execute("SELECT count(*) FROM odds_snapshots_raw").fetchone()[0] == 1
+    assert con.execute("SELECT count(*) FROM news_items_raw").fetchone()[0] == 1
 
 
 def test_every_point_in_time_table_has_observed_at(con):
-    for table in db.POINT_IN_TIME_TABLES:
-        cols = {r[0] for r in con.execute(f"DESCRIBE {table}").fetchall()}
-        assert "observed_at" in cols, f"{table} missing observed_at"
+    for physical in db.POINT_IN_TIME_TABLES.values():
+        cols = {r[0] for r in con.execute(f"DESCRIBE {physical}").fetchall()}
+        assert "observed_at" in cols, f"{physical} missing observed_at"
 
 
 def test_point_in_time_tables_matches_schema_exactly(con):
     """POINT_IN_TIME_TABLES must not silently drift from the schema.
 
-    The as-of accessor (a later task) will only guard tables named in this
-    frozenset. A table added later that carries observed_at but is never
-    added to the frozenset would leak future knowledge into the backtest
-    with no error -- exactly the failure this schema exists to prevent. So
-    the set must match, in both directions, the tables that actually carry
-    observed_at according to DuckDB itself.
+    The as-of accessor only guards the PHYSICAL tables named as values in
+    this mapping. A table added later that carries observed_at but is never
+    added to the mapping would leak future knowledge into the backtest with
+    no error -- exactly the failure this schema exists to prevent. So the
+    set of physical names must match, in both directions, the tables that
+    actually carry observed_at according to DuckDB itself. (ingest_runs is
+    not point-in-time data and is deliberately excluded -- it has no
+    observed_at column.)
     """
     rows = con.execute(
         "SELECT table_name FROM information_schema.columns"
         " WHERE column_name = 'observed_at' AND table_schema = 'main'"
     ).fetchall()
     actual = {r[0] for r in rows}
-    assert actual == set(db.POINT_IN_TIME_TABLES)
+    assert actual == set(db.POINT_IN_TIME_TABLES.values())
 
 
 def test_observed_at_is_timestamptz(con):
-    for table in db.POINT_IN_TIME_TABLES:
-        rows = con.execute(f"DESCRIBE {table}").fetchall()
+    for physical in db.POINT_IN_TIME_TABLES.values():
+        rows = con.execute(f"DESCRIBE {physical}").fetchall()
         kind = {r[0]: r[1] for r in rows}["observed_at"]
-        assert "TIMESTAMP WITH TIME ZONE" in kind, f"{table}.observed_at is {kind}"
+        assert "TIMESTAMP WITH TIME ZONE" in kind, f"{physical}.observed_at is {kind}"
 
 
 def test_timestamps_roundtrip_in_utc_regardless_of_machine_timezone(con):
@@ -101,11 +108,11 @@ def test_timestamps_roundtrip_in_utc_regardless_of_machine_timezone(con):
     """
     moment = datetime(2025, 1, 15, 22, 30, tzinfo=UTC)
     con.execute(
-        "INSERT INTO injury_status (report_date, game_date, team, player,"
+        "INSERT INTO injury_status_raw (report_date, game_date, team, player,"
         " status, observed_at) VALUES (?,?,?,?,?,?)",
         [moment.date(), moment.date(), "LAL", "someone", "Out", moment],
     )
-    got = con.execute("SELECT observed_at FROM injury_status").fetchone()[0]
+    got = con.execute("SELECT observed_at FROM injury_status_raw").fetchone()[0]
     assert got == moment
     assert got.utcoffset().total_seconds() == 0, f"returned in non-UTC zone: {got}"
 
@@ -149,19 +156,19 @@ def test_injury_status_pk_allows_same_player_two_game_dates_one_report(con):
     """
     moment = datetime(2025, 1, 15, 12, 0, tzinfo=UTC)
     con.execute(
-        "INSERT INTO injury_status (report_date, game_date, team, player,"
+        "INSERT INTO injury_status_raw (report_date, game_date, team, player,"
         " status, observed_at) VALUES (?,?,?,?,?,?)",
         [moment.date(), datetime(2025, 1, 15).date(), "LAL", "LeBron James",
          "Questionable", moment],
     )
     con.execute(
-        "INSERT INTO injury_status (report_date, game_date, team, player,"
+        "INSERT INTO injury_status_raw (report_date, game_date, team, player,"
         " status, observed_at) VALUES (?,?,?,?,?,?)",
         [moment.date(), datetime(2025, 1, 17).date(), "LAL", "LeBron James",
          "Probable", moment],
     )
     rows = con.execute(
-        "SELECT game_date, status FROM injury_status"
+        "SELECT game_date, status FROM injury_status_raw"
         " WHERE team='LAL' AND player='LeBron James' ORDER BY game_date"
     ).fetchall()
     assert len(rows) == 2
@@ -174,17 +181,17 @@ def test_injury_status_insert_or_replace_collapses_identical_key(con):
     moment = datetime(2025, 1, 15, 12, 0, tzinfo=UTC)
     game_date = datetime(2025, 1, 15).date()
     con.execute(
-        "INSERT OR REPLACE INTO injury_status (report_date, game_date, team,"
+        "INSERT OR REPLACE INTO injury_status_raw (report_date, game_date, team,"
         " player, status, observed_at) VALUES (?,?,?,?,?,?)",
         [moment.date(), game_date, "LAL", "LeBron James", "Questionable", moment],
     )
     con.execute(
-        "INSERT OR REPLACE INTO injury_status (report_date, game_date, team,"
+        "INSERT OR REPLACE INTO injury_status_raw (report_date, game_date, team,"
         " player, status, observed_at) VALUES (?,?,?,?,?,?)",
         [moment.date(), game_date, "LAL", "LeBron James", "Out", moment],
     )
     rows = con.execute(
-        "SELECT status FROM injury_status"
+        "SELECT status FROM injury_status_raw"
         " WHERE team='LAL' AND player='LeBron James' AND game_date=?",
         [game_date],
     ).fetchall()
@@ -195,7 +202,7 @@ def test_injury_status_insert_or_replace_collapses_identical_key(con):
 def test_injury_status_game_date_is_not_null(con):
     with pytest.raises(duckdb.ConstraintException):
         con.execute(
-            "INSERT INTO injury_status (report_date, team, player, status,"
+            "INSERT INTO injury_status_raw (report_date, team, player, status,"
             " observed_at) VALUES (?,?,?,?,?)",
             [datetime(2025, 1, 15).date(), "LAL", "someone", "Out",
              datetime(2025, 1, 15, 12, 0, tzinfo=UTC)],
