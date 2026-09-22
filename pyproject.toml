@@ -1,0 +1,33 @@
+[project]
+name = "predictor"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "duckdb>=1.5.5",
+    "nba_api>=1.11.4",
+    "pandas>=3.0.6",
+    "pdfplumber>=0.11",
+    "feedparser>=6.0.14",
+    "typer>=0.27",
+    "tenacity>=9.1",
+    "requests>=2.34",
+    # Required by DuckDB to return TIMESTAMP WITH TIME ZONE values to Python.
+    # Without it, any query selecting observed_at raises ModuleNotFoundError.
+    "pytz>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9.1"]
+
+[project.scripts]
+predictor = "predictor.cli:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/predictor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
