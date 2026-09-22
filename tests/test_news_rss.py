@@ -180,7 +180,14 @@ def test_poll_all_classifies_transport_exception_as_failure(store):
 def test_poll_feed_bozo_with_zero_entries_is_failure(store, monkeypatch):
     raw = b"<totally not rss"
     session = _FakeSession(response=_FakeResponse(raw, 200))
-    fake_parsed = SimpleNamespace(entries=[], bozo=True, bozo_exception=ValueError("broken xml"))
+    # `version="rss20"` because this represents a feed that IS recognized
+    # as a known format but whose body is malformed enough that feedparser
+    # couldn't extract any entries -- distinct from Finding A's "not a
+    # feed at all" case below, which fails on `version` before this branch
+    # is ever reached.
+    fake_parsed = SimpleNamespace(
+        entries=[], bozo=True, bozo_exception=ValueError("broken xml"), version="rss20"
+    )
     monkeypatch.setattr(news_rss.feedparser, "parse", lambda content: fake_parsed)
 
     result = news_rss.poll_feed("espn", "http://example.invalid/feed", NOW, session=session)
@@ -195,6 +202,7 @@ def test_poll_feed_bozo_with_entries_is_success_with_warning(store, monkeypatch)
         entries=_parsed(["a", "b"]).entries,
         bozo=True,
         bozo_exception=ValueError("minor quirk"),
+        version="rss20",
     )
     monkeypatch.setattr(news_rss.feedparser, "parse", lambda content: fake_parsed)
 
@@ -203,3 +211,76 @@ def test_poll_feed_bozo_with_entries_is_success_with_warning(store, monkeypatch)
     assert result.new == 2
     assert result.warning is not None
     assert "minor quirk" in result.warning
+
+
+# --- Finding A: an unrecognizable response body must not read as a quiet day
+
+
+def test_poll_feed_html_body_is_classified_as_failure(store, monkeypatch):
+    # A publisher serving a "this feed has moved" HTML page for what used
+    # to be the feed URL. feedparser typically does NOT set bozo for
+    # well-formed HTML, and reports zero entries -- so this must be caught
+    # by the `version` check, not by the bozo check.
+    raw = b"<html><body>This feed has moved.</body></html>"
+    session = _FakeSession(response=_FakeResponse(raw, 200))
+    fake_parsed = SimpleNamespace(entries=[], bozo=False, bozo_exception=None, version="")
+    monkeypatch.setattr(news_rss.feedparser, "parse", lambda content: fake_parsed)
+
+    result = news_rss.poll_feed("espn", "http://example.invalid/feed", NOW, session=session)
+    assert result.ok is False
+    assert "not a recognizable feed" in result.error
+
+
+def test_poll_feed_empty_body_is_classified_as_failure(store, monkeypatch):
+    raw = b""
+    session = _FakeSession(response=_FakeResponse(raw, 200))
+    fake_parsed = SimpleNamespace(entries=[], bozo=False, bozo_exception=None, version=None)
+    monkeypatch.setattr(news_rss.feedparser, "parse", lambda content: fake_parsed)
+
+    result = news_rss.poll_feed("espn", "http://example.invalid/feed", NOW, session=session)
+    assert result.ok is False
+    assert "not a recognizable feed" in result.error
+
+
+def test_poll_feed_valid_but_empty_feed_is_success_with_zero_new(store, monkeypatch):
+    # The discriminator for Finding A is `version`, not entry count: a
+    # feed that IS recognized as e.g. rss20 but genuinely has zero items
+    # right now is a legitimate quiet day, not a failure.
+    raw = b"<rss version='2.0'><channel></channel></rss>"
+    session = _FakeSession(response=_FakeResponse(raw, 200))
+    fake_parsed = SimpleNamespace(entries=[], bozo=False, bozo_exception=None, version="rss20")
+    monkeypatch.setattr(news_rss.feedparser, "parse", lambda content: fake_parsed)
+
+    result = news_rss.poll_feed("espn", "http://example.invalid/feed", NOW, session=session)
+    assert result.ok is True
+    assert result.new == 0
+    assert result.error is None
+
+
+# --- Finding B: pin the observed_at-must-not-be-hashed invariant -----------
+
+
+def test_rearchiving_unchanged_entry_with_a_different_now_produces_no_conflict(store):
+    entry = SimpleNamespace(id="a", title="t", link="http://x/a", summary="s")
+    key = news_rss.item_key("espn", "a")
+
+    first_now = NOW
+    stats1 = news_rss.archive_entries("espn", SimpleNamespace(entries=[entry]), first_now)
+    assert stats1.new == 1
+    assert stats1.conflicts == 0
+
+    # Logically identical content (same entry, unchanged), but polled at a
+    # later time. If `observed_at` (or any other poll-time-only value) ever
+    # leaks back into the hashed content, this second archive of the exact
+    # same story would falsely look like a content change and raise
+    # RawStoreConflict on every single already-archived item of every poll
+    # -- exactly the regression caught live while implementing F3.
+    later_now = datetime(2026, 1, 3, 9, 30, tzinfo=UTC)
+    assert later_now != first_now
+    stats2 = news_rss.archive_entries("espn", SimpleNamespace(entries=[entry]), later_now)
+    assert stats2.new == 0
+    assert stats2.conflicts == 0
+    assert stats2.skipped == 0
+
+    manifest_entries = [e for e in raw_store.iter_manifest("news") if e["key"] == key]
+    assert len(manifest_entries) == 1

@@ -162,6 +162,23 @@ def poll_feed(feed_name: str, url: str, now: datetime, session=None) -> FeedResu
     parsed = feedparser.parse(raw_bytes)
     entries = getattr(parsed, "entries", [])
     bozo = bool(getattr(parsed, "bozo", False))
+    version = getattr(parsed, "version", None)
+
+    if not version:
+        # feedparser sets `version` to the identified feed format
+        # (`'rss20'`, `'atom10'`, ...) or to '' / None when the response
+        # body isn't recognizable as any feed format at all -- e.g. an
+        # HTML "this feed has moved" page, or an empty body. Neither of
+        # those cases reliably sets `bozo`, so they slip past the bozo
+        # check below and would otherwise be reported identically to a
+        # quiet news day (0 new). Checked ahead of, and independent of,
+        # bozo for that reason.
+        exc = getattr(parsed, "bozo_exception", None)
+        detail = f": {exc}" if exc else ""
+        return FeedResult(
+            feed_name, False, 0, 0, 0, None,
+            f"response was not a recognizable feed{detail}",
+        )
 
     if bozo and not entries:
         # feedparser sets bozo for all sorts of quirks, many of them
