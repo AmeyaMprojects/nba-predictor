@@ -25,7 +25,7 @@ The system is considered working when it produces, unattended, a daily brief the
 - **No LLM in the pipeline.** User has Claude Pro chat but no API key. The pipeline emits structured factual briefs; prose is written by the user or by pasting into a chat LLM. The pipeline stays deterministic and testable.
 - **User does not write code.** All implementation by Claude. One-command entry points, plain-English errors, no step requiring the user to debug Python.
 - **Local only.** macOS, no server, no cloud, no containers.
-- **Python.**
+- **Python 3.14.** Verified 2026-09-22 that `nba_api` 1.11.4, `duckdb` 1.5.5, `pandas` 3.0.6 and `pdfplumber` all install and function on 3.14.6, including a live NBA stats API call. Environments managed with `uv`.
 - **Time budget:** heavy (15-20+ hrs/week), roughly three weeks to opening night.
 
 ## Chosen approach
@@ -49,7 +49,7 @@ Five sub-projects. Each receives its own implementation plan. Order is dependenc
 | 4 | Context engine | No |
 | 5 | Artifact layer | Partial (charts + log) |
 
-Sub-project 1 begins immediately, before the rest of the design is built out, because injury and news history cannot be recovered retroactively.
+Sub-project 1 begins immediately, before the rest of the design is built out. News history cannot be recovered retroactively, so the RSS archiver should start running as early as possible. Injury reports, by contrast, are backfillable to ~2019-12 (see below), so that data is not at risk.
 
 ---
 
@@ -67,8 +67,34 @@ A single DuckDB file. Chosen over Postgres (no server or administration) and ove
 | Historical seasons, advanced stats | Basketball-Reference (scrape) | Historical | Strict rate limits; throttled conservatively |
 | Historical odds | Public historical odds datasets (2007→present) | Historical | Requires a cleaning and normalization pass |
 | Live odds | The Odds API free tier | Live | 500 requests/month; budgeted to one pull per day |
-| Injury reports | NBA official daily injury report | **Forward only** | No historical archive exists |
+| Injury reports | NBA official injury report PDFs (`ak-static.cms.nba.com`) | **2019-12 → present** | Published hourly; each snapshot is a true point-in-time observation |
 | News | Team and league RSS feeds | **Forward only** | No historical archive |
+
+**Injury report archive — verified 2026-09-22.** Contrary to the initial
+assumption that no historical injury archive existed, the league's PDF
+reports are retrievable at:
+
+```
+https://ak-static.cms.nba.com/referee/injury/Injury-Report_YYYY-MM-DD_HHPM.pdf
+```
+
+Confirmed behaviour:
+
+- Published **hourly**; all 24 hourly slots resolve for an in-season date.
+- Archive extends back to approximately **2019-12** (2019-12-10 resolves;
+  2018-12-11 returns 403).
+- Each PDF's header line carries its own publication timestamp
+  (`Injury Report: 01/15/25 05:30 PM`), which is authoritative for
+  `observed_at` and may differ from the filename hour.
+- Content is a positional table: `GameDate GameTime Matchup Team
+  PlayerName CurrentStatus Reason`, with group columns populated only on
+  the first row of each game/team block and `Reason` wrapping across
+  lines. Parsing must use word x-coordinates rather than text splitting,
+  because extracted text drops intra-field spaces (`NewYorkKnicks`).
+
+This is a material improvement: roughly six seasons of **genuine**
+point-in-time injury data are available, rather than hindsight
+reconstruction.
 
 ### Raw-first ingestion
 
@@ -84,7 +110,9 @@ This is the decision that determines whether the backtest means anything, and it
 
 ### Reconstructed data
 
-For seasons predating the archive, injury state is reconstructed from DNPs and lineup data. Every such row is flagged `reconstructed = true`. All backtests report metrics twice — including and excluding reconstructed rows — so hindsight contamination is visible rather than hidden.
+For seasons predating the injury-report archive (before ~2019-12), injury state is reconstructed from DNPs and lineup data. Every such row is flagged `reconstructed = true`. All backtests report metrics twice — including and excluding reconstructed rows — so hindsight contamination is visible rather than hidden.
+
+Given that genuine point-in-time injury data covers 2019-12 onward, the default backtest window is restricted to that range and reconstruction is treated as an optional extension rather than a core dependency.
 
 ---
 
