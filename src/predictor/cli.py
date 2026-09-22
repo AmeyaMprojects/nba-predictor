@@ -23,9 +23,19 @@ def poll_news() -> None:
     from predictor.sources import news_rss
 
     settings.ensure_dirs()
-    for feed, count in news_rss.poll_all().items():
-        state = "FAILED" if count < 0 else f"{count} new"
-        typer.echo(f"{feed}: {state}")
+    for feed, result in news_rss.poll_all().items():
+        if not result.ok:
+            typer.echo(f"{feed}: FAILED - {result.error}")
+            continue
+        parts = [f"{result.new} new"]
+        if result.skipped:
+            parts.append(f"{result.skipped} skipped")
+        if result.conflicts:
+            parts.append(f"{result.conflicts} conflicts")
+        line = f"{feed}: {', '.join(parts)}"
+        if result.warning:
+            line += f" (warning: {result.warning})"
+        typer.echo(line)
 
 
 if __name__ == "__main__":
