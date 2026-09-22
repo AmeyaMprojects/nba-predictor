@@ -1202,7 +1202,9 @@ from predictor import db
 from predictor.db import POINT_IN_TIME_TABLES
 
 # Default entity key used by latest() to pick the most recent snapshot per
-# logical table, when the caller does not supply one explicitly.
+# logical table, when the caller does not supply one explicitly. Kept in
+# sync with db.POINT_IN_TIME_TABLES by
+# test_default_latest_key_covers_every_point_in_time_table.
 _DEFAULT_LATEST_KEY: dict[str, tuple[str, ...]] = {
     "games": ("game_id",),
     "injury_status": ("team", "player", "game_date"),
@@ -1213,6 +1215,11 @@ _DEFAULT_LATEST_KEY: dict[str, tuple[str, ...]] = {
 
 class AsOfError(Exception):
     """Raised when a point-in-time access rule is violated."""
+
+
+def _quote_ident(name: str) -> str:
+    """Double-quote a SQL identifier, escaping any embedded double quotes."""
+    return '"' + name.replace('"', '""') + '"'
 
 
 class AsOfView:
@@ -1229,15 +1236,27 @@ class AsOfView:
     - The underlying physical tables are named with a ``_raw`` suffix
       (``games_raw``, ``injury_status_raw``, ...) that is never exposed
       through this class's public API and that no caller would type by
-      accident. Because the logical names ("games", "injury_status", ...)
-      do not exist as real tables in the DuckDB catalog, a SQL fragment
-      passed to ``.project()``, ``.aggregate()``, ``.filter()``, ``.join()``,
-      ``.union()`` or a fresh ``con.sql()``/``con.execute()`` call that
-      names one of those logical strings cannot resolve to a table and
-      raises a DuckDB ``CatalogException`` instead of silently reading
-      unfiltered data. Chaining those methods onto the relation this class
-      *returns* is still fine and still filtered, because the filter is
-      already baked into that relation before it is handed back.
+      accident, so a SQL fragment passed to ``.project()``, ``.aggregate()``,
+      ``.filter()``, ``.join()``, ``.union()`` etc. that names the LOGICAL
+      string (e.g. ``"games"``) cannot resolve to a table and raises a
+      DuckDB ``CatalogException`` instead of silently reading unfiltered
+      data.
+    - Every reference this class emits to a physical table is fully
+      qualified with the database name captured once at construction
+      (``"<db>"."main"."<table>_raw"``), not just the table name and not
+      just schema-qualified. DuckDB resolves an unqualified or only
+      schema-qualified table name through the ``temp`` catalog BEFORE the
+      real database, so ANY code sharing this connection that runs
+      ``CREATE TEMP VIEW games_raw AS ...``, ``con.register("games_raw",
+      ...)``, or ``some_relation.query("games_raw", ...)`` would otherwise
+      silently replace what every ``table()``/``latest()`` call on this
+      connection reads -- including calls made by code that only ever
+      touches ``AsOfView`` and never names a table itself. Capturing the
+      database name at construction, rather than re-reading it per call,
+      also means a later ``USE other_db`` on the same connection cannot
+      re-point this view at a different database's tables. The column
+      lookup ``latest()`` uses to validate a caller-supplied ``key`` is
+      likewise filtered by that captured database name.
     - ``as_of`` is validated once, at construction, via ``db.require_utc``
       (naive datetimes AND non-zero-UTC-offset datetimes are both
       rejected), and is exposed only as a read-only property -- it cannot be
@@ -1245,22 +1264,44 @@ class AsOfView:
     - Passing a non-``datetime`` (``date``, ``str``, ``int``, ``None``, ...)
       as ``as_of`` raises ``AsOfError`` with a plain-English message instead
       of an ``AttributeError`` deep in validation.
+    - ``latest()``'s caller-supplied ``key`` is validated against the
+      table's real columns (via ``information_schema``, filtered to this
+      view's captured database) before use, and is never interpolated
+      unchecked; an unknown column, an empty key, or a bare string (which
+      would otherwise iterate into individual characters) all raise
+      ``AsOfError`` instead of reaching SQL.
 
-    What is NOT enforced (see the task-6 report for the reasoning):
+    What is NOT enforced:
 
-    - A caller can still poison the connection's catalog by ``.query()``-ing
-      a relation under an alias that happens to match a physical ``_raw``
-      table name, then reading that alias directly from the connection.
-      This only ever produces a MORE conservative (i.e. never a leaking)
-      result, so it is left alone.
-    - ``table()`` does not eagerly materialize its result; repeated calls
-      re-run the filter. This is a performance concern for a large
-      backtest, not a correctness one.
+    - A caller who explicitly writes a physical ``_raw`` table name in
+      their OWN SQL fragment (rather than the logical name) still reads it
+      unfiltered. Nothing in this class can stop that -- it is a
+      deliberate act, not an accident. ``tests/test_leakage.py`` pins this
+      residual explicitly. The enforcement mechanism for it is a repo-wide
+      source scan asserting no physical name appears in a string literal
+      outside ``db.py``/``asof.py`` (excluding ``tests/``, which
+      legitimately writes physical names to set up fixtures that simulate
+      ingestion).
+    - Nothing stops a caller from reassigning ``view.con`` to a different
+      connection, or mutating the private ``view._as_of`` attribute
+      directly. Both require deliberately reaching past the public API,
+      unlike the catalog-shadowing issue above, which corrupts every
+      well-behaved caller on the SAME connection without any of them doing
+      anything wrong.
     - Nothing stops a caller from opening a second, unfiltered
       ``duckdb.DuckDBPyConnection`` directly onto the same database file and
       reading the ``_raw`` tables that way. ``AsOfView`` guards this
       connection's SQL surface; it is not a database-level permission
       system.
+    - A relation returned by ``table()``/``latest()`` is evaluated lazily,
+      but a *bound* one (this class always binds ``$cutoff`` as a query
+      parameter) is effectively a snapshot as of the moment it was
+      returned: a row inserted afterwards, even with an ``observed_at`` at
+      or before the cutoff, is not picked up by re-fetching the SAME
+      relation object, only by calling ``table()``/``latest()`` again.
+      This is a caching/performance detail, not a correctness one -- it
+      never shows *more* than the cutoff allows, only potentially less
+      until re-queried.
     """
 
     def __init__(self, con: duckdb.DuckDBPyConnection, as_of: datetime) -> None:
@@ -1285,6 +1326,13 @@ class AsOfView:
             raise AsOfError(str(exc)) from exc
         self.con = con
         self._as_of = as_of
+        # Captured ONCE here, not re-read per query. This is what defeats
+        # both catalog shadowing (temp views/registered relations resolve
+        # ahead of a bare or schema-qualified name, but never ahead of an
+        # explicit database qualifier) and a later `USE other_db` on this
+        # same connection silently re-pointing every subsequent query at a
+        # different database's tables.
+        self._db_name = con.execute("SELECT current_database()").fetchone()[0]
 
     @property
     def as_of(self) -> datetime:
@@ -1299,9 +1347,9 @@ class AsOfView:
         report-revision features need the full history. Use ``latest()``
         when you want one row per entity instead.
         """
-        physical = self._resolve(name)
+        qualified = self._qualify(self._resolve(name))
         return self.con.sql(
-            f"SELECT * FROM {physical} WHERE observed_at <= $cutoff",
+            f"SELECT * FROM {qualified} WHERE observed_at <= $cutoff",
             params={"cutoff": self._as_of},
         )
 
@@ -1315,7 +1363,29 @@ class AsOfView:
         being used -- it is never interpolated into SQL unchecked.
         """
         physical = self._resolve(name)
-        columns = key if key is not None else _DEFAULT_LATEST_KEY[name]
+        if key is None:
+            if name not in _DEFAULT_LATEST_KEY:
+                # Guards a future table added to POINT_IN_TIME_TABLES but
+                # not to _DEFAULT_LATEST_KEY -- without this, latest()
+                # would raise a raw KeyError instead of a clear AsOfError.
+                raise AsOfError(
+                    f"{name!r} has no default latest() key; pass key= explicitly"
+                )
+            columns = _DEFAULT_LATEST_KEY[name]
+        else:
+            if isinstance(key, str):
+                # A bare string is a Sequence[str] too -- iterating it
+                # yields individual characters, which would build a
+                # nonsensical (but not unsafe) PARTITION BY. Reject it
+                # explicitly rather than failing confusingly later.
+                raise AsOfError(
+                    "key must be a sequence of column names, not a bare "
+                    f"string; got {key!r} -- did you mean ({key!r},)?"
+                )
+            columns = tuple(key)
+            if not columns:
+                raise AsOfError("key must not be empty")
+
         valid_columns = self._real_columns(physical)
         unknown = [c for c in columns if c not in valid_columns]
         if unknown:
@@ -1323,9 +1393,10 @@ class AsOfView:
                 f"unknown column(s) {unknown!r} for table {name!r}; "
                 f"known columns: {sorted(valid_columns)}"
             )
-        partition = ", ".join(columns)
+        qualified = self._qualify(physical)
+        partition = ", ".join(_quote_ident(c) for c in columns)
         return self.con.sql(
-            f"SELECT * FROM {physical} WHERE observed_at <= $cutoff "
+            f"SELECT * FROM {qualified} WHERE observed_at <= $cutoff "
             f"QUALIFY row_number() OVER "
             f"(PARTITION BY {partition} ORDER BY observed_at DESC) = 1",
             params={"cutoff": self._as_of},
@@ -1340,11 +1411,26 @@ class AsOfView:
             )
         return physical
 
+    def _qualify(self, physical_table: str) -> str:
+        """Fully qualify a physical table name with the captured database.
+
+        Schema-qualifying alone (``main.games_raw``) is NOT sufficient --
+        DuckDB still resolves it through the ``temp`` catalog first, which
+        also has a ``main`` schema. Only a full three-part reference
+        (database.schema.table) is immune to catalog shadowing.
+        """
+        return (
+            f"{_quote_ident(self._db_name)}."
+            f"{_quote_ident('main')}."
+            f"{_quote_ident(physical_table)}"
+        )
+
     def _real_columns(self, physical_table: str) -> set[str]:
         rows = self.con.execute(
             "SELECT column_name FROM information_schema.columns"
-            " WHERE table_name = $table AND table_schema = 'main'",
-            {"table": physical_table},
+            " WHERE table_catalog = $db AND table_name = $table"
+            " AND table_schema = 'main'",
+            {"db": self._db_name, "table": physical_table},
         ).fetchall()
         return {r[0] for r in rows}
 ```
