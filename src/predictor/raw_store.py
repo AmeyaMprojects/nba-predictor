@@ -92,6 +92,17 @@ def iter_manifest(source: str) -> Iterator[dict]:
             yield json.loads(line)
 
 
+def _load_index_from_disk(source: str) -> dict[str, str]:
+    path = _manifest_path(source)
+    idx: dict[str, str] = {}
+    if path.exists():
+        for line in path.read_text().splitlines():
+            if line.strip():
+                entry = json.loads(line)
+                idx[entry["key"]] = entry["sha256"]
+    return idx
+
+
 def _index(source: str) -> dict[str, str]:
     """Return the key -> sha256 index for a source, built once and cached.
 
@@ -103,14 +114,34 @@ def _index(source: str) -> dict[str, str]:
     path = _manifest_path(source)
     idx = _index_cache.get(path)
     if idx is None:
-        idx = {}
-        if path.exists():
-            for line in path.read_text().splitlines():
-                if line.strip():
-                    entry = json.loads(line)
-                    idx[entry["key"]] = entry["sha256"]
+        idx = _load_index_from_disk(source)
         _index_cache[path] = idx
     return idx
+
+
+def _refresh_index(source: str) -> dict[str, str]:
+    """Reload a source's cached index from disk truth, in place.
+
+    Only called on the path where `store()` is about to decide whether to
+    append a manifest line for a key the in-memory cache does not know
+    about. The cache is built lazily and then trusted for the process's
+    lifetime, so if another writer (a concurrent process, or an earlier,
+    out-of-band write to the manifest) recorded this key after our cache
+    was built, a stale cache would wrongly treat it as brand new and append
+    a duplicate line. Appends are rare relative to idempotent lookups, so
+    paying for a full re-read of the manifest here -- and only here -- keeps
+    the idempotency guarantee real without slowing down the common path or
+    the backfill-loop case where the key really is already cached.
+    """
+    path = _manifest_path(source)
+    fresh = _load_index_from_disk(source)
+    cached = _index_cache.get(path)
+    if cached is None:
+        _index_cache[path] = fresh
+        return fresh
+    cached.clear()
+    cached.update(fresh)
+    return cached
 
 
 def store(
@@ -133,6 +164,14 @@ def store(
     idx = _index(source)
     recorded = idx.get(key)
     blob = blob_path(source, key)
+
+    if recorded is None:
+        # We're on the path that may decide to append a manifest line.
+        # Re-check against disk truth in case another writer recorded this
+        # key since our cache was built, so an idempotent retry can never
+        # produce a duplicate manifest entry.
+        idx = _refresh_index(source)
+        recorded = idx.get(key)
 
     if recorded is not None:
         if recorded != digest:

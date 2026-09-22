@@ -1,3 +1,4 @@
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta, timezone
 
@@ -142,3 +143,38 @@ def test_rejects_non_utc_offset(store):
     non_utc = datetime(2026, 1, 2, 3, 4, tzinfo=timezone(timedelta(hours=-5)))
     with pytest.raises(ValueError, match="UTC"):
         raw_store.store("injury", "a.pdf", b"x", non_utc)
+
+
+# --- Regression: a stale in-memory index cache must never cause a
+# duplicate manifest append on an idempotent retry ---
+
+
+def test_stale_cache_does_not_duplicate_manifest_entry(store):
+    # Prime this process's cache for the source while it is still empty,
+    # exactly as an unrelated earlier call in the same process would.
+    raw_store._index("injury")
+
+    # Simulate another writer -- a concurrent process, or an earlier run of
+    # this one -- recording a key after our cache was built: write the blob
+    # and append a correct manifest line directly, bypassing store().
+    content = b"payload"
+    blob = raw_store.blob_path("injury", "a.pdf")
+    blob.write_bytes(content)
+    entry = {
+        "source": "injury",
+        "key": "a.pdf",
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "fetched_at": NOW.isoformat(),
+        "size": len(content),
+        "meta": {},
+    }
+    with raw_store._manifest_path("injury").open("a") as fh:
+        fh.write(json.dumps(entry) + "\n")
+    assert len(list(raw_store.iter_manifest("injury"))) == 1
+
+    # The canonical idempotent retry: same key, matching content, through
+    # this (stale-cached) process.
+    raw_store.store("injury", "a.pdf", content, NOW)
+
+    entries = list(raw_store.iter_manifest("injury"))
+    assert len(entries) == 1
