@@ -212,6 +212,13 @@ import typer
 app = typer.Typer(help="NBA prediction data spine and pipeline.")
 
 
+@app.callback()
+def main() -> None:
+    """NBA prediction data spine and pipeline."""
+    # Without an explicit callback, Typer collapses a single-command app so
+    # that `predictor version` errors and only bare `predictor` works.
+
+
 @app.command()
 def version() -> None:
     """Print the installed version."""
@@ -228,16 +235,23 @@ if __name__ == "__main__":
 cd /Users/meya/Desktop/projects/predictor
 uv venv --python 3.14
 uv pip install -e ".[dev]"
+uv lock
 uv run pytest tests/test_config.py -v
 uv run predictor version
+uv run predictor --help
 ```
 
-Expected: tests PASS; `predictor 0.1.0` printed.
+Expected: tests PASS; `predictor 0.1.0` printed; `--help` lists `version`
+as a command.
 
 - [ ] **Step 8: Commit**
 
+`uv.lock` is committed deliberately: `pyproject.toml` declares only `>=`
+lower bounds, so without the lockfile two installs can resolve different
+transitive versions, which violates the reproducibility constraint.
+
 ```bash
-git add pyproject.toml .gitignore src tests
+git add pyproject.toml uv.lock .gitignore src tests
 git commit -m "feat: project scaffolding and CLI skeleton"
 ```
 
