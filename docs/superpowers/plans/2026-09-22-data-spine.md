@@ -899,7 +899,7 @@ def test_migrate_creates_expected_tables(con):
 def test_migrate_is_idempotent(con):
     db.migrate(con)
     db.migrate(con)
-    assert con.execute("SELECT count(*) FROM games_raw_raw").fetchone()[0] == 0
+    assert con.execute("SELECT count(*) FROM games_raw").fetchone()[0] == 0
 
 
 def test_every_point_in_time_table_has_observed_at(con):
@@ -963,7 +963,7 @@ from predictor.config import settings
 # ANY caller who happens to name a real table in a SQL fragment passed to
 # one of those methods. Renaming the physical tables to a "_raw" suffix that
 # nobody would type by accident makes that mistake structurally impossible:
-# there is no table literally named "games" for a stray "FROM games_raw" to
+# there is no table literally named "games" for a stray "FROM games" to
 # resolve to.
 POINT_IN_TIME_TABLES: Mapping[str, str] = MappingProxyType(
     {
@@ -1770,7 +1770,7 @@ def test_ingest_is_idempotent(tmp_path):
     db.migrate(con)
     injury_report.ingest_report(con, FIXTURE.read_bytes())
     injury_report.ingest_report(con, FIXTURE.read_bytes())
-    total = con.execute("SELECT count(*) FROM injury_status_raw_raw").fetchone()[0]
+    total = con.execute("SELECT count(*) FROM injury_status_raw").fetchone()[0]
     assert total == 161
 ```
 
@@ -2684,7 +2684,7 @@ def test_ingest_is_idempotent(env):
     news_rss.archive_entries("espn", _parsed(["a"]), NOW)
     news_rss.ingest_archived_news(env)
     news_rss.ingest_archived_news(env)
-    assert env.execute("SELECT count(*) FROM news_items_raw_raw").fetchone()[0] == 1
+    assert env.execute("SELECT count(*) FROM news_items_raw").fetchone()[0] == 1
 
 
 def test_ingest_with_no_archive_returns_zero(env):
