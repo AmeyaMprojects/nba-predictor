@@ -8,7 +8,12 @@ mkdir -p "$HOME/Library/LaunchAgents" "$PROJECT_DIR/data/logs"
 
 # Use Python for safe string replacement with proper XML escaping
 # Handles special characters (&, |, <, >, etc) that break sed or are invalid in XML
-python3 << 'PYTHON_SCRIPT'
+#
+# The path is passed as argv, not interpolated into the Python source text:
+# interpolating a path into source code means a path containing a quote,
+# backslash, or triple-quote sequence could corrupt or inject into the
+# program. Passing it as data (sys.argv) avoids that entirely.
+python3 - "$PROJECT_DIR" "$TARGET" << 'PYTHON_SCRIPT'
 import sys
 
 # XML-escape the path: & -> &amp;, < -> &lt;, > -> &gt;
@@ -18,16 +23,16 @@ def escape_xml(s):
     s = s.replace(">", "&gt;")
     return s
 
-PROJECT_DIR = """$PROJECT_DIR"""
-ESCAPED_PATH = escape_xml(PROJECT_DIR)
+project_dir, target = sys.argv[1], sys.argv[2]
+escaped_path = escape_xml(project_dir)
 
-with open("""$PROJECT_DIR""" + "/scripts/com.predictor.daily.plist", 'r') as f:
+with open(project_dir + "/scripts/com.predictor.daily.plist", "r") as f:
     plist_content = f.read()
 
 # Replace PROJECT_DIR placeholder with properly escaped path
-output = plist_content.replace("PROJECT_DIR", ESCAPED_PATH)
+output = plist_content.replace("PROJECT_DIR", escaped_path)
 
-with open("""$TARGET""", 'w') as f:
+with open(target, "w") as f:
     f.write(output)
 PYTHON_SCRIPT
 
