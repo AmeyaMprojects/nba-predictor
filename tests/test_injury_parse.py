@@ -123,3 +123,49 @@ def test_ingest_rejects_naive_published_at(tmp_path, monkeypatch):
     db.migrate(con)
     with pytest.raises(ValueError):
         injury_report.ingest_report(con, b"unused")
+
+
+def test_parse_raises_loudly_when_column_headers_are_never_found(monkeypatch):
+    # If _column_bounds never succeeds on any page (format drift, an
+    # unexpected layout, a corrupted PDF), parse_report must raise rather
+    # than silently returning ParsedReport(rows=[]) -- a well-formed
+    # report is never actually empty, and ingest_report writing 0 rows
+    # for a real report would be an invisible hole in a Task 9 backfill.
+    monkeypatch.setattr(injury_report, "_column_bounds", lambda page: None)
+    with pytest.raises(injury_report.InjuryReportParseError):
+        injury_report.parse_report(FIXTURE.read_bytes())
+
+
+def test_report_date_uses_eastern_calendar_day_not_utc(tmp_path, monkeypatch):
+    # A report published late evening Eastern crosses midnight UTC. The
+    # real 2025-01-15_10PM report has published_at 2025-01-16 03:30 UTC,
+    # which is 2025-01-15 22:30 ET -- the correct, filename-matching
+    # publication day. report_date must reflect the Eastern day, not
+    # whichever day UTC happens to land on, both for the stored
+    # report_date column and for its use as the game_date fallback (a
+    # row with an unparseable game_date must not land on the wrong
+    # calendar day either).
+    published_at = datetime(2025, 1, 16, 3, 30, tzinfo=UTC)
+    fake_report = injury_report.ParsedReport(
+        published_at=published_at,
+        rows=[
+            injury_report.InjuryRow(
+                game_date=None,
+                game_time="10:00(ET)",
+                matchup="LAL@BOS",
+                team="LosAngelesLakers",
+                player="Doe,John",
+                status="Out",
+                reason="Injury/Illness-LeftKnee;Soreness",
+            )
+        ],
+    )
+    monkeypatch.setattr(injury_report, "parse_report", lambda pdf_bytes: fake_report)
+
+    con = db.connect(tmp_path / "t.duckdb")
+    db.migrate(con)
+    injury_report.ingest_report(con, b"unused")
+    row = con.execute(
+        "SELECT game_date, report_date, observed_at FROM injury_status_raw"
+    ).fetchone()
+    assert row == (date(2025, 1, 15), date(2025, 1, 15), published_at)

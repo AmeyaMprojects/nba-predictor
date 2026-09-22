@@ -250,6 +250,21 @@ class ParsedReport:
     rows: list[InjuryRow]
 
 
+class InjuryReportParseError(Exception):
+    """Raised when a report's rows could not be extracted at all.
+
+    A genuinely empty-but-well-formed injury report is not a thing this
+    source produces -- even the smallest real report sampled had 3 rows.
+    Zero rows out of a parsed PDF means the column headers were never
+    located (format drift, an unexpected layout, a corrupted file), not
+    that nobody was injured. Silently returning an empty ParsedReport
+    here would let ingest_report write 0 rows and return 0 as though that
+    were legitimate, producing an invisible hole in a Task 9 backfill of
+    roughly 2,500 reports -- exactly what "never silently lose data --
+    surface loudly" forbids.
+    """
+
+
 def _column_bounds(page) -> list[float] | None:
     header: dict[str, float] = {}
     for word in page.extract_words():
@@ -359,13 +374,29 @@ def parse_report(pdf_bytes: bytes) -> ParsedReport:
             page_rows, carry = _parse_page(page, bounds, carry)
             rows.extend(page_rows)
 
+    if bounds is None or not rows:
+        raise InjuryReportParseError(
+            "parsed zero rows -- column headers were never located on any "
+            "page (format drift, an unexpected layout, or a corrupted "
+            "PDF); a well-formed report is never actually empty"
+        )
+
     return ParsedReport(published_at=published_at, rows=rows)
 
 
 def ingest_report(con, pdf_bytes: bytes) -> int:
     report = parse_report(pdf_bytes)
     observed_at = db.require_utc(report.published_at, "observed_at")
-    report_date = observed_at.date()
+    # report_date is a calendar date meant to match the report's real
+    # publication day (and the Eastern-based `day` metadata archive_report
+    # already records for the same file), not whatever day UTC happens to
+    # land on. Hour labels run through 11PM, so any report published from
+    # roughly 7PM ET onward crosses midnight UTC -- observed_at.date()
+    # would silently store the NEXT calendar day for every one of those
+    # reports. Converting back to Eastern before taking .date() is what
+    # keeps this aligned with the filename/header day. observed_at itself
+    # stays UTC; only this calendar-date column is computed in Eastern.
+    report_date = observed_at.astimezone(EASTERN).date()
     # Resolved through db.POINT_IN_TIME_TABLES rather than spelled as a
     # literal here -- the physical "_raw" table names are only allowed to
     # appear as string literals in db.py/asof.py (see
