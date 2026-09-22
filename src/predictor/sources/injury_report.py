@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import time
 from datetime import UTC, date, datetime
 
@@ -28,6 +29,12 @@ ARCHIVE_START = date(2019, 12, 1)
 _NOT_PUBLISHED_STATUSES = (403, 404)
 
 _MAX_ATTEMPTS = 4
+
+# Ceiling for any single wait between retry attempts, whether it comes from
+# our own exponential backoff or from a server-supplied Retry-After header.
+# A response header is untrusted input; without this cap, a huge value
+# would drive an effectively unbounded sleep in an unattended backfill.
+_MAX_WAIT_SECONDS = 30
 
 
 class TransientFetchError(Exception):
@@ -71,6 +78,26 @@ def _sleep(seconds: float) -> None:
 
 
 def _retry_after_seconds(response) -> float | None:
+    """Parse and sanitize a Retry-After response header.
+
+    Only the numeric ("delay-seconds") form is handled. RFC 7231 also
+    permits an HTTP-date form; that is deliberately NOT parsed here --
+    `float(value)` raises `ValueError` on it, which is caught below and
+    folds it into the same `None` fallback (exponential backoff takes
+    over) as any other unparseable value, rather than being a separate
+    concern to handle.
+
+    A response header is untrusted input, so the result is sanitized
+    before ever reaching a caller: non-numeric, non-finite (inf/nan), and
+    negative values all return `None` -- a negative value must never reach
+    the real `time.sleep()`, which raises `ValueError` for one, and that
+    would be an uncaught exception of the wrong type escaping this module's
+    documented contract (only `TransientFetchError` or a genuine network
+    exception should ever propagate out of a fetch). A well-formed but
+    huge value is clamped to `_MAX_WAIT_SECONDS`, the same ceiling the
+    exponential backoff path already respects, so this header can never
+    drive a longer, effectively unbounded hang in an unattended backfill.
+    """
     headers = getattr(response, "headers", None)
     if not headers:
         return None
@@ -78,12 +105,15 @@ def _retry_after_seconds(response) -> float | None:
     if value is None:
         return None
     try:
-        return float(value)
+        seconds = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(seconds) or seconds < 0:
+        return None
+    return min(seconds, _MAX_WAIT_SECONDS)
 
 
-_BACKOFF = tenacity.wait_exponential(multiplier=1, max=30)
+_BACKOFF = tenacity.wait_exponential(multiplier=1, max=_MAX_WAIT_SECONDS)
 
 
 def _wait_seconds(retry_state: tenacity.RetryCallState) -> float:
