@@ -16,9 +16,10 @@ def store(tmp_path, monkeypatch):
 
 
 class FakeResponse:
-    def __init__(self, status_code, content=b""):
+    def __init__(self, status_code, content=b"", headers=None):
         self.status_code = status_code
         self.content = content
+        self.headers = headers or {}
 
 
 class FakeSession:
@@ -29,6 +30,41 @@ class FakeSession:
     def get(self, url, timeout=None):
         self.calls.append(url)
         return self.mapping.get(url, FakeResponse(403))
+
+
+class ConstantStatusSession:
+    """Always answers with the same status, regardless of URL -- for
+    exercising the retry path, where the same slot is fetched repeatedly.
+    """
+
+    def __init__(self, status_code, headers=None):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.calls = []
+
+    def get(self, url, timeout=None):
+        self.calls.append(url)
+        return FakeResponse(self.status_code, headers=self.headers)
+
+
+class RaisingSession:
+    """Simulates a network-level failure (not an HTTP status)."""
+
+    def __init__(self, exc):
+        self.exc = exc
+        self.calls = []
+
+    def get(self, url, timeout=None):
+        self.calls.append(url)
+        raise self.exc
+
+
+@pytest.fixture(autouse=True)
+def no_real_sleep(monkeypatch):
+    """Every test in this module must run fast -- stub the sleep
+    indirection instead of letting exponential backoff actually block.
+    """
+    monkeypatch.setattr(injury_report, "_sleep", lambda seconds: None)
 
 
 def test_report_url_matches_verified_pattern():
@@ -72,3 +108,42 @@ def test_archive_rejects_non_pdf_payload(store):
     url = injury_report.report_url(day, hour)
     session = FakeSession({url: FakeResponse(200, b"<html>error</html>")})
     assert injury_report.archive_report(day, hour, session=session) is False
+
+
+def test_fetch_returns_none_on_404():
+    session = ConstantStatusSession(404)
+    assert injury_report.fetch_report(date(2025, 1, 15), "05PM", session) is None
+    assert len(session.calls) == 1, "403/404 must not be retried"
+
+
+def test_fetch_raises_transient_error_on_429_after_retries():
+    session = ConstantStatusSession(429)
+    with pytest.raises(injury_report.TransientFetchError) as exc_info:
+        injury_report.fetch_report(date(2025, 1, 15), "05PM", session)
+    assert exc_info.value.status_code == 429
+    assert len(session.calls) == injury_report._MAX_ATTEMPTS, (
+        "should retry up to the configured attempt limit, not once"
+    )
+
+
+def test_fetch_raises_transient_error_on_503_after_retries():
+    session = ConstantStatusSession(503, headers={"Retry-After": "1"})
+    with pytest.raises(injury_report.TransientFetchError) as exc_info:
+        injury_report.fetch_report(date(2025, 1, 15), "05PM", session)
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.retry_after == 1.0
+    assert len(session.calls) == injury_report._MAX_ATTEMPTS
+
+
+def test_fetch_propagates_network_exception_immediately():
+    session = RaisingSession(ConnectionError("boom"))
+    with pytest.raises(ConnectionError):
+        injury_report.fetch_report(date(2025, 1, 15), "05PM", session)
+    assert len(session.calls) == 1, "a network error must not be retried"
+
+
+def test_archive_report_skips_before_archive_start_without_request(store):
+    day = date(2018, 12, 11)
+    session = FakeSession({})
+    assert injury_report.archive_report(day, "05PM", session=session) is False
+    assert session.calls == [], "a pre-ARCHIVE_START date must not make a request"
