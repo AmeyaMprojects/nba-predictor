@@ -899,7 +899,7 @@ def test_migrate_creates_expected_tables(con):
 def test_migrate_is_idempotent(con):
     db.migrate(con)
     db.migrate(con)
-    assert con.execute("SELECT count(*) FROM games").fetchone()[0] == 0
+    assert con.execute("SELECT count(*) FROM games_raw_raw").fetchone()[0] == 0
 
 
 def test_every_point_in_time_table_has_observed_at(con):
@@ -925,11 +925,11 @@ def test_timestamps_roundtrip_in_utc_regardless_of_machine_timezone(con):
 
     moment = datetime(2025, 1, 15, 22, 30, tzinfo=UTC)
     con.execute(
-        "INSERT INTO injury_status (report_date, team, player, status, observed_at)"
+        "INSERT INTO injury_status_raw (report_date, team, player, status, observed_at)"
         " VALUES (?,?,?,?,?)",
         [moment.date(), "LAL", "someone", "Out", moment],
     )
-    got = con.execute("SELECT observed_at FROM injury_status").fetchone()[0]
+    got = con.execute("SELECT observed_at FROM injury_status_raw").fetchone()[0]
     assert got == moment
     assert got.utcoffset().total_seconds() == 0, f"returned in non-UTC zone: {got}"
 ```
@@ -944,16 +944,40 @@ Expected: FAIL — `ImportError: cannot import name 'db'`
 ```python
 from __future__ import annotations
 
+from collections.abc import KeysView
 from datetime import datetime
 from pathlib import Path
+from types import MappingProxyType
+from typing import Mapping
 
 import duckdb
 
 from predictor.config import settings
 
-POINT_IN_TIME_TABLES = frozenset(
-    {"games", "injury_status", "odds_snapshots", "news_items"}
+# Logical name (what feature code and AsOfView callers use) -> physical
+# table name (what actually exists in the DuckDB catalog). The physical
+# names are deliberately NOT "games", "injury_status", etc. -- see FIX 1 in
+# the task-6 hardening report: con.sql()/.project()/.aggregate()/.filter()/
+# .query()/.join()/.union() all resolve identifiers against the connection's
+# catalog, completely bypassing AsOfView's observed_at <= cutoff filter, for
+# ANY caller who happens to name a real table in a SQL fragment passed to
+# one of those methods. Renaming the physical tables to a "_raw" suffix that
+# nobody would type by accident makes that mistake structurally impossible:
+# there is no table literally named "games" for a stray "FROM games_raw" to
+# resolve to.
+POINT_IN_TIME_TABLES: Mapping[str, str] = MappingProxyType(
+    {
+        "games": "games_raw",
+        "injury_status": "injury_status_raw",
+        "odds_snapshots": "odds_snapshots_raw",
+        "news_items": "news_items_raw",
+    }
 )
+
+
+def point_in_time_logical_names() -> KeysView[str]:
+    """The logical point-in-time table names (what callers pass to AsOfView)."""
+    return POINT_IN_TIME_TABLES.keys()
 
 
 def require_utc(value: datetime, field: str = "observed_at") -> datetime:
@@ -977,7 +1001,7 @@ def require_utc(value: datetime, field: str = "observed_at") -> datetime:
 
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS games (
+CREATE TABLE IF NOT EXISTS games_raw (
     game_id       VARCHAR NOT NULL,
     season        VARCHAR NOT NULL,
     game_date     DATE NOT NULL,
@@ -999,7 +1023,7 @@ CREATE TABLE IF NOT EXISTS games (
 -- primary key; if a row's game date is unparseable, ingestion must
 -- substitute the report's own publication (report_date) rather than
 -- dropping the row -- losing an injury row is worse than an imperfect date.
-CREATE TABLE IF NOT EXISTS injury_status (
+CREATE TABLE IF NOT EXISTS injury_status_raw (
     report_date   DATE NOT NULL,
     game_date     DATE NOT NULL,
     matchup       VARCHAR,
@@ -1012,7 +1036,7 @@ CREATE TABLE IF NOT EXISTS injury_status (
     PRIMARY KEY (observed_at, team, player, game_date)
 );
 
-CREATE TABLE IF NOT EXISTS odds_snapshots (
+CREATE TABLE IF NOT EXISTS odds_snapshots_raw (
     game_key      VARCHAR NOT NULL,
     book          VARCHAR NOT NULL,
     home_team     VARCHAR NOT NULL,
@@ -1025,7 +1049,7 @@ CREATE TABLE IF NOT EXISTS odds_snapshots (
     PRIMARY KEY (game_key, book, observed_at)
 );
 
-CREATE TABLE IF NOT EXISTS news_items (
+CREATE TABLE IF NOT EXISTS news_items_raw (
     item_key      VARCHAR NOT NULL,
     feed          VARCHAR NOT NULL,
     title         VARCHAR,
@@ -1112,7 +1136,7 @@ def con(tmp_path):
     db.migrate(c)
     for offset, player in [(-2, "past"), (2, "future")]:
         c.execute(
-            "INSERT INTO injury_status "
+            "INSERT INTO injury_status_raw "
             "(report_date, team, player, status, observed_at) VALUES (?,?,?,?,?)",
             [
                 CUTOFF.date(),
@@ -1133,7 +1157,7 @@ def test_returns_only_rows_observed_at_or_before_cutoff(con):
 
 def test_boundary_row_exactly_at_cutoff_is_included(con):
     con.execute(
-        "INSERT INTO injury_status "
+        "INSERT INTO injury_status_raw "
         "(report_date, team, player, status, observed_at) VALUES (?,?,?,?,?)",
         [CUTOFF.date(), "BOS", "boundary", "Out", CUTOFF],
     )
@@ -1169,11 +1193,22 @@ Expected: FAIL — `ImportError: cannot import name 'asof'`
 ```python
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 
 import duckdb
 
+from predictor import db
 from predictor.db import POINT_IN_TIME_TABLES
+
+# Default entity key used by latest() to pick the most recent snapshot per
+# logical table, when the caller does not supply one explicitly.
+_DEFAULT_LATEST_KEY: dict[str, tuple[str, ...]] = {
+    "games": ("game_id",),
+    "injury_status": ("team", "player", "game_date"),
+    "odds_snapshots": ("game_key", "book"),
+    "news_items": ("item_key",),
+}
 
 
 class AsOfError(Exception):
@@ -1181,28 +1216,137 @@ class AsOfError(Exception):
 
 
 class AsOfView:
-    """The only sanctioned way to read point-in-time data.
+    """A point-in-time reader for the tables listed in ``db.POINT_IN_TIME_TABLES``.
 
-    Every read is filtered to rows whose ``observed_at`` is at or before
-    ``as_of``. Feature code must never query these tables directly.
+    What IS enforced:
+
+    - ``table(name)`` and ``latest(name)`` only accept a LOGICAL name from
+      ``db.POINT_IN_TIME_TABLES`` (e.g. ``"games"``); an unknown or crafted
+      string raises ``AsOfError`` before any SQL is built.
+    - Both methods return exactly the rows whose ``observed_at`` is at or
+      before ``as_of`` -- an exact match, never rounded or excluded at the
+      boundary.
+    - The underlying physical tables are named with a ``_raw`` suffix
+      (``games_raw``, ``injury_status_raw``, ...) that is never exposed
+      through this class's public API and that no caller would type by
+      accident. Because the logical names ("games", "injury_status", ...)
+      do not exist as real tables in the DuckDB catalog, a SQL fragment
+      passed to ``.project()``, ``.aggregate()``, ``.filter()``, ``.join()``,
+      ``.union()`` or a fresh ``con.sql()``/``con.execute()`` call that
+      names one of those logical strings cannot resolve to a table and
+      raises a DuckDB ``CatalogException`` instead of silently reading
+      unfiltered data. Chaining those methods onto the relation this class
+      *returns* is still fine and still filtered, because the filter is
+      already baked into that relation before it is handed back.
+    - ``as_of`` is validated once, at construction, via ``db.require_utc``
+      (naive datetimes AND non-zero-UTC-offset datetimes are both
+      rejected), and is exposed only as a read-only property -- it cannot be
+      reassigned after construction.
+    - Passing a non-``datetime`` (``date``, ``str``, ``int``, ``None``, ...)
+      as ``as_of`` raises ``AsOfError`` with a plain-English message instead
+      of an ``AttributeError`` deep in validation.
+
+    What is NOT enforced (see the task-6 report for the reasoning):
+
+    - A caller can still poison the connection's catalog by ``.query()``-ing
+      a relation under an alias that happens to match a physical ``_raw``
+      table name, then reading that alias directly from the connection.
+      This only ever produces a MORE conservative (i.e. never a leaking)
+      result, so it is left alone.
+    - ``table()`` does not eagerly materialize its result; repeated calls
+      re-run the filter. This is a performance concern for a large
+      backtest, not a correctness one.
+    - Nothing stops a caller from opening a second, unfiltered
+      ``duckdb.DuckDBPyConnection`` directly onto the same database file and
+      reading the ``_raw`` tables that way. ``AsOfView`` guards this
+      connection's SQL surface; it is not a database-level permission
+      system.
     """
 
     def __init__(self, con: duckdb.DuckDBPyConnection, as_of: datetime) -> None:
-        if as_of.tzinfo is None or as_of.utcoffset() is None:
-            raise AsOfError("as_of must be timezone-aware")
+        if not isinstance(as_of, datetime):
+            # datetime is a subclass of date, so this must be checked before
+            # any date-shaped validation -- otherwise a bare `date` (the
+            # realistic mis-call: passing a game date instead of a cutoff
+            # timestamp) falls through to attribute access on a `date`
+            # object and raises a confusing AttributeError instead of a
+            # clear AsOfError.
+            raise AsOfError(
+                "as_of must be a timezone-aware datetime, "
+                f"got {type(as_of).__name__}: {as_of!r}"
+            )
+        try:
+            db.require_utc(as_of, "as_of")
+        except ValueError as exc:
+            # require_utc raises ValueError so it can be shared by every
+            # write path in db.py, which has nothing to do with AsOfView.
+            # Re-raise as AsOfError so every caller of this class can catch
+            # one exception type for every point-in-time access mistake.
+            raise AsOfError(str(exc)) from exc
         self.con = con
-        self.as_of = as_of
+        self._as_of = as_of
+
+    @property
+    def as_of(self) -> datetime:
+        return self._as_of
 
     def table(self, name: str) -> duckdb.DuckDBPyRelation:
-        if name not in POINT_IN_TIME_TABLES:
+        """Every observation of ``name`` at or before the cutoff.
+
+        This can return more than one row per entity (e.g. a game's
+        SCHEDULED row and a later IN_PROGRESS row can both be at or before
+        the cutoff). That is intentional -- line-movement and
+        report-revision features need the full history. Use ``latest()``
+        when you want one row per entity instead.
+        """
+        physical = self._resolve(name)
+        return self.con.sql(
+            f"SELECT * FROM {physical} WHERE observed_at <= $cutoff",
+            params={"cutoff": self._as_of},
+        )
+
+    def latest(
+        self, name: str, key: Sequence[str] | None = None
+    ) -> duckdb.DuckDBPyRelation:
+        """Most recent observation per entity, at or before the cutoff.
+
+        ``key`` defaults per logical table (see ``_DEFAULT_LATEST_KEY``) and,
+        if supplied, is validated against the table's real columns before
+        being used -- it is never interpolated into SQL unchecked.
+        """
+        physical = self._resolve(name)
+        columns = key if key is not None else _DEFAULT_LATEST_KEY[name]
+        valid_columns = self._real_columns(physical)
+        unknown = [c for c in columns if c not in valid_columns]
+        if unknown:
+            raise AsOfError(
+                f"unknown column(s) {unknown!r} for table {name!r}; "
+                f"known columns: {sorted(valid_columns)}"
+            )
+        partition = ", ".join(columns)
+        return self.con.sql(
+            f"SELECT * FROM {physical} WHERE observed_at <= $cutoff "
+            f"QUALIFY row_number() OVER "
+            f"(PARTITION BY {partition} ORDER BY observed_at DESC) = 1",
+            params={"cutoff": self._as_of},
+        )
+
+    def _resolve(self, name: str) -> str:
+        physical = POINT_IN_TIME_TABLES.get(name)
+        if physical is None:
             raise AsOfError(
                 f"{name!r} is not a point-in-time table; "
                 f"known tables: {sorted(POINT_IN_TIME_TABLES)}"
             )
-        return self.con.sql(
-            f"SELECT * FROM {name} WHERE observed_at <= $cutoff",
-            params={"cutoff": self.as_of},
-        )
+        return physical
+
+    def _real_columns(self, physical_table: str) -> set[str]:
+        rows = self.con.execute(
+            "SELECT column_name FROM information_schema.columns"
+            " WHERE table_name = $table AND table_schema = 'main'",
+            {"table": physical_table},
+        ).fetchall()
+        return {r[0] for r in rows}
 ```
 
 Table names are validated against a fixed allow-list before interpolation,
@@ -1245,7 +1389,7 @@ def con(tmp_path):
 
 def _insert_game(con, game_id, observed_at, status, home_points, away_points):
     con.execute(
-        "INSERT INTO games (game_id, season, game_date, home_team, away_team,"
+        "INSERT INTO games_raw (game_id, season, game_date, home_team, away_team,"
         " home_points, away_points, status, observed_at) VALUES (?,?,?,?,?,?,?,?,?)",
         [
             game_id,
@@ -1275,7 +1419,7 @@ def test_final_score_is_invisible_before_the_game_finishes(con):
 def test_injury_report_published_after_cutoff_is_invisible(con):
     for offset, player in [(-1, "early"), (1, "late")]:
         con.execute(
-            "INSERT INTO injury_status (report_date, team, player, status, observed_at)"
+            "INSERT INTO injury_status_raw (report_date, team, player, status, observed_at)"
             " VALUES (?,?,?,?,?)",
             [TIP_OFF.date(), "PHI", player, "Out", TIP_OFF + timedelta(hours=offset)],
         )
@@ -1287,7 +1431,7 @@ def test_injury_report_published_after_cutoff_is_invisible(con):
 def test_odds_moved_after_cutoff_are_invisible(con):
     for offset, spread in [(-2, -3.5), (2, -7.5)]:
         con.execute(
-            "INSERT INTO odds_snapshots (game_key, book, home_team, away_team,"
+            "INSERT INTO odds_snapshots_raw (game_key, book, home_team, away_team,"
             " spread, observed_at) VALUES (?,?,?,?,?,?)",
             ["g1", "bookA", "PHI", "NYK", spread, TIP_OFF + timedelta(hours=offset)],
         )
@@ -1300,7 +1444,7 @@ def test_guard_cannot_be_bypassed_with_a_crafted_table_name(con):
     view = AsOfView(con, TIP_OFF)
     for hostile in [
         "games WHERE 1=1 OR observed_at > now()",
-        "(SELECT * FROM games)",
+        "(SELECT * FROM games_raw)",
         "games--",
         "GAMES",
     ]:
@@ -1617,7 +1761,7 @@ def test_ingest_writes_rows_with_published_at_as_observed_at(tmp_path):
     db.migrate(con)
     count = injury_report.ingest_report(con, FIXTURE.read_bytes())
     assert count == 161
-    distinct = con.execute("SELECT DISTINCT observed_at FROM injury_status").fetchall()
+    distinct = con.execute("SELECT DISTINCT observed_at FROM injury_status_raw").fetchall()
     assert distinct == [(datetime(2025, 1, 15, 22, 30, tzinfo=UTC),)]
 
 
@@ -1626,7 +1770,7 @@ def test_ingest_is_idempotent(tmp_path):
     db.migrate(con)
     injury_report.ingest_report(con, FIXTURE.read_bytes())
     injury_report.ingest_report(con, FIXTURE.read_bytes())
-    total = con.execute("SELECT count(*) FROM injury_status").fetchone()[0]
+    total = con.execute("SELECT count(*) FROM injury_status_raw_raw").fetchone()[0]
     assert total == 161
 ```
 
@@ -1788,7 +1932,7 @@ def ingest_report(con, pdf_bytes: bytes) -> int:
     report = parse_report(pdf_bytes)
     for row in report.rows:
         con.execute(
-            "INSERT OR REPLACE INTO injury_status (report_date, game_date, matchup,"
+            "INSERT OR REPLACE INTO injury_status_raw (report_date, game_date, matchup,"
             " team, player, status, reason, reconstructed, observed_at)"
             " VALUES (?,?,?,?,?,?,?,FALSE,?)",
             [
@@ -2102,7 +2246,7 @@ def test_ingest_writes_rows_with_supplied_observed_at(tmp_path, monkeypatch):
     count = nba_stats.ingest_season(con, "2024-25", observed_at=OBSERVED)
     assert count == 1
     row = con.execute(
-        "SELECT home_team, away_team, home_points, observed_at FROM games"
+        "SELECT home_team, away_team, home_points, observed_at FROM games_raw"
     ).fetchone()
     assert row == ("OKC", "IND", 103, OBSERVED)
 ```
@@ -2189,7 +2333,7 @@ def ingest_season(con, season: str, observed_at: datetime | None = None) -> int:
     games = pair_team_rows(fetch_season(season), season)
     for game in games:
         con.execute(
-            "INSERT OR REPLACE INTO games (game_id, season, game_date, home_team,"
+            "INSERT OR REPLACE INTO games_raw (game_id, season, game_date, home_team,"
             " away_team, home_points, away_points, status, observed_at)"
             " VALUES (?,?,?,?,?,?,?,?,?)",
             [
@@ -2313,7 +2457,7 @@ def test_ingest_writes_rows(tmp_path, monkeypatch):
     db.migrate(con)
     monkeypatch.setattr(odds, "fetch_current", lambda key, session=None: PAYLOAD)
     assert odds.ingest_current(con, api_key="k", now=NOW) == 1
-    stored = con.execute("SELECT book, home_price FROM odds_snapshots").fetchone()
+    stored = con.execute("SELECT book, home_price FROM odds_snapshots_raw").fetchone()
     assert stored == ("draftkings", -150)
 
 
@@ -2431,7 +2575,7 @@ def ingest_current(con, api_key: str | None = None, now=None, session=None) -> i
     rows = parse_odds_payload(payload, now)
     for row in rows:
         con.execute(
-            "INSERT OR REPLACE INTO odds_snapshots (game_key, book, home_team,"
+            "INSERT OR REPLACE INTO odds_snapshots_raw (game_key, book, home_team,"
             " away_team, home_price, away_price, spread, total, observed_at)"
             " VALUES (?,?,?,?,?,?,?,?,?)",
             [
@@ -2530,7 +2674,7 @@ def _parsed(ids):
 def test_ingest_loads_archived_items_into_the_table(env):
     news_rss.archive_entries("espn", _parsed(["a", "b"]), NOW)
     assert news_rss.ingest_archived_news(env) == 2
-    rows = env.execute("SELECT feed, title, observed_at FROM news_items").fetchall()
+    rows = env.execute("SELECT feed, title, observed_at FROM news_items_raw").fetchall()
     assert len(rows) == 2
     assert rows[0][0] == "espn"
     assert rows[0][2] == NOW
@@ -2540,7 +2684,7 @@ def test_ingest_is_idempotent(env):
     news_rss.archive_entries("espn", _parsed(["a"]), NOW)
     news_rss.ingest_archived_news(env)
     news_rss.ingest_archived_news(env)
-    assert env.execute("SELECT count(*) FROM news_items").fetchone()[0] == 1
+    assert env.execute("SELECT count(*) FROM news_items_raw_raw").fetchone()[0] == 1
 
 
 def test_ingest_with_no_archive_returns_zero(env):
@@ -2564,7 +2708,7 @@ def ingest_archived_news(con) -> int:
         key = entry["key"]
         payload = json.loads(raw_store.load("news", key))
         con.execute(
-            "INSERT OR REPLACE INTO news_items"
+            "INSERT OR REPLACE INTO news_items_raw"
             " (item_key, feed, title, link, summary, observed_at)"
             " VALUES (?,?,?,?,?,?)",
             [
@@ -2661,7 +2805,7 @@ def con(tmp_path):
 
 def _add_injury(con, observed_at, player="x"):
     con.execute(
-        "INSERT INTO injury_status (report_date, team, player, status, observed_at)"
+        "INSERT INTO injury_status_raw (report_date, team, player, status, observed_at)"
         " VALUES (?,?,?,?,?)",
         [observed_at.date(), "LAL", player, "Out", observed_at],
     )
