@@ -1,3 +1,6 @@
+from datetime import UTC, datetime, timedelta, timezone
+
+import duckdb
 import pytest
 
 from predictor import db
@@ -21,15 +24,66 @@ def test_migrate_creates_expected_tables(con):
 
 
 def test_migrate_is_idempotent(con):
+    """migrate() must never lose data, even if called again with rows present.
+
+    Calling it twice on an empty database (asserting still-0-rows) is nearly
+    tautological -- a future refactor to DROP TABLE/CREATE TABLE would wipe
+    data and that assertion would still pass. Insert a row into every
+    point-in-time table first, then prove migrate() is a true no-op on
+    existing data.
+    """
+    moment = datetime(2025, 1, 15, 12, 0, tzinfo=UTC)
+    con.execute(
+        "INSERT INTO games (game_id, season, game_date, home_team, away_team,"
+        " status, observed_at) VALUES (?,?,?,?,?,?,?)",
+        ["g1", "2024-25", moment.date(), "LAL", "BOS", "scheduled", moment],
+    )
+    con.execute(
+        "INSERT INTO injury_status (report_date, game_date, team, player,"
+        " status, observed_at) VALUES (?,?,?,?,?,?)",
+        [moment.date(), moment.date(), "LAL", "someone", "Out", moment],
+    )
+    con.execute(
+        "INSERT INTO odds_snapshots (game_key, book, home_team, away_team,"
+        " observed_at) VALUES (?,?,?,?,?)",
+        ["g1", "draftkings", "LAL", "BOS", moment],
+    )
+    con.execute(
+        "INSERT INTO news_items (item_key, feed, observed_at) VALUES (?,?,?)",
+        ["n1", "rss", moment],
+    )
+
     db.migrate(con)
     db.migrate(con)
-    assert con.execute("SELECT count(*) FROM games").fetchone()[0] == 0
+
+    assert con.execute("SELECT count(*) FROM games").fetchone()[0] == 1
+    assert con.execute("SELECT count(*) FROM injury_status").fetchone()[0] == 1
+    assert con.execute("SELECT count(*) FROM odds_snapshots").fetchone()[0] == 1
+    assert con.execute("SELECT count(*) FROM news_items").fetchone()[0] == 1
 
 
 def test_every_point_in_time_table_has_observed_at(con):
     for table in db.POINT_IN_TIME_TABLES:
         cols = {r[0] for r in con.execute(f"DESCRIBE {table}").fetchall()}
         assert "observed_at" in cols, f"{table} missing observed_at"
+
+
+def test_point_in_time_tables_matches_schema_exactly(con):
+    """POINT_IN_TIME_TABLES must not silently drift from the schema.
+
+    The as-of accessor (a later task) will only guard tables named in this
+    frozenset. A table added later that carries observed_at but is never
+    added to the frozenset would leak future knowledge into the backtest
+    with no error -- exactly the failure this schema exists to prevent. So
+    the set must match, in both directions, the tables that actually carry
+    observed_at according to DuckDB itself.
+    """
+    rows = con.execute(
+        "SELECT table_name FROM information_schema.columns"
+        " WHERE column_name = 'observed_at' AND table_schema = 'main'"
+    ).fetchall()
+    actual = {r[0] for r in rows}
+    assert actual == set(db.POINT_IN_TIME_TABLES)
 
 
 def test_observed_at_is_timestamptz(con):
@@ -45,14 +99,104 @@ def test_timestamps_roundtrip_in_utc_regardless_of_machine_timezone(con):
     Without it DuckDB returns values in the local zone, which still compare
     equal but make failures machine-dependent and very hard to read.
     """
-    from datetime import UTC, datetime
-
     moment = datetime(2025, 1, 15, 22, 30, tzinfo=UTC)
     con.execute(
-        "INSERT INTO injury_status (report_date, team, player, status, observed_at)"
-        " VALUES (?,?,?,?,?)",
-        [moment.date(), "LAL", "someone", "Out", moment],
+        "INSERT INTO injury_status (report_date, game_date, team, player,"
+        " status, observed_at) VALUES (?,?,?,?,?,?)",
+        [moment.date(), moment.date(), "LAL", "someone", "Out", moment],
     )
     got = con.execute("SELECT observed_at FROM injury_status").fetchone()[0]
     assert got == moment
     assert got.utcoffset().total_seconds() == 0, f"returned in non-UTC zone: {got}"
+
+
+# --- require_utc ---------------------------------------------------------
+
+
+def test_require_utc_rejects_naive_datetime():
+    with pytest.raises(ValueError, match="timezone-aware"):
+        db.require_utc(datetime(2025, 1, 15, 12, 0))
+
+
+def test_require_utc_rejects_non_utc_offset():
+    tz = timezone(timedelta(hours=-5))
+    with pytest.raises(ValueError, match="UTC"):
+        db.require_utc(datetime(2025, 1, 15, 12, 0, tzinfo=tz))
+
+
+def test_require_utc_passes_through_utc_datetime():
+    moment = datetime(2025, 1, 15, 12, 0, tzinfo=UTC)
+    assert db.require_utc(moment) is moment
+
+
+def test_require_utc_uses_field_name_in_message():
+    with pytest.raises(ValueError, match="published_at must be timezone-aware"):
+        db.require_utc(datetime(2025, 1, 15, 12, 0), field="published_at")
+
+
+# --- injury_status primary key --------------------------------------------
+
+
+def test_injury_status_pk_allows_same_player_two_game_dates_one_report(con):
+    """A report published at one observed_at can span two game dates.
+
+    5 of 11 real injury reports sampled during review spanned two different
+    game dates in a single report -- exactly the precondition for the same
+    player appearing twice with the same (observed_at, team, player). The
+    old PK (observed_at, team, player) would collide there, and because
+    ingestion uses INSERT OR REPLACE, the collision would silently delete a
+    row instead of erroring. Prove both rows now persist.
+    """
+    moment = datetime(2025, 1, 15, 12, 0, tzinfo=UTC)
+    con.execute(
+        "INSERT INTO injury_status (report_date, game_date, team, player,"
+        " status, observed_at) VALUES (?,?,?,?,?,?)",
+        [moment.date(), datetime(2025, 1, 15).date(), "LAL", "LeBron James",
+         "Questionable", moment],
+    )
+    con.execute(
+        "INSERT INTO injury_status (report_date, game_date, team, player,"
+        " status, observed_at) VALUES (?,?,?,?,?,?)",
+        [moment.date(), datetime(2025, 1, 17).date(), "LAL", "LeBron James",
+         "Probable", moment],
+    )
+    rows = con.execute(
+        "SELECT game_date, status FROM injury_status"
+        " WHERE team='LAL' AND player='LeBron James' ORDER BY game_date"
+    ).fetchall()
+    assert len(rows) == 2
+    assert rows[0][0] == datetime(2025, 1, 15).date()
+    assert rows[1][0] == datetime(2025, 1, 17).date()
+
+
+def test_injury_status_insert_or_replace_collapses_identical_key(con):
+    """Re-ingesting the identical row must still collapse to one, not grow."""
+    moment = datetime(2025, 1, 15, 12, 0, tzinfo=UTC)
+    game_date = datetime(2025, 1, 15).date()
+    con.execute(
+        "INSERT OR REPLACE INTO injury_status (report_date, game_date, team,"
+        " player, status, observed_at) VALUES (?,?,?,?,?,?)",
+        [moment.date(), game_date, "LAL", "LeBron James", "Questionable", moment],
+    )
+    con.execute(
+        "INSERT OR REPLACE INTO injury_status (report_date, game_date, team,"
+        " player, status, observed_at) VALUES (?,?,?,?,?,?)",
+        [moment.date(), game_date, "LAL", "LeBron James", "Out", moment],
+    )
+    rows = con.execute(
+        "SELECT status FROM injury_status"
+        " WHERE team='LAL' AND player='LeBron James' AND game_date=?",
+        [game_date],
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0][0] == "Out"
+
+
+def test_injury_status_game_date_is_not_null(con):
+    with pytest.raises(duckdb.ConstraintException):
+        con.execute(
+            "INSERT INTO injury_status (report_date, team, player, status,"
+            " observed_at) VALUES (?,?,?,?,?)",
+            [datetime(2025, 1, 15).date(), "LAL", "someone", "Out",
+             datetime(2025, 1, 15, 12, 0, tzinfo=UTC)],
+        )
