@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import io
 import math
+import re
 import time
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from zoneinfo import ZoneInfo
 
+import pdfplumber
 import requests
 import tenacity
 
-from predictor import raw_store
+from predictor import db, raw_store
 
 BASE_URL = "https://ak-static.cms.nba.com/referee/injury"
 
@@ -218,3 +223,178 @@ def archive_report(
         meta={"day": day.isoformat(), "hour_label": hour_label},
     )
     return True
+
+
+EASTERN = ZoneInfo("America/New_York")
+
+COLS = ["GameDate", "GameTime", "Matchup", "Team", "PlayerName", "CurrentStatus", "Reason"]
+GAME_DATE, GAME_TIME, MATCHUP, TEAM, PLAYER, STATUS, REASON = range(7)
+
+_STAMP = re.compile(r"(\d{2}/\d{2}/\d{2})\s+(\d{1,2}:\d{2})\s*(AM|PM)")
+
+
+@dataclass(frozen=True)
+class InjuryRow:
+    game_date: date | None
+    game_time: str
+    matchup: str
+    team: str
+    player: str
+    status: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class ParsedReport:
+    published_at: datetime
+    rows: list[InjuryRow]
+
+
+def _column_bounds(page) -> list[float] | None:
+    header: dict[str, float] = {}
+    for word in page.extract_words():
+        if word["text"] in COLS and word["text"] not in header:
+            header[word["text"]] = word["x0"]
+    return [header[c] for c in COLS] if len(header) == len(COLS) else None
+
+
+def _column_index(x0: float, bounds: list[float]) -> int:
+    index = 0
+    for i, edge in enumerate(bounds):
+        if x0 >= edge - 2:
+            index = i
+    return index
+
+
+def _lines(page, bounds):
+    groups: dict[int, list] = {}
+    for word in page.extract_words():
+        if word["text"] in COLS:
+            continue
+        groups.setdefault(round(word["top"] / 3), []).append(word)
+
+    out = []
+    for key in sorted(groups):
+        words = groups[key]
+        cells = [""] * len(COLS)
+        for word in sorted(words, key=lambda w: w["x0"]):
+            i = _column_index(word["x0"], bounds)
+            cells[i] = (cells[i] + " " + word["text"]).strip()
+        if "InjuryReport:" in "".join(cells).replace(" ", ""):
+            continue
+        out.append((min(w["top"] for w in words), cells))
+    return out
+
+
+def _parse_page(page, bounds, carry):
+    lines = _lines(page, bounds)
+    anchors = [(t, c) for t, c in lines if c[PLAYER] and c[STATUS]]
+    fragments = [
+        (t, c[REASON]) for t, c in lines if not (c[PLAYER] and c[STATUS]) and c[REASON]
+    ]
+
+    rows = [
+        {"top": t, "cells": c, "pieces": [(t, c[REASON])] if c[REASON] else []}
+        for t, c in anchors
+    ]
+
+    # A wrapped Reason can sit above or below its player line, so each
+    # fragment attaches to the vertically nearest anchor.
+    for top, text in fragments:
+        if rows:
+            nearest = min(rows, key=lambda r: abs(r["top"] - top))
+            nearest["pieces"].append((top, text))
+
+    parsed = []
+    for row in rows:
+        cells = row["cells"]
+        for i in (GAME_DATE, GAME_TIME, MATCHUP, TEAM):
+            if cells[i]:
+                carry[i] = cells[i]
+            else:
+                cells[i] = carry.get(i, "")
+        reason = "".join(text for _, text in sorted(row["pieces"]))
+        parsed.append(
+            InjuryRow(
+                game_date=_to_date(cells[GAME_DATE]),
+                game_time=cells[GAME_TIME],
+                matchup=cells[MATCHUP],
+                team=cells[TEAM],
+                player=cells[PLAYER],
+                status=cells[STATUS],
+                reason=reason,
+            )
+        )
+    return parsed, carry
+
+
+def _to_date(text: str) -> date | None:
+    try:
+        return datetime.strptime(text, "%m/%d/%Y").date()
+    except ValueError:
+        return None
+
+
+def _published_at(first_line: str) -> datetime:
+    match = _STAMP.search(first_line)
+    if not match:
+        raise ValueError(f"no publication timestamp in header: {first_line!r}")
+    day, clock, meridiem = match.groups()
+    naive = datetime.strptime(f"{day} {clock} {meridiem}", "%m/%d/%y %I:%M %p")
+    return naive.replace(tzinfo=EASTERN).astimezone(UTC)
+
+
+def parse_report(pdf_bytes: bytes) -> ParsedReport:
+    rows: list[InjuryRow] = []
+    carry: dict[int, str] = {}
+    bounds = None
+
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        published_at = _published_at(pdf.pages[0].extract_text().split("\n")[0])
+        for page in pdf.pages:
+            # Only page 1 carries the header; reuse its bounds thereafter.
+            bounds = _column_bounds(page) or bounds
+            if bounds is None:
+                continue
+            page_rows, carry = _parse_page(page, bounds, carry)
+            rows.extend(page_rows)
+
+    return ParsedReport(published_at=published_at, rows=rows)
+
+
+def ingest_report(con, pdf_bytes: bytes) -> int:
+    report = parse_report(pdf_bytes)
+    observed_at = db.require_utc(report.published_at, "observed_at")
+    report_date = observed_at.date()
+    # Resolved through db.POINT_IN_TIME_TABLES rather than spelled as a
+    # literal here -- the physical "_raw" table names are only allowed to
+    # appear as string literals in db.py/asof.py (see
+    # test_no_physical_table_name_appears_outside_db_and_asof); this
+    # ingestion module must not name the physical table directly either.
+    table = db.POINT_IN_TIME_TABLES["injury_status"]
+    insert_sql = (
+        f"INSERT OR REPLACE INTO {table} (report_date, game_date, matchup,"
+        " team, player, status, reason, reconstructed, observed_at)"
+        " VALUES (?,?,?,?,?,?,?,FALSE,?)"
+    )
+    for row in report.rows:
+        # game_date is NOT NULL and part of the primary key (see schema
+        # comment in predictor.db); if a row's game date failed to parse,
+        # substitute the report's own publication date rather than
+        # dropping the row or inserting NULL -- losing an injury row is
+        # worse than an imperfect date.
+        game_date = row.game_date if row.game_date is not None else report_date
+        con.execute(
+            insert_sql,
+            [
+                report_date,
+                game_date,
+                row.matchup,
+                row.team,
+                row.player,
+                row.status,
+                row.reason,
+                observed_at,
+            ],
+        )
+    return len(report.rows)
