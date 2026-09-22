@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.predictor.daily</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>PROJECT_DIR/.venv/bin/predictor</string>
+        <string>poll-news</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>PROJECT_DIR</string>
+    <key>StartCalendarInterval</key>
+    <array>
+        <dict><key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>14</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>19</integer><key>Minute</key><integer>0</integer></dict>
+    </array>
+    <key>StandardOutPath</key>
+    <string>PROJECT_DIR/data/logs/daily.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>PROJECT_DIR/data/logs/daily.err.log</string>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
