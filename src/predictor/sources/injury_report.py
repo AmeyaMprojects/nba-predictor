@@ -7,6 +7,7 @@ import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from enum import Enum
 from zoneinfo import ZoneInfo
 
 import pdfplumber
@@ -181,22 +182,57 @@ def fetch_report(day: date, hour_label: str, session=None) -> bytes | None:
     return _fetch_attempt(session, day, hour_label)
 
 
-def archive_report(
+class ArchiveOutcome(Enum):
+    """Fine-grained result of one archive attempt for a single slot.
+
+    `archive_report` (the pre-existing, tested public entry point) collapses
+    this down to a bool -- True only for ARCHIVED, False for everything
+    else -- so every existing caller/test of `archive_report` is unaffected.
+    `backfill_range` calls the internal `_archive` helper directly instead,
+    because it needs to tell BAD_CONTENT apart from NOT_PUBLISHED (Task 9
+    review Finding 1): a 200 response with a non-PDF body is NOT the same
+    thing as a confirmed 403/404 "never published" response, and conflating
+    them would let a CDN block/challenge page masquerade as a clean sweep
+    of "nothing published this week".
+    """
+
+    ARCHIVED = "archived"
+    ALREADY_ARCHIVED = "already_archived"
+    BEFORE_ARCHIVE_START = "before_archive_start"
+    NOT_PUBLISHED = "not_published"
+    BAD_CONTENT = "bad_content"
+
+    @property
+    def request_made(self) -> bool:
+        """Whether this outcome involved an actual network request.
+
+        ALREADY_ARCHIVED and BEFORE_ARCHIVE_START both short-circuit before
+        any call to `fetch_report`; a caller sleeping a fixed "politeness"
+        delay between slots that touched the network must skip that delay
+        for these two outcomes (Task 9 review Finding 3).
+        """
+        return self not in (
+            ArchiveOutcome.ALREADY_ARCHIVED,
+            ArchiveOutcome.BEFORE_ARCHIVE_START,
+        )
+
+
+def _archive(
     day: date,
     hour_label: str,
     now: datetime | None = None,
     session=None,
-) -> bool:
+) -> ArchiveOutcome:
     if day < ARCHIVE_START:
         print(
             f"injury: skipping {raw_key(day, hour_label)} -- before archive "
             f"start {ARCHIVE_START.isoformat()}"
         )
-        return False
+        return ArchiveOutcome.BEFORE_ARCHIVE_START
 
     key = raw_key(day, hour_label)
     if raw_store.exists("injury", key):
-        return False
+        return ArchiveOutcome.ALREADY_ARCHIVED
 
     # TransientFetchError intentionally propagates uncaught here: it means
     # "could not check", which the caller (a Task 9 backfill loop) must be
@@ -205,16 +241,18 @@ def archive_report(
     # failure mode this exception exists to prevent.
     content = fetch_report(day, hour_label, session)
     if content is None:
-        return False
+        return ArchiveOutcome.NOT_PUBLISHED
 
     if not content.startswith(b"%PDF"):
         # A fixed key per slot (not content-addressed like the news feeds)
         # means archiving a garbage body would either block the real PDF
         # forever via the exists() short-circuit above, or collide with it
         # later as a RawStoreConflict. Discarding it is correct; just make
-        # sure it doesn't happen silently.
+        # sure it doesn't happen silently. Distinct from NOT_PUBLISHED: this
+        # was a 200, i.e. the server answered, it just didn't answer with a
+        # PDF -- a confirmed-absent 403/404 never reaches this branch.
         print(f"injury: non-PDF body discarded -- {key} ({len(content)} bytes)")
-        return False
+        return ArchiveOutcome.BAD_CONTENT
 
     raw_store.store(
         "injury",
@@ -223,7 +261,23 @@ def archive_report(
         now or datetime.now(UTC),
         meta={"day": day.isoformat(), "hour_label": hour_label},
     )
-    return True
+    return ArchiveOutcome.ARCHIVED
+
+
+def archive_report(
+    day: date,
+    hour_label: str,
+    now: datetime | None = None,
+    session=None,
+) -> bool:
+    """Fetch and archive one slot; True iff a new PDF was archived.
+
+    False covers every other outcome (already archived, before the archive
+    window, confirmed absent, or a 200 with a non-PDF body) -- this is the
+    pre-existing public contract, unchanged. Callers that need to tell those
+    "False" cases apart (Task 9's `backfill_range`) use `_archive` directly.
+    """
+    return _archive(day, hour_label, now, session) is ArchiveOutcome.ARCHIVED
 
 
 EASTERN = ZoneInfo("America/New_York")
@@ -448,10 +502,10 @@ def backfill_range(
     used for the whole sweep so a multi-thousand-slot run does not open a
     fresh TCP/TLS connection per request.
 
-    Three failure modes are counted SEPARATELY from `missing` (a confirmed
-    403/404 "never published" slot), and none of them abort the run --
-    a single bad slot must not cost the operator a multi-thousand-request
-    restart:
+    Four failure/exception modes are counted SEPARATELY from `missing` (a
+    confirmed 403/404 "never published" slot), and none of them abort the
+    run -- a single bad slot must not cost the operator a multi-thousand-
+    request restart:
 
     - `transient`: `fetch_report` raised `TransientFetchError` (429/5xx/
       unexpected status, after its own internal retries were exhausted).
@@ -459,6 +513,15 @@ def backfill_range(
       the exact defect fixed in Task 7. The slot is NOT archived, so a
       re-run of this same range will retry it automatically (raw_store
       still reports it as not existing).
+    - `bad_content`: the response was a 200, but the body was not a PDF
+      (e.g. a CDN block/challenge page). This is deliberately NOT folded
+      into `missing`: a confirmed 403/404 and a 200-with-garbage-body look
+      identical to a naive caller, but they mean very different things --
+      one is a confirmed "never published", the other is "the server
+      answered, just not with a report". A CDN serving a 200 block page
+      across a stretch of the backfill must never masquerade as "the NBA
+      published nothing those weeks". The slot is NOT archived (see
+      `_archive`), so a re-run of this same range will retry it.
     - `parse_failed`: the PDF was fetched (and archived to disk) but could
       not be turned into rows, either via the documented
       `InjuryReportParseError` (zero rows extracted) or via an unforeseen
@@ -467,11 +530,12 @@ def backfill_range(
       `InjuryReportParseError` (a pre-existing gap, not fixed here). Both
       are bucketed together because the practical meaning is identical:
       bytes were fetched, nothing was ingested. IMPORTANT ASYMMETRY: unlike
-      `transient`, the raw PDF IS already archived at this point, so a
-      re-run of this same range will SKIP this slot (raw_store.exists()
-      is now true) rather than retry ingestion. Recovering a `parse_failed`
-      slot after a parser fix requires a separate re-ingest-from-raw-store
-      path, which is out of scope for this backfill.
+      `transient` and `bad_content`, the raw PDF IS already archived at
+      this point, so a re-run of this same range will SKIP this slot
+      (raw_store.exists() is now true) rather than retry ingestion.
+      Recovering a `parse_failed` slot after a parser fix means re-running
+      `reingest_archived`, which ingests already-archived PDFs with no
+      network fetch at all.
 
     A raw network-level exception (connection error, timeout, ...) is
     deliberately NOT caught here -- `fetch_report` documents that it
@@ -489,6 +553,7 @@ def backfill_range(
         "ingested": 0,
         "transient": 0,
         "parse_failed": 0,
+        "bad_content": 0,
     }
 
     day = start
@@ -500,7 +565,7 @@ def backfill_range(
                 continue
 
             try:
-                fetched = archive_report(day, hour, session=session)
+                outcome = _archive(day, hour, session=session)
             except TransientFetchError as exc:
                 stats["transient"] += 1
                 print(
@@ -512,7 +577,7 @@ def backfill_range(
                     time.sleep(delay)
                 continue
 
-            if fetched:
+            if outcome is ArchiveOutcome.ARCHIVED:
                 stats["fetched"] += 1
                 try:
                     stats["ingested"] += ingest_report(con, raw_store.load("injury", key))
@@ -522,7 +587,8 @@ def backfill_range(
                         f"injury backfill: PARSE FAILED for "
                         f"{day.isoformat()} {hour} -- {exc}. PDF is archived "
                         "on disk but was NOT ingested; a re-run will skip "
-                        "(not retry) this slot."
+                        "(not retry) this slot -- recover it with "
+                        "reingest_archived() after fixing the parser."
                     )
                 except Exception as exc:  # noqa: BLE001 -- see docstring
                     # Guards against an unforeseen parse-time exception --
@@ -536,13 +602,90 @@ def backfill_range(
                         f"injury backfill: UNEXPECTED ERROR parsing/ingesting "
                         f"{day.isoformat()} {hour} -- {type(exc).__name__}: "
                         f"{exc}. PDF is archived on disk but was NOT ingested; "
-                        "a re-run will skip (not retry) this slot."
+                        "a re-run will skip (not retry) this slot -- recover "
+                        "it with reingest_archived() after fixing the parser."
                     )
-            else:
+            elif outcome is ArchiveOutcome.BAD_CONTENT:
+                stats["bad_content"] += 1
+                print(
+                    f"injury backfill: BAD CONTENT (200 response, non-PDF "
+                    f"body) for {day.isoformat()} {hour} -- not counted as "
+                    "absent; will retry on the next run of this range."
+                )
+            elif outcome in (ArchiveOutcome.NOT_PUBLISHED, ArchiveOutcome.BEFORE_ARCHIVE_START):
+                # Same bucket as before this fix: a pre-ARCHIVE_START date
+                # was already folded into `missing` (archive_report used to
+                # return False for it, same as a confirmed 403/404), and
+                # that categorization is unchanged here -- only whether the
+                # politeness delay below is paid for it is (Finding 3).
+                # ALREADY_ARCHIVED never reaches here: the `skipped` check
+                # at the top of this loop intercepts that case before
+                # `_archive` is ever called.
                 stats["missing"] += 1
 
-            if delay:
+            if delay and outcome.request_made:
                 time.sleep(delay)
         day += timedelta(days=1)
+
+    return stats
+
+
+def reingest_archived(
+    con,
+    start: date | None = None,
+    end: date | None = None,
+) -> dict[str, int]:
+    """Re-ingest already-archived injury report PDFs, with NO network fetch.
+
+    This is the recovery path `backfill_range`'s own `parse_failed` warning
+    promises but does not implement (Task 9 review Finding 2): once a
+    `parse_failed` slot's raw PDF is on disk, `backfill_range` will SKIP it
+    on every future run (raw_store.exists() is true), so the only way to
+    recover it -- for example after a parser bug fix -- is to re-ingest
+    directly from the archive. This walks every blob already recorded in
+    raw_store's manifest for the "injury" source and calls `ingest_report`
+    on each one.
+
+    Safe to re-run at any time, on any subset of the archive:
+    `ingest_report` uses INSERT OR REPLACE, so re-ingesting an already-
+    successfully-ingested report is a no-op change to the database, not a
+    duplicate. A report that still fails to parse is logged and skipped --
+    it must never abort the sweep over the rest of the archive.
+
+    `start`/`end` (both inclusive, by the report's own `day` metadata
+    recorded at archive time) optionally narrow the sweep; omitted, the
+    entire archive is walked.
+    """
+    stats = {"found": 0, "ingested_ok": 0, "still_failed": 0, "rows_written": 0}
+
+    for entry in raw_store.iter_manifest("injury"):
+        meta = entry.get("meta") or {}
+        day_str = meta.get("day")
+        if start is not None or end is not None:
+            if day_str is None:
+                continue
+            day = date.fromisoformat(day_str)
+            if start is not None and day < start:
+                continue
+            if end is not None and day > end:
+                continue
+
+        stats["found"] += 1
+        key = entry["key"]
+        try:
+            content = raw_store.load("injury", key)
+            rows = ingest_report(con, content)
+        except Exception as exc:  # noqa: BLE001 -- mirrors backfill_range's
+            # blanket ingest-time catch: a still-unparseable archived report
+            # must be logged and skipped, never abort the rest of the sweep.
+            stats["still_failed"] += 1
+            print(
+                f"injury reingest: STILL FAILING -- {key} -- "
+                f"{type(exc).__name__}: {exc}"
+            )
+            continue
+
+        stats["ingested_ok"] += 1
+        stats["rows_written"] += rows
 
     return stats

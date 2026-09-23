@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -204,6 +204,235 @@ def test_backfill_treats_unexpected_ingest_exception_as_parse_failed(env, monkey
     assert stats["parse_failed"] == 1
     assert stats["fetched"] == 1
     assert stats["ingested"] == 0
+
+
+def test_backfill_bad_content_is_not_counted_as_missing(env):
+    """A 200 response with a non-PDF body (e.g. a CDN block/challenge page)
+    must be bucketed as `bad_content`, not folded into `missing`. Those two
+    outcomes look identical over the wire but mean very different things:
+    a confirmed 403/404 vs. "the server answered with something else".
+    """
+    day, hour = date(2025, 1, 15), "05PM"
+    url = injury_report.report_url(day, hour)
+    session = MappingSession({url: (200, b"<html>blocked</html>")})
+
+    stats = injury_report.backfill_range(env, day, day, [hour], delay=0, session=session)
+
+    assert stats["bad_content"] == 1
+    assert stats["missing"] == 0, "a 200-with-garbage-body must never be counted as absent"
+    assert stats["fetched"] == 0
+    assert not raw_store.exists("injury", injury_report.raw_key(day, hour))
+
+
+def test_backfill_genuine_404_is_still_missing(env):
+    """A real 403/404 must still land in `missing`, unaffected by the new
+    bad_content bucket.
+    """
+    day, hour = date(2025, 1, 15), "05PM"
+    url = injury_report.report_url(day, hour)
+    session = MappingSession({url: (404, b"")})
+
+    stats = injury_report.backfill_range(env, day, day, [hour], delay=0, session=session)
+
+    assert stats["missing"] == 1
+    assert stats["bad_content"] == 0
+
+
+def test_backfill_bad_content_does_not_abort_the_run(env):
+    """A bad-content slot on one day must not stop the sweep from
+    processing the next slot in the range.
+    """
+    day_a, day_b = date(2025, 1, 15), date(2025, 1, 16)
+    url_a = injury_report.report_url(day_a, "05PM")
+    url_b = injury_report.report_url(day_b, "05PM")
+    session = MappingSession(
+        {
+            url_a: (200, b"<html>blocked</html>"),
+            url_b: (200, FIXTURE_BYTES),
+        }
+    )
+
+    stats = injury_report.backfill_range(env, day_a, day_b, ["05PM"], delay=0, session=session)
+
+    assert stats["bad_content"] == 1
+    assert stats["fetched"] == 1
+    assert stats["ingested"] == 161
+
+
+def test_backfill_buckets_reconcile_with_slots_attempted(env):
+    """skipped + missing + fetched + transient + parse_failed + bad_content
+    must equal the number of slots attempted. Uses one slot per distinct
+    outcome (no slot is both `fetched` and `parse_failed` here, which would
+    double-count a single slot against two buckets -- a documented,
+    pre-existing, deliberate asymmetry, not something this test exercises).
+    """
+    already_archived_day = date(2025, 1, 10)
+    missing_day = date(2025, 1, 11)
+    fetched_day = date(2025, 1, 12)
+    transient_day = date(2025, 1, 13)
+    bad_content_day = date(2025, 1, 14)
+
+    # Pre-populate one slot so it will be `skipped`.
+    pre_session = FakeSession(
+        available={injury_report.report_url(already_archived_day, "05PM")}
+    )
+    injury_report.backfill_range(
+        env, already_archived_day, already_archived_day, ["05PM"], delay=0, session=pre_session
+    )
+
+    mapping = {
+        injury_report.report_url(fetched_day, "05PM"): (200, FIXTURE_BYTES),
+        injury_report.report_url(transient_day, "05PM"): (503, b""),
+        injury_report.report_url(bad_content_day, "05PM"): (200, b"<html>blocked</html>"),
+        injury_report.report_url(missing_day, "05PM"): (404, b""),
+    }
+    session = MappingSession(mapping)
+
+    stats = injury_report.backfill_range(
+        env, already_archived_day, bad_content_day, ["05PM"], delay=0, session=session
+    )
+
+    slots_attempted = (bad_content_day - already_archived_day).days + 1
+    total = (
+        stats["skipped"]
+        + stats["missing"]
+        + stats["fetched"]
+        + stats["transient"]
+        + stats["parse_failed"]
+        + stats["bad_content"]
+    )
+    assert total == slots_attempted
+    assert stats["skipped"] == 1
+    assert stats["missing"] == 1
+    assert stats["fetched"] == 1
+    assert stats["transient"] == 1
+    assert stats["bad_content"] == 1
+    assert stats["parse_failed"] == 0
+
+
+def test_backfill_skips_politeness_delay_when_no_request_was_made(env, monkeypatch):
+    """A slot before ARCHIVE_START short-circuits inside `_archive` before
+    any network call -- the caller must not pay the politeness `delay` for
+    a slot that never touched the network.
+    """
+    sleeps: list[float] = []
+    monkeypatch.setattr(injury_report.time, "sleep", lambda s: sleeps.append(s))
+
+    day = injury_report.ARCHIVE_START - timedelta(days=1)
+    session = FakeSession(available=set())
+
+    stats = injury_report.backfill_range(
+        env, day, day, ["05PM"], delay=5.0, session=session
+    )
+
+    assert stats["missing"] == 1
+    assert session.calls == [], "a pre-ARCHIVE_START slot must not make a request"
+    assert sleeps == [], "no request was made, so no politeness delay should be paid"
+
+
+def test_reingest_archived_ingests_without_any_network_call(env):
+    """`reingest_archived` must recover an already-archived report using
+    only raw_store + the DB connection -- no session, no network fetch.
+    """
+    day, hour = date(2025, 1, 15), "05PM"
+    key = injury_report.raw_key(day, hour)
+    raw_store.store(
+        "injury",
+        key,
+        FIXTURE_BYTES,
+        datetime(2025, 1, 15, 22, 0, tzinfo=UTC),
+        meta={"day": day.isoformat(), "hour_label": hour},
+    )
+
+    stats = injury_report.reingest_archived(env)
+
+    assert stats["found"] == 1
+    assert stats["ingested_ok"] == 1
+    assert stats["still_failed"] == 0
+    assert stats["rows_written"] == 161
+
+    row_count = env.execute(
+        f"SELECT COUNT(*) FROM {db.POINT_IN_TIME_TABLES['injury_status']}"
+    ).fetchone()[0]
+    assert row_count == 161
+
+
+def test_reingest_archived_is_idempotent_on_second_run(env):
+    day, hour = date(2025, 1, 15), "05PM"
+    key = injury_report.raw_key(day, hour)
+    raw_store.store(
+        "injury",
+        key,
+        FIXTURE_BYTES,
+        datetime(2025, 1, 15, 22, 0, tzinfo=UTC),
+        meta={"day": day.isoformat(), "hour_label": hour},
+    )
+
+    injury_report.reingest_archived(env)
+    stats2 = injury_report.reingest_archived(env)
+
+    assert stats2["found"] == 1
+    assert stats2["ingested_ok"] == 1
+    assert stats2["still_failed"] == 0
+
+    row_count = env.execute(
+        f"SELECT COUNT(*) FROM {db.POINT_IN_TIME_TABLES['injury_status']}"
+    ).fetchone()[0]
+    assert row_count == 161, "re-ingesting the same report must not duplicate rows"
+
+
+def test_reingest_archived_reports_still_unparseable_report_without_aborting(env):
+    """A still-broken archived report must be logged and skipped, not raise
+    out of `reingest_archived`, and must not stop the rest of the sweep.
+    """
+    good_day, bad_day = date(2025, 1, 15), date(2025, 1, 16)
+    good_key = injury_report.raw_key(good_day, "05PM")
+    bad_key = injury_report.raw_key(bad_day, "05PM")
+
+    raw_store.store(
+        "injury",
+        bad_key,
+        b"%PDF-not-actually-a-valid-pdf",
+        datetime(2025, 1, 16, 22, 0, tzinfo=UTC),
+        meta={"day": bad_day.isoformat(), "hour_label": "05PM"},
+    )
+    raw_store.store(
+        "injury",
+        good_key,
+        FIXTURE_BYTES,
+        datetime(2025, 1, 15, 22, 0, tzinfo=UTC),
+        meta={"day": good_day.isoformat(), "hour_label": "05PM"},
+    )
+
+    stats = injury_report.reingest_archived(env)
+
+    assert stats["found"] == 2
+    assert stats["ingested_ok"] == 1
+    assert stats["still_failed"] == 1
+    assert stats["rows_written"] == 161
+
+
+def test_reingest_archived_respects_date_range_filter(env):
+    in_range, out_of_range = date(2025, 1, 15), date(2025, 2, 1)
+    raw_store.store(
+        "injury",
+        injury_report.raw_key(in_range, "05PM"),
+        FIXTURE_BYTES,
+        datetime(2025, 1, 15, 22, 0, tzinfo=UTC),
+        meta={"day": in_range.isoformat(), "hour_label": "05PM"},
+    )
+    raw_store.store(
+        "injury",
+        injury_report.raw_key(out_of_range, "05PM"),
+        FIXTURE_BYTES,
+        datetime(2025, 2, 1, 22, 0, tzinfo=UTC),
+        meta={"day": out_of_range.isoformat(), "hour_label": "05PM"},
+    )
+
+    stats = injury_report.reingest_archived(env, start=date(2025, 1, 1), end=date(2025, 1, 31))
+
+    assert stats["found"] == 1
+    assert stats["ingested_ok"] == 1
 
 
 def test_backfill_parse_failed_slot_is_skipped_not_retried_on_rerun(env, monkeypatch):
