@@ -4,8 +4,9 @@ import io
 import math
 import re
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pdfplumber
@@ -429,3 +430,119 @@ def ingest_report(con, pdf_bytes: bytes) -> int:
             ],
         )
     return len(report.rows)
+
+
+def backfill_range(
+    con,
+    start: date,
+    end: date,
+    hours: Sequence[str] = ("05PM",),
+    delay: float = 0.4,
+    session=None,
+) -> dict[str, int]:
+    """Sweep archived injury reports for every day/hour slot in [start, end].
+
+    Resumable: a slot already present in raw_store is counted as `skipped`
+    and never re-fetched. Rate-limited: `delay` seconds are slept between
+    slots that actually touched the network. A single shared `session` is
+    used for the whole sweep so a multi-thousand-slot run does not open a
+    fresh TCP/TLS connection per request.
+
+    Three failure modes are counted SEPARATELY from `missing` (a confirmed
+    403/404 "never published" slot), and none of them abort the run --
+    a single bad slot must not cost the operator a multi-thousand-request
+    restart:
+
+    - `transient`: `fetch_report` raised `TransientFetchError` (429/5xx/
+      unexpected status, after its own internal retries were exhausted).
+      This means "could not check", not "absent" -- conflating the two was
+      the exact defect fixed in Task 7. The slot is NOT archived, so a
+      re-run of this same range will retry it automatically (raw_store
+      still reports it as not existing).
+    - `parse_failed`: the PDF was fetched (and archived to disk) but could
+      not be turned into rows, either via the documented
+      `InjuryReportParseError` (zero rows extracted) or via an unforeseen
+      exception from parsing -- notably, a zero-page PDF currently raises
+      a plain `IndexError` from pdfplumber rather than
+      `InjuryReportParseError` (a pre-existing gap, not fixed here). Both
+      are bucketed together because the practical meaning is identical:
+      bytes were fetched, nothing was ingested. IMPORTANT ASYMMETRY: unlike
+      `transient`, the raw PDF IS already archived at this point, so a
+      re-run of this same range will SKIP this slot (raw_store.exists()
+      is now true) rather than retry ingestion. Recovering a `parse_failed`
+      slot after a parser fix requires a separate re-ingest-from-raw-store
+      path, which is out of scope for this backfill.
+
+    A raw network-level exception (connection error, timeout, ...) is
+    deliberately NOT caught here -- `fetch_report` documents that it
+    propagates such an error immediately, uncaught, and existing tests
+    pin that contract. Catching it in this loop would silently blur that
+    boundary. It aborts the run, same as today; resumability (via
+    `skipped`) means a re-run only repeats work from that point forward,
+    not from the start.
+    """
+    session = session or requests.Session()
+    stats = {
+        "fetched": 0,
+        "skipped": 0,
+        "missing": 0,
+        "ingested": 0,
+        "transient": 0,
+        "parse_failed": 0,
+    }
+
+    day = start
+    while day <= end:
+        for hour in hours:
+            key = raw_key(day, hour)
+            if raw_store.exists("injury", key):
+                stats["skipped"] += 1
+                continue
+
+            try:
+                fetched = archive_report(day, hour, session=session)
+            except TransientFetchError as exc:
+                stats["transient"] += 1
+                print(
+                    f"injury backfill: TRANSIENT FAILURE, could not check "
+                    f"{day.isoformat()} {hour} -- {exc}. Not counted as "
+                    "absent; will retry on the next run of this range."
+                )
+                if delay:
+                    time.sleep(delay)
+                continue
+
+            if fetched:
+                stats["fetched"] += 1
+                try:
+                    stats["ingested"] += ingest_report(con, raw_store.load("injury", key))
+                except InjuryReportParseError as exc:
+                    stats["parse_failed"] += 1
+                    print(
+                        f"injury backfill: PARSE FAILED for "
+                        f"{day.isoformat()} {hour} -- {exc}. PDF is archived "
+                        "on disk but was NOT ingested; a re-run will skip "
+                        "(not retry) this slot."
+                    )
+                except Exception as exc:  # noqa: BLE001 -- see docstring
+                    # Guards against an unforeseen parse-time exception --
+                    # concretely, a zero-page PDF currently raises IndexError
+                    # rather than InjuryReportParseError (pre-existing, not
+                    # fixed here). Bucketed with parse_failed: same practical
+                    # outcome (fetched, not ingested), and logging the real
+                    # exception type keeps it diagnosable rather than hidden.
+                    stats["parse_failed"] += 1
+                    print(
+                        f"injury backfill: UNEXPECTED ERROR parsing/ingesting "
+                        f"{day.isoformat()} {hour} -- {type(exc).__name__}: "
+                        f"{exc}. PDF is archived on disk but was NOT ingested; "
+                        "a re-run will skip (not retry) this slot."
+                    )
+            else:
+                stats["missing"] += 1
+
+            if delay:
+                time.sleep(delay)
+        day += timedelta(days=1)
+
+    return stats

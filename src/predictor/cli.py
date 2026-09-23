@@ -38,5 +38,57 @@ def poll_news() -> None:
         typer.echo(line)
 
 
+@app.command("backfill-injuries")
+def backfill_injuries(
+    start: str = typer.Option("2019-12-01", help="ISO start date."),
+    end: str = typer.Option(None, help="ISO end date; defaults to today."),
+    hours: str = typer.Option("05PM", help="Comma-separated hour slots."),
+) -> None:
+    """Backfill archived NBA injury reports into the store."""
+    from datetime import date as _date
+
+    from predictor import db
+    from predictor.config import settings
+    from predictor.sources import injury_report
+
+    settings.ensure_dirs()
+    con = db.connect()
+    db.migrate(con)
+
+    stats = injury_report.backfill_range(
+        con,
+        _date.fromisoformat(start),
+        _date.fromisoformat(end) if end else _date.today(),
+        [h.strip() for h in hours.split(",") if h.strip()],
+    )
+    for key, value in stats.items():
+        typer.echo(f"{key}: {value}")
+
+    transient = stats["transient"]
+    parse_failed = stats["parse_failed"]
+    if transient:
+        typer.echo(
+            f"WARNING: {transient} slot(s) could not be checked (rate-limited "
+            "or a server error) and are NOT counted as absent. They were not "
+            "archived, so re-running this exact command will retry them "
+            "automatically."
+        )
+    if parse_failed:
+        typer.echo(
+            f"WARNING: {parse_failed} slot(s) were fetched but could not be "
+            "parsed, so nothing was ingested for them. The raw PDF is "
+            "archived on disk, but re-running this command will SKIP them "
+            "(already archived) rather than retry ingestion -- they need "
+            "manual attention."
+        )
+    if transient or parse_failed:
+        typer.echo(
+            f"RUN DID NOT FULLY SUCCEED: {transient + parse_failed} slot(s) "
+            "out of the requested range are missing from the database. See "
+            "the warnings above."
+        )
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     app()
