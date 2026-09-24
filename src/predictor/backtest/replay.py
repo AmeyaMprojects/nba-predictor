@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta
 from predictor import db
 from predictor.asof import AsOfView
 from predictor.backtest import tipoff as tipoff_mod
-from predictor.backtest.baselines import GameToPredict, Predictor
+from predictor.backtest.baselines import GameToPredict, PredictionError, Predictor
 
 DEFAULT_BUFFER_MINUTES = 30
 
@@ -30,6 +30,8 @@ class ReplayStats:
     predicted: int
     skipped_no_tipoff: int
     skipped_no_result: int
+    skipped_result_visible: int
+    declined: int
     failed: int
 
 
@@ -46,7 +48,40 @@ def replay(
     GameToPredict that carries no score. It cannot see the result through the
     harness; the adversarial tests prove it cannot see it around the harness
     either.
+
+    This module reads the games point-in-time table directly, via
+    ``db.POINT_IN_TIME_TABLES`` rather than through ``AsOfView`` -- the same
+    style of deliberate exemption ``tipoff.py`` documents for its own read.
+    It is used for exactly two things, both outcome-only and neither ever
+    exposed to the predictor:
+
+    1. Enumerating which games exist (id/season/date/teams) to build the
+       schedule this function walks. This carries no score.
+    2. After a game's cutoff is computed, reading that game's OWN official
+       result -- first to check whether it is already visible at the
+       cutoff (the leak guard below), and, only once that check passes, to
+       populate ``Prediction.home_won`` so the prediction can be SCORED
+       after the fact.
+
+    Neither read can leak future information into a model: the raw result
+    is never placed into the ``AsOfView`` handed to the predictor and never
+    carried by ``GameToPredict``. The predictor only ever sees data through
+    ``AsOfView``, filtered to ``observed_at <= cutoff``.
+
+    Leak guard -- the harness's central invariant: before a game is handed
+    to the predictor, this function checks, against the real
+    ``observed_at`` timestamps and with the same inclusive ``<=``
+    comparison ``AsOfView`` itself uses, whether the game's FINAL result is
+    already visible at the cutoff. If it is, the game is NOT predicted: it
+    is counted in ``skipped_result_visible`` and logged with its game id.
+    This is a live check run against the data for every single game, not
+    an assertion that some timing margin holds -- a future change to how
+    tip-off (and therefore the cutoff) is derived must trip this check,
+    not silently slip past it.
     """
+    if buffer_minutes < 0:
+        raise ValueError(f"buffer_minutes must be >= 0, got {buffer_minutes}")
+
     games_table = db.POINT_IN_TIME_TABLES["games"]
     index = tipoff_mod.tipoff_index(con)
 
@@ -63,30 +98,50 @@ def replay(
         params,
     ).fetchall()
 
-    considered = predicted = no_tip = no_result = failed = 0
+    considered = predicted = no_tip = no_result = leaked = declined = failed = 0
     out: list[Prediction] = []
 
     for game_id, game_season, game_date, home_team, away_team in rows:
-        considered += 1
         if limit is not None and predicted >= limit:
             break
+        considered += 1
 
         tip = tipoff_mod.resolve_tipoff(index, game_date, home_team, away_team)
         if tip is None:
             no_tip += 1
             continue
 
+        cutoff = tip - timedelta(minutes=buffer_minutes)
+
+        # Finding 1: the central invariant, verified for real against the
+        # data on every game -- not inferred from how large today's margin
+        # between cutoff and FINAL happens to be. A FINAL row observed at
+        # or before the cutoff means the view about to be built for the
+        # predictor would already contain this game's own outcome.
+        already_visible = con.execute(
+            f"SELECT 1 FROM {games_table} WHERE game_id = ? AND status = 'FINAL' "
+            "AND observed_at <= ? LIMIT 1",
+            [game_id, cutoff],
+        ).fetchone()
+        if already_visible is not None:
+            leaked += 1
+            print(
+                f"backtest: SKIPPING {game_id} -- result already visible at "
+                f"cutoff {cutoff.isoformat()} (leak guard tripped, not predicted)"
+            )
+            continue
+
         result = con.execute(
             f"SELECT home_points, away_points FROM {games_table} "
             f"WHERE game_id = ? AND status = 'FINAL' "
-            "AND home_points IS NOT NULL ORDER BY observed_at DESC LIMIT 1",
+            "AND home_points IS NOT NULL AND away_points IS NOT NULL "
+            "ORDER BY observed_at DESC LIMIT 1",
             [game_id],
         ).fetchone()
         if result is None:
             no_result += 1
             continue
 
-        cutoff = tip - timedelta(minutes=buffer_minutes)
         view = AsOfView(con, cutoff)
         game = GameToPredict(
             game_id=game_id,
@@ -99,6 +154,14 @@ def replay(
 
         try:
             p_home = float(predictor(game, view))
+        except PredictionError as exc:
+            # A predictor deliberately declining to predict is not the same
+            # kind of event as a bug in it -- keep it out of `failed`. See
+            # Finding 6 in task-3-report.md for why this is handled
+            # separately from the bare Exception catch below.
+            declined += 1
+            print(f"backtest: predictor DECLINED {game_id} -- {exc}")
+            continue
         except Exception as exc:  # one bad game must not abort a season
             failed += 1
             print(f"backtest: predictor FAILED on {game_id} -- {exc}")
@@ -127,4 +190,13 @@ def replay(
         )
         predicted += 1
 
-    return out, ReplayStats(considered, predicted, no_tip, no_result, failed)
+    stats = ReplayStats(
+        considered=considered,
+        predicted=predicted,
+        skipped_no_tipoff=no_tip,
+        skipped_no_result=no_result,
+        skipped_result_visible=leaked,
+        declined=declined,
+        failed=failed,
+    )
+    return out, stats
