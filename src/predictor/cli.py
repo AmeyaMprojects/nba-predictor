@@ -144,5 +144,18 @@ def reingest_injuries(
         raise typer.Exit(code=1)
 
 
+@app.command("ingest-season")
+def ingest_season_cmd(season: str = typer.Argument(..., help="e.g. 2024-25")) -> None:
+    """Ingest all games for one season."""
+    from predictor import db
+    from predictor.config import settings
+    from predictor.sources import nba_stats
+
+    settings.ensure_dirs()
+    con = db.connect()
+    db.migrate(con)
+    typer.echo(f"ingested {nba_stats.ingest_season(con, season)} games for {season}")
+
+
 if __name__ == "__main__":
     app()
