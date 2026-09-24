@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import feedparser
 import requests
+import tenacity
 
 from predictor import db, raw_store
 
@@ -18,6 +20,62 @@ FEEDS: dict[str, str] = {
 }
 
 _TIMEOUT_SECONDS = 30
+
+# This job runs via launchd at fixed wall-clock times (09:00/14:00/19:00).
+# A laptop asleep at the trigger time causes launchd to fire the job
+# immediately on wake, before the machine's networking (and DNS in
+# particular) has come back up -- observed live as ALL THREE feeds failing
+# in the same run with `NameResolutionError`. This is a TRANSIENT condition
+# (the network typically becomes usable within tens of seconds to low
+# minutes of wake), not a dead publisher, so it is retried with exponential
+# backoff rather than being reported as a failure on the first attempt.
+#
+# Deliberately a MUCH longer total window than injury_report's ~30s
+# (injury: _MAX_ATTEMPTS=4, wait_exponential(multiplier=1, max=30), 3 gaps
+# of 1+2+4=7s worst case): that budget assumes an already-networked
+# machine hitting a transient rate limit/CDN hiccup, not a machine whose
+# network stack isn't up yet. News cannot be recovered retroactively (see
+# module docstring context in poll_feed/archive_entries), so it's worth
+# waiting substantially longer here before giving up.
+#
+# _MAX_ATTEMPTS=6 with wait_exponential(multiplier=4, max=60) produces 5
+# backoff gaps of 4, 8, 16, 32, 60 (the last capped from 64) seconds --
+# summing to exactly 120s (2 minutes) of backoff sleep in the worst case,
+# on top of each attempt's own near-instant failure (a DNS resolution
+# failure raises immediately; it does not block for _TIMEOUT_SECONDS). If
+# a future failure mode instead blocks each attempt for the full 30s
+# connect/read timeout, worst-case wall time extends to roughly
+# 6*30 + 120 = 300s (5 minutes) -- still bounded, and still far short of
+# the ~3 hour gap to the next scheduled run.
+_NEWS_MAX_ATTEMPTS = 6
+_NEWS_MAX_WAIT_SECONDS = 60
+
+# Network-level failures that mean "the request never got a response at
+# all" -- a dropped/reset connection, a connect/read timeout, or the
+# connection closing mid-download (this is what a DNS resolution failure
+# on a freshly-woken machine surfaces as). Distinct from a completed HTTP
+# response with a bad status (403/404/5xx): those are NOT retried here --
+# see the module-level docstring context above `_OK_STATUSES` -- because a
+# completed response is not a transient network condition and retrying it
+# four to six times per feed would just slow every run for no benefit.
+_RETRYABLE_NETWORK_EXCEPTIONS = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+)
+
+
+def _sleep(seconds: float) -> None:
+    """Real sleep, indirected so tests can stub it without real delay.
+
+    Referenced by name (not bound) from the retry decorator below, so
+    `monkeypatch.setattr(news_rss, "_sleep", ...)` takes effect even
+    though the decorator itself is evaluated once at import time. Mirrors
+    `injury_report._sleep`.
+    """
+    time.sleep(seconds)
+
+
 _USER_AGENT = (
     "predictor-news-rss-archiver/0.1 "
     "(NBA game prediction data pipeline; contact: ameya.s.mhatre@gmail.com)"
@@ -187,7 +245,30 @@ def archive_entries(feed_name: str, parsed, now: datetime) -> EntryStats:
     return EntryStats(new=new, skipped=skipped, conflicts=conflicts)
 
 
+@tenacity.retry(
+    retry=tenacity.retry_if_exception_type(_RETRYABLE_NETWORK_EXCEPTIONS),
+    wait=tenacity.wait_exponential(multiplier=4, max=_NEWS_MAX_WAIT_SECONDS),
+    stop=tenacity.stop_after_attempt(_NEWS_MAX_ATTEMPTS),
+    sleep=lambda seconds: _sleep(seconds),
+    reraise=True,
+)
 def _fetch(url: str, session) -> tuple[bytes, int | None]:
+    """Fetch one feed's raw bytes and HTTP status.
+
+    A connection-level failure (`requests.exceptions.ConnectionError`/
+    `Timeout`/`ChunkedEncodingError` -- see `_RETRYABLE_NETWORK_EXCEPTIONS`)
+    is retried with exponential backoff; once `_NEWS_MAX_ATTEMPTS` is
+    exhausted, `reraise=True` lets the original exception propagate
+    uncaught, exactly as it did before this retry was added. Both
+    `poll_feed` (uncaught here) and `poll_all` (which wraps each
+    `poll_feed` call in its own try/except -- see there) turn that into a
+    FAILED `FeedResult` for this feed alone, leaving the other feeds in
+    the same run unaffected.
+
+    An HTTP status is NOT retried here at all -- a completed response
+    (even an error one) reaches the caller on the first attempt, and
+    `poll_feed` classifies it exactly as before.
+    """
     sess = session if session is not None else requests
     response = sess.get(
         url, timeout=_TIMEOUT_SECONDS, headers={"User-Agent": _USER_AGENT}

@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
+import requests
 
 from predictor import raw_store
 from predictor.config import Settings
@@ -16,6 +17,15 @@ def store(tmp_path, monkeypatch):
     s.ensure_dirs()
     monkeypatch.setattr(raw_store, "settings", s)
     return s
+
+
+@pytest.fixture(autouse=True)
+def no_real_sleep(monkeypatch):
+    """Every test in this module must run fast -- stub the sleep
+    indirection instead of letting exponential backoff actually block.
+    Mirrors `tests/test_injury_fetch.py`'s identically-named fixture.
+    """
+    monkeypatch.setattr(news_rss, "_sleep", lambda seconds: None)
 
 
 NOW = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
@@ -51,9 +61,55 @@ class _FakeSession:
         self._exc = exc
 
     def get(self, url, timeout=None, headers=None):
+        self.calls = getattr(self, "calls", 0) + 1
         if self._exc is not None:
             raise self._exc
         return self._response
+
+
+class _FlakySession:
+    """Raises `exc` for the first `fail_times` calls, then returns `response`.
+
+    Simulates a machine whose network comes back up partway through the
+    retry window -- the case that actually fixes the launchd-wake bug.
+    """
+
+    def __init__(self, exc: Exception, fail_times: int, response: "_FakeResponse"):
+        self._exc = exc
+        self._fail_times = fail_times
+        self._response = response
+        self.calls = 0
+
+    def get(self, url, timeout=None, headers=None):
+        self.calls += 1
+        if self.calls <= self._fail_times:
+            raise self._exc
+        return self._response
+
+
+class _PerUrlSession:
+    """Routes `.get()` per URL -- one feed can fail while others succeed,
+    exercising per-feed isolation through `poll_all` with a single shared
+    session object (mirroring how the real CLI passes one session).
+    """
+
+    def __init__(self, responses: dict | None = None, excs: dict | None = None):
+        self._responses = responses or {}
+        self._excs = excs or {}
+        self.calls: list[str] = []
+
+    def get(self, url, timeout=None, headers=None):
+        self.calls.append(url)
+        if url in self._excs:
+            raise self._excs[url]
+        return self._responses[url]
+
+
+_VALID_RSS = (
+    b"<rss version='2.0'><channel><item>"
+    b"<title>t</title><link>http://x/1</link>"
+    b"</item></channel></rss>"
+)
 
 
 def test_item_key_is_stable_and_filesystem_safe():
@@ -324,3 +380,157 @@ def test_rearchiving_unchanged_entry_with_a_different_now_produces_no_conflict(s
 
     manifest_entries = [e for e in raw_store.iter_manifest("news") if e["key"] == key]
     assert len(manifest_entries) == 1
+
+
+# --- News retry: launchd-wake DNS failures are transient, not fatal --------
+#
+# Regression guard for the live defect: launchd fires `poll-news` at a fixed
+# wall-clock time, and a laptop asleep at that moment wakes with networking
+# not yet up, so ALL THREE feeds fail in the same run with
+# `NameResolutionError` (a `requests.exceptions.ConnectionError`). These
+# tests prove the fetch now retries that specific, transient condition with
+# exponential backoff before giving up, while an HTTP status failure (a
+# completed response, not a transient network condition) is still NOT
+# retried, and one feed's exhausted retries still don't stop the others.
+
+
+def _isolated_failure_session(exc: Exception) -> _PerUrlSession:
+    """One feed (espn) always raises `exc`; the other two configured feeds
+    succeed trivially. Isolates the attempt-count assertion to the single
+    failing feed -- `poll_all` always iterates all of `FEEDS`, so a session
+    that fails uniformly for every URL would let a later feed's calls
+    contaminate the failing feed's own call count.
+    """
+    espn_url = news_rss.FEEDS["espn"]
+    other_urls = [u for name, u in news_rss.FEEDS.items() if name != "espn"]
+    return _PerUrlSession(
+        responses={u: _FakeResponse(_VALID_RSS, 200) for u in other_urls},
+        excs={espn_url: exc},
+    )
+
+
+def test_poll_feed_retries_connection_error_then_reports_failed(store):
+    # `poll_feed` itself does not catch a fetch exception -- only `poll_all`
+    # does (see `test_poll_all_classifies_transport_exception_as_failure`,
+    # unchanged by this fix) -- so this is exercised through `poll_all`,
+    # matching the module's existing division of responsibility.
+    session = _isolated_failure_session(
+        requests.exceptions.ConnectionError(
+            "Failed to resolve 'www.espn.com' "
+            "([Errno 8] nodename nor servname provided, or not known)"
+        )
+    )
+    results = news_rss.poll_all(NOW, session=session)
+    result = results["espn"]
+
+    assert result.ok is False
+    assert "www.espn.com" in result.error
+    assert session.calls.count(news_rss.FEEDS["espn"]) == news_rss._NEWS_MAX_ATTEMPTS, (
+        "a persistent connection error should retry up to the configured "
+        "attempt limit, not fail on the first attempt"
+    )
+
+
+def test_poll_feed_retries_timeout_then_reports_failed(store):
+    session = _isolated_failure_session(requests.exceptions.Timeout("timed out"))
+    results = news_rss.poll_all(NOW, session=session)
+    result = results["espn"]
+
+    assert result.ok is False
+    assert "timed out" in result.error
+    assert session.calls.count(news_rss.FEEDS["espn"]) == news_rss._NEWS_MAX_ATTEMPTS
+
+
+def test_poll_feed_succeeds_when_network_recovers_mid_retry(store):
+    # This is the case that actually fixes the reported bug: the machine's
+    # network comes back up partway through the retry window, so the feed
+    # is archived successfully instead of being reported FAILED.
+    session = _FlakySession(
+        exc=requests.exceptions.ConnectionError("Failed to resolve 'www.espn.com'"),
+        fail_times=news_rss._NEWS_MAX_ATTEMPTS - 1,  # succeeds on the last attempt
+        response=_FakeResponse(_VALID_RSS, 200),
+    )
+    result = news_rss.poll_feed("espn", "http://example.invalid/feed", NOW, session=session)
+
+    assert result.ok is True
+    assert result.error is None
+    assert result.new == 1
+    assert session.calls == news_rss._NEWS_MAX_ATTEMPTS
+
+    key = news_rss.item_key("espn", "http://x/1")
+    assert raw_store.exists("news", key), "the archived item must actually be on disk"
+
+
+def test_poll_feed_does_not_retry_a_non_2xx_status(store):
+    session = _FakeSession(response=_FakeResponse(b"not found", 404))
+    result = news_rss.poll_feed("espn", "http://example.invalid/feed", NOW, session=session)
+
+    assert result.ok is False
+    assert "404" in result.error
+    assert session.calls == 1, (
+        "a completed HTTP error response is not a transient network "
+        "condition and must not be retried"
+    )
+
+
+def test_one_feed_exhausting_retries_does_not_block_the_others(store):
+    espn_url = news_rss.FEEDS["espn"]
+    yahoo_url = news_rss.FEEDS["yahoo"]
+    cbs_url = news_rss.FEEDS["cbs"]
+
+    session = _PerUrlSession(
+        responses={
+            yahoo_url: _FakeResponse(_VALID_RSS, 200),
+            cbs_url: _FakeResponse(_VALID_RSS, 200),
+        },
+        excs={
+            espn_url: requests.exceptions.ConnectionError("Failed to resolve 'www.espn.com'"),
+        },
+    )
+
+    results = news_rss.poll_all(NOW, session=session)
+
+    assert results["espn"].ok is False
+    assert "www.espn.com" in results["espn"].error
+    assert results["yahoo"].ok is True
+    assert results["yahoo"].new == 1
+    assert results["cbs"].ok is True
+    assert results["cbs"].new == 1
+    assert session.calls.count(espn_url) == news_rss._NEWS_MAX_ATTEMPTS
+    assert session.calls.count(yahoo_url) == 1
+    assert session.calls.count(cbs_url) == 1
+
+
+def test_poll_news_cli_exits_nonzero_when_retries_are_exhausted(store, monkeypatch):
+    # Full stack, real retry path (no CLI-level stubbing of poll_all): a
+    # feed whose connection error survives every retry attempt must still
+    # make `poll-news` exit non-zero, exactly as an immediate failure did
+    # before this retry was added.
+    from typer.testing import CliRunner
+
+    from predictor import cli, config, db
+
+    monkeypatch.setattr(config, "settings", store)
+    monkeypatch.setattr(db, "settings", store)
+
+    espn_url = news_rss.FEEDS["espn"]
+    yahoo_url = news_rss.FEEDS["yahoo"]
+    cbs_url = news_rss.FEEDS["cbs"]
+    session = _PerUrlSession(
+        responses={
+            yahoo_url: _FakeResponse(_VALID_RSS, 200),
+            cbs_url: _FakeResponse(_VALID_RSS, 200),
+        },
+        excs={
+            espn_url: requests.exceptions.ConnectionError("Failed to resolve 'www.espn.com'"),
+        },
+    )
+    real_poll_all = news_rss.poll_all
+    monkeypatch.setattr(news_rss, "poll_all", lambda: real_poll_all(NOW, session=session))
+
+    runner = CliRunner()
+    result = runner.invoke(cli.app, ["poll-news"])
+
+    assert result.exit_code == 1
+    assert "espn: FAILED" in result.stdout
+    assert "WARNING: 1 feed(s) failed this run: espn." in result.stdout
