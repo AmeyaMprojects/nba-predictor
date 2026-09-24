@@ -51,6 +51,66 @@ def test_unpaired_row_is_dropped_rather_than_guessed():
     assert nba_stats.pair_team_rows(df) == []
 
 
+def test_neutral_site_game_both_rows_at_sign_form_is_paired_correctly():
+    # Real example from the 2024-25 season (NBA Cup group play, Las Vegas):
+    # neither team is the true home team, so BOTH rows carry the identical
+    # "AWAY @ HOME" text -- neither contains "vs." -- unlike a normal game
+    # where the home team's own row says "HOME vs. AWAY".
+    df = _frame(
+        [
+            ["0012400001", "2024-10-04", "BOS @ DEN", "L", 103, "DEN"],
+            ["0012400001", "2024-10-04", "BOS @ DEN", "W", 107, "BOS"],
+        ]
+    )
+    games = nba_stats.pair_team_rows(df)
+    assert len(games) == 1
+    game = games[0]
+    assert game.home_team == "DEN"
+    assert game.away_team == "BOS"
+    assert game.home_points == 103
+    assert game.away_points == 107
+    assert game.status == "FINAL"
+
+
+def test_vs_form_game_home_away_assignment_unchanged():
+    # Pins that the "vs." form still resolves to the identical home/away
+    # assignment as before the matchup-parsing rewrite -- an inversion here
+    # would silently corrupt home-court advantage estimation dataset-wide.
+    df = _frame(
+        [
+            ["0042400407", "2025-06-22", "IND @ OKC", "L", 91, "IND"],
+            ["0042400407", "2025-06-22", "OKC vs. IND", "W", 103, "OKC"],
+        ]
+    )
+    game = nba_stats.pair_team_rows(df)[0]
+    assert game.home_team == "OKC"
+    assert game.away_team == "IND"
+    assert game.home_points == 103
+    assert game.away_points == 91
+
+
+def test_unresolvable_group_is_counted_and_logged_not_dropped_silently(capsys):
+    # Neither "vs." nor "@" appears in either MATCHUP string, so the
+    # home/away pairing cannot be parsed at all -- a genuinely malformed
+    # group, distinct from the two well-formed real-world shapes above.
+    df = _frame(
+        [
+            ["0099999999", "2025-01-01", "GARBLED TEXT", "W", 100, "AAA"],
+            ["0099999999", "2025-01-01", "GARBLED TEXT", "L", 90, "BBB"],
+        ]
+    )
+    dropped: list[nba_stats.DroppedGame] = []
+    games = nba_stats.pair_team_rows(df, dropped=dropped)
+
+    assert games == []
+    assert len(dropped) == 1
+    assert dropped[0].game_id == "0099999999"
+
+    out = capsys.readouterr().out
+    assert "DROPPED" in out
+    assert "0099999999" in out
+
+
 def test_ingest_writes_rows_with_supplied_observed_at(tmp_path, monkeypatch):
     con = db.connect(tmp_path / "t.duckdb")
     db.migrate(con)
