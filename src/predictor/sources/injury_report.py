@@ -320,39 +320,149 @@ class InjuryReportParseError(Exception):
     """
 
 
-def _column_bounds(page) -> list[float] | None:
+# The old ("spaced") layout keeps each header label as separate words
+# instead of concatenating them -- e.g. "Game" "Date" rather than
+# "GameDate" -- and "Game" appears twice (Game Date, then Game Time), so
+# this can only be matched as an ORDERED run, not a set of tokens.
+_SPACED_HEADER_RUN: tuple[str, ...] = (
+    "Game",
+    "Date",
+    "Game",
+    "Time",
+    "Matchup",
+    "Team",
+    "Player",
+    "Name",
+    "Current",
+    "Status",
+    "Reason",
+)
+# Index into _SPACED_HEADER_RUN of the FIRST word of each COLS entry, in
+# COLS order -- e.g. PlayerName's x0 comes from "Player" (index 6), the
+# GameTime's from the SECOND "Game" (index 2), not the first.
+_SPACED_HEADER_STARTS: tuple[int, ...] = (0, 2, 4, 5, 6, 8, 10)
+
+
+def _find_token_run(words, tokens: tuple[str, ...]) -> list | None:
+    """First contiguous run of `words` whose text matches `tokens`, in order."""
+    n = len(tokens)
+    texts = [w["text"] for w in words]
+    for i in range(len(texts) - n + 1):
+        if tuple(texts[i : i + n]) == tokens:
+            return words[i : i + n]
+    return None
+
+
+def _row_end(words, header_top: float, reason_x0: float) -> float | None:
+    """x0 of the first header word to the right of Reason, if any.
+
+    Both eras occasionally carry an extra "Previous Status" (and, once,
+    "Previous Status Previous Reason") column after Reason -- see the
+    2019-12-01..17 archived reports, where this column disappears
+    partway through December 2019. Nothing downstream models those
+    columns, so their words must be capped out of the Reason band rather
+    than silently absorbed into it, which would corrupt Reason text with
+    a trailing previous-status value or a bare dash.
+    """
+    extras = [
+        w["x0"]
+        for w in words
+        if abs(w["top"] - header_top) < 1.0 and w["x0"] > reason_x0 + 1
+    ]
+    return min(extras) if extras else None
+
+
+def _detect_header(words) -> tuple[list[float], float, float | None] | None:
+    """Locate the column header line among `words`, in either layout.
+
+    Returns `(edges, header_top, row_end)`, or None if no header line is
+    present at all. `edges` is the x0 of each COLS entry's first word, in
+    COLS order. `header_top` is the y-coordinate ("top") shared by every
+    header word -- used elsewhere to mask the header line back out of
+    data rows, which matters because, unlike the new/concatenated layout
+    (header on page 1 only), the old/spaced layout repeats the header on
+    every page.
+    """
+    # New layout: header labels already concatenated into single words
+    # exactly matching COLS, findable anywhere on the page.
     header: dict[str, float] = {}
-    for word in page.extract_words():
+    header_top: float | None = None
+    for word in words:
         if word["text"] in COLS and word["text"] not in header:
             header[word["text"]] = word["x0"]
-    return [header[c] for c in COLS] if len(header) == len(COLS) else None
+            if header_top is None:
+                header_top = word["top"]
+    if len(header) == len(COLS):
+        edges = [header[c] for c in COLS]
+        return edges, header_top, _row_end(words, header_top, edges[-1])
+
+    # Old layout: header labels are split across multiple words.
+    run = _find_token_run(words, _SPACED_HEADER_RUN)
+    if run is None:
+        return None
+    edges = [run[i]["x0"] for i in _SPACED_HEADER_STARTS]
+    header_top = run[0]["top"]
+    return edges, header_top, _row_end(words, header_top, edges[-1])
 
 
-def _column_index(x0: float, bounds: list[float]) -> int:
+def _column_bounds(page) -> tuple[list[float], float | None] | None:
+    detected = _detect_header(page.extract_words())
+    if detected is None:
+        return None
+    edges, _header_top, row_end = detected
+    return edges, row_end
+
+
+def _column_index(x0: float, edges: list[float]) -> int:
     index = 0
-    for i, edge in enumerate(bounds):
+    for i, edge in enumerate(edges):
         if x0 >= edge - 2:
             index = i
     return index
 
 
 def _lines(page, bounds):
+    edges, row_end = bounds
+    words = page.extract_words()
+
+    # The old/spaced layout repeats the header line on every page (the
+    # new/concatenated layout does not); re-detect it on THIS page (fresh,
+    # not the carried-over `bounds`) so its words are masked out of the
+    # data rows rather than parsed as a bogus row -- otherwise "Player
+    # Name" / "Current Status" would land in the PLAYER/STATUS cells and
+    # get treated as a real anchor row, corrupting the forward-filled
+    # game date/time/matchup/team for every row after it on the page.
+    detected = _detect_header(words)
+    header_top = detected[1] if detected is not None else None
+
     groups: dict[int, list] = {}
-    for word in page.extract_words():
-        if word["text"] in COLS:
+    for word in words:
+        # NOTE: deliberately NOT filtering by `word["text"] in COLS` here.
+        # That was the previous approach, and it is unsafe: in the old/
+        # spaced layout, reason text can literally contain the word
+        # "Team" (as in "Not With Team"), which collides with the COLS
+        # entry "Team" and would silently drop that word from the row.
+        # The new/concatenated layout never collides this way -- there
+        # "NotWithTeam" is a single word -- which is why this bug stayed
+        # hidden. header_top-based masking below is strictly more precise
+        # (it only removes words actually on the header line) and
+        # supersedes this check for both layouts.
+        if header_top is not None and abs(word["top"] - header_top) < 1.0:
+            continue
+        if row_end is not None and word["x0"] >= row_end - 2:
             continue
         groups.setdefault(round(word["top"] / 3), []).append(word)
 
     out = []
     for key in sorted(groups):
-        words = groups[key]
+        line_words = groups[key]
         cells = [""] * len(COLS)
-        for word in sorted(words, key=lambda w: w["x0"]):
-            i = _column_index(word["x0"], bounds)
+        for word in sorted(line_words, key=lambda w: w["x0"]):
+            i = _column_index(word["x0"], edges)
             cells[i] = (cells[i] + " " + word["text"]).strip()
         if "InjuryReport:" in "".join(cells).replace(" ", ""):
             continue
-        out.append((min(w["top"] for w in words), cells))
+        out.append((min(w["top"] for w in line_words), cells))
     return out
 
 
@@ -422,7 +532,13 @@ def parse_report(pdf_bytes: bytes) -> ParsedReport:
     with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
         published_at = _published_at(pdf.pages[0].extract_text().split("\n")[0])
         for page in pdf.pages:
-            # Only page 1 carries the header; reuse its bounds thereafter.
+            # New/concatenated-layout reports carry the header on page 1
+            # only, so later pages reuse its bounds. Old/spaced-layout
+            # reports repeat the header on every page (verified across the
+            # archive); _column_bounds/_detect_header re-find it there too,
+            # which is harmless -- it just recomputes the same numeric
+            # bounds -- and _lines() masks each page's own header line back
+            # out of its data rows regardless of which case applies.
             bounds = _column_bounds(page) or bounds
             if bounds is None:
                 continue

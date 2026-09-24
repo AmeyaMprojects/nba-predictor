@@ -8,10 +8,27 @@ from predictor.sources import injury_report
 
 FIXTURE = Path(__file__).parent / "fixtures" / "Injury-Report_2025-01-15_05PM.pdf"
 
+# Old ("spaced") layout: header labels are separate words ("Game" "Date"
+# rather than "GameDate") and data cells keep internal spaces ("Butler,
+# Jimmy" rather than "Butler,Jimmy"). This is the layout every report from
+# 2019-12-01 through ~2023-01 uses -- 749+ archived reports, essentially
+# the entire early history of the backfill, all of which failed to parse
+# before this format was supported (Task 8). Six pages, 137 rows, a
+# genuine wrapped reason ("Injury Recovery + Health and Safety" /
+# "Protocols" split across two physical lines), and ordinary
+# multi-word team/player names, so it exercises page continuation, the
+# spaced-header column matching, and reason reassembly all in one file.
+OLD_FIXTURE = Path(__file__).parent / "fixtures" / "Injury-Report_2022-01-01_05PM.pdf"
+
 
 @pytest.fixture(scope="module")
 def parsed():
     return injury_report.parse_report(FIXTURE.read_bytes())
+
+
+@pytest.fixture(scope="module")
+def parsed_old():
+    return injury_report.parse_report(OLD_FIXTURE.read_bytes())
 
 
 def test_published_at_comes_from_pdf_content_not_filename(parsed):
@@ -58,6 +75,92 @@ def test_pages_after_the_first_are_parsed(parsed):
 
 def test_title_line_is_not_emitted_as_a_row(parsed):
     assert not any("InjuryReport" in r.player.replace(" ", "") for r in parsed.rows)
+
+
+# --- Old ("spaced") layout -- Task 8 ---------------------------------------
+#
+# Ground truth for the fixture (Injury-Report_2022-01-01_05PM.pdf, 6 pages)
+# was established by parsing it with the fixed parser and independently
+# sanity-checking the row count against the raw PDF text (grepping for
+# lines that pair a "Lastname, Firstname" player cell with a known status
+# word landed on the same 137, page by page). No row has a blank team,
+# player, or reason.
+
+
+def test_old_format_published_at_comes_from_pdf_content(parsed_old):
+    assert parsed_old.published_at == datetime(2022, 1, 1, 22, 30, tzinfo=UTC)
+
+
+def test_old_format_row_count_matches_verified_baseline(parsed_old):
+    assert len(parsed_old.rows) == 137
+
+
+def test_old_format_matchup_count_matches_verified_baseline(parsed_old):
+    assert len({r.matchup for r in parsed_old.rows}) == 10
+
+
+def test_old_format_statuses_are_from_the_known_vocabulary(parsed_old):
+    known = {"Out", "Questionable", "Probable", "Doubtful", "Available"}
+    assert {r.status for r in parsed_old.rows} == {
+        "Out",
+        "Questionable",
+        "Probable",
+        "Doubtful",
+    }
+    assert {r.status for r in parsed_old.rows} <= known
+
+
+def test_old_format_no_row_has_a_blank_team_player_or_reason(parsed_old):
+    assert all(r.team for r in parsed_old.rows)
+    assert all(r.player for r in parsed_old.rows)
+    assert all(r.reason for r in parsed_old.rows)
+    assert all(r.matchup for r in parsed_old.rows)
+
+
+def test_old_format_pages_after_the_first_are_parsed(parsed_old):
+    # Page 1 alone yields 27 rows; anything near that means later pages
+    # (where, unlike the new layout, the header line is repeated on every
+    # page) were dropped or double counted.
+    assert len(parsed_old.rows) > 100
+
+
+def test_old_format_preserves_internal_spaces_in_data_cells(parsed_old):
+    # Unlike the new layout ("Brunson,Jalen" / "NewYorkKnicks"), the old
+    # layout keeps spaces in cell text: "Butler, Jimmy" / "Miami Heat",
+    # not "Butler,Jimmy" / "MiamiHeat".
+    by_player = {r.player: r for r in parsed_old.rows}
+    assert "Green, Draymond" in by_player
+    assert by_player["Green, Draymond"].team == "Golden State Warriors"
+
+
+def test_old_format_wrapped_reason_text_is_reassembled(parsed_old):
+    # Both of these wrap across two physical lines in the source PDF --
+    # e.g. Wiseman's reason line reads "...Injury Recovery + Health and
+    # Safety" with "Protocols" continuing on the next line -- and must
+    # reassemble the same way the new layout's wrapped reasons do (pieces
+    # joined with no separator).
+    by_player = {r.player: r for r in parsed_old.rows}
+    assert (
+        by_player["Wiseman, James"].reason
+        == "Injury/Illness - Right Knee; Injury Recovery + Health and SafetyProtocols"
+    )
+    assert (
+        by_player["Fultz, Markelle"].reason
+        == "Injury/Illness - Left Knee; Injury Recovery; Health & SafetyProtocols"
+    )
+
+
+def test_old_format_reason_can_contain_the_word_team(parsed_old):
+    # Regression guard: the old layout's header row is matched by
+    # multi-word text ("Team", "Matchup", "Reason", ...), not by a single
+    # concatenated token, so a naive per-word filter that drops any word
+    # whose TEXT happens to equal a column name would also silently drop
+    # the literal word "Team" out of reason text like "Not With Team"
+    # (this collision is invisible in the new layout, where the
+    # equivalent reason is the single word "NotWithTeam"). Dragic's row
+    # on page 4 of this fixture is exactly that case.
+    by_player = {r.player: r for r in parsed_old.rows}
+    assert by_player["Dragic, Goran"].reason == "Not With Team"
 
 
 def test_ingest_writes_rows_with_published_at_as_observed_at(tmp_path):
