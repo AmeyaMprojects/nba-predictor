@@ -18,12 +18,14 @@ def version() -> None:
 
 @app.command("poll-news")
 def poll_news() -> None:
-    """Fetch all configured NBA news feeds and archive new items."""
+    """Fetch all configured NBA news feeds, archive new items, and load them."""
+    from predictor import db
     from predictor.config import settings
     from predictor.sources import news_rss
 
     settings.ensure_dirs()
-    for feed, result in news_rss.poll_all().items():
+    results = news_rss.poll_all()
+    for feed, result in results.items():
         if not result.ok:
             typer.echo(f"{feed}: FAILED - {result.error}")
             continue
@@ -36,6 +38,19 @@ def poll_news() -> None:
         if result.warning:
             line += f" (warning: {result.warning})"
         typer.echo(line)
+
+    con = db.connect()
+    db.migrate(con)
+    typer.echo(f"news_items rows: {news_rss.ingest_archived_news(con)}")
+
+    failed = [feed for feed, result in results.items() if not result.ok]
+    if failed:
+        typer.echo(
+            f"WARNING: {len(failed)} feed(s) failed this run: "
+            f"{', '.join(failed)}. See the FAILED line(s) above for the "
+            "reason for each one."
+        )
+        raise typer.Exit(code=1)
 
 
 @app.command("backfill-injuries")

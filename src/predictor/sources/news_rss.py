@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 import feedparser
 import requests
 
-from predictor import raw_store
+from predictor import db, raw_store
 
 # Verified live 2026-09-22. nba.com/rss/nba_rss.xml returns 403 — excluded.
 FEEDS: dict[str, str] = {
@@ -209,3 +209,89 @@ def poll_all(now: datetime | None = None, session=None) -> dict[str, FeedResult]
             results[name] = FeedResult(name, False, 0, 0, 0, None, str(exc))
             print(f"feed {name} failed: {exc}")
     return results
+
+
+def ingest_archived_news(con) -> int:
+    """Load archived news JSON from the raw store into `news_items`.
+
+    Returns the number of rows actually written (newly-seen items only;
+    see the idempotency note below).
+
+    `observed_at` is read from the manifest entry's `meta`, NOT from the
+    archived blob's own JSON. The blob written by `archive_entries` above
+    only ever contains `feed`, `entry_id`, `title`, `link`, `summary`, and
+    `published` -- `observed_at` deliberately never enters it (see the NOTE
+    in `archive_entries`: it's poll-time metadata, kept out of the content
+    hash), so it lives solely in `meta["observed_at"]` on the manifest
+    line (with `fetched_at` on that same line as a fallback, for a
+    manifest entry archived without meta at all).
+
+    IDEMPOTENCY / point-in-time safety: the physical table behind the
+    logical "news_items" name (see `db.POINT_IN_TIME_TABLES`) has
+    `item_key` as its ONLY primary key column; `observed_at` is not part
+    of it. Using `INSERT OR REPLACE`
+    here (as an earlier version of this function did) would let
+    re-ingesting an already-seen item silently REWRITE its `observed_at`
+    every time this function runs -- retroactively changing when that
+    fact became knowable, which is exactly what `AsOfView`'s point-in-time
+    guarantee depends on never happening, and it has no defence against
+    it. This is not just theoretical: `raw_store.store()`'s own
+    self-heal path (blob present on disk, but its manifest line missing,
+    e.g. after a crash between the two writes) appends a FRESH manifest
+    line -- with today's `fetched_at`/`observed_at` -- for a blob that was
+    actually first archived earlier. Re-running this function afterwards
+    must not let that newer, wrong timestamp overwrite the true
+    first-seen time already recorded in the table.
+    Ruling: the FIRST time an item is seen is when it became knowable,
+    and that must never move once recorded. So an existing `item_key` is
+    left completely untouched (`ON CONFLICT (item_key) DO NOTHING`)
+    rather than replaced; only genuinely new keys are written. This makes
+    the whole function safe to re-run at any time: re-ingesting an
+    unchanged archive twice writes nothing new the second time, and even
+    a duplicate/corrected manifest line for an already-known key can never
+    move its recorded `observed_at`.
+    """
+    written = 0
+    # Resolved through db.POINT_IN_TIME_TABLES rather than spelled as a
+    # literal here -- the physical "_raw" table names are only allowed to
+    # appear as string literals in db.py/asof.py (see
+    # test_no_physical_table_name_appears_outside_db_and_asof); this
+    # ingestion module must not name the physical table directly either.
+    table = db.POINT_IN_TIME_TABLES["news_items"]
+    insert_sql = (
+        f"INSERT INTO {table} (item_key, feed, title, link, summary, observed_at)"
+        " VALUES (?,?,?,?,?,?)"
+        " ON CONFLICT (item_key) DO NOTHING"
+        " RETURNING item_key"
+    )
+    for entry in raw_store.iter_manifest("news"):
+        key = entry["key"]
+        payload = json.loads(raw_store.load("news", key))
+        meta = entry.get("meta") or {}
+        observed_at_raw = meta.get("observed_at") or entry.get("fetched_at")
+        if not observed_at_raw:
+            # Never silently lose data: a manifest line with no timestamp
+            # anywhere on it is corrupt, not a legitimate item to skip
+            # quietly.
+            raise ValueError(
+                f"news item {key!r} has no observed_at recorded anywhere "
+                "in its manifest entry -- refusing to guess when it "
+                "became knowable"
+            )
+        observed_at = db.require_utc(
+            datetime.fromisoformat(observed_at_raw), "observed_at"
+        )
+        rows = con.execute(
+            insert_sql,
+            [
+                key,
+                payload.get("feed", meta.get("feed", "")),
+                payload.get("title", ""),
+                payload.get("link", ""),
+                payload.get("summary", ""),
+                observed_at,
+            ],
+        ).fetchall()
+        if rows:
+            written += 1
+    return written
