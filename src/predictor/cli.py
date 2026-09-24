@@ -33,7 +33,9 @@ def poll_news() -> None:
         if result.skipped:
             parts.append(f"{result.skipped} skipped")
         if result.conflicts:
-            parts.append(f"{result.conflicts} conflicts")
+            # "conflicts" here means an identifier's content changed and was
+            # archived as a new version -- not that anything was discarded.
+            parts.append(f"{result.conflicts} versioned")
         line = f"{feed}: {', '.join(parts)}"
         if result.warning:
             line += f" (warning: {result.warning})"
@@ -41,7 +43,14 @@ def poll_news() -> None:
 
     con = db.connect()
     db.migrate(con)
-    typer.echo(f"news_items rows: {news_rss.ingest_archived_news(con)}")
+    ingest_stats = news_rss.ingest_archived_news(con)
+    line = f"news_items rows: {ingest_stats.written}"
+    if ingest_stats.skipped_unknown_feed:
+        line += (
+            f" ({ingest_stats.skipped_unknown_feed} archived item(s) skipped: "
+            "feed not in FEEDS)"
+        )
+    typer.echo(line)
 
     failed = [feed for feed, result in results.items() if not result.ok]
     if failed:

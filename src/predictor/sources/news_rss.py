@@ -35,7 +35,14 @@ _OK_STATUSES = (200, 301, 302)
 
 @dataclass(frozen=True)
 class EntryStats:
-    """Outcome of archiving one feed's parsed entries."""
+    """Outcome of archiving one feed's parsed entries.
+
+    `conflicts` counts entries whose identifier was already archived with
+    DIFFERENT content (a publisher edit under the same id). Despite the
+    name, nothing is discarded: the updated content is archived under a
+    separate, deterministic VERSIONED key (see `_versioned_key`) and this
+    just tells an operator how often that happened this poll.
+    """
 
     new: int
     skipped: int
@@ -55,9 +62,36 @@ class FeedResult:
     error: str | None
 
 
+@dataclass(frozen=True)
+class IngestStats:
+    """Outcome of `ingest_archived_news`."""
+
+    written: int
+    skipped_unknown_feed: int
+
+
 def item_key(feed_name: str, entry_id: str) -> str:
     digest = hashlib.sha256(entry_id.encode()).hexdigest()[:20]
     return f"{feed_name}_{digest}.json"
+
+
+def _versioned_key(key: str, content: bytes) -> str:
+    """Deterministic archive key for content that conflicts with `key`.
+
+    Used when a publisher edits a story under the same identifier: `key`
+    already has DIFFERENT bytes recorded for it, so the updated content
+    must land somewhere else instead of being dropped. The suffix is
+    derived from a hash of the new content itself, not a counter, so:
+      - the same updated content always maps to the same versioned key
+        (re-polling an unchanged edit is a no-op, not a growing pile of
+        copies), and
+      - a later, DIFFERENT edit of the same story gets its own distinct
+        versioned key (a counter would need external state to avoid
+        reusing "v1" after a restart; a content hash needs none).
+    """
+    digest = hashlib.sha256(content).hexdigest()[:12]
+    stem = key[:-5] if key.endswith(".json") else key
+    return f"{stem}.v{digest}.json"
 
 
 def _entry_id(entry) -> str:
@@ -99,22 +133,51 @@ def archive_entries(feed_name: str, parsed, now: datetime) -> EntryStats:
                 "summary": getattr(entry, "summary", ""),
                 "published": getattr(entry, "published", ""),
             }
+            content = json.dumps(payload).encode()
             # Always call store() -- never skip it just because exists()
             # said the key is present -- so raw_store's hash comparison
             # (and RawStoreConflict) actually runs. Pre-checking exists()
             # only to decide whether to skip archiving would silently drop
             # a publisher reusing an id for genuinely different content.
-            raw_store.store(
-                "news",
-                key,
-                json.dumps(payload).encode(),
-                now,
-                meta={"feed": feed_name, "observed_at": now.isoformat()},
-            )
-        except raw_store.RawStoreConflict as exc:
-            conflicts += 1
-            print(f"news conflict for feed {feed_name!r}: {exc}")
-            continue
+            try:
+                raw_store.store(
+                    "news",
+                    key,
+                    content,
+                    now,
+                    meta={"feed": feed_name, "observed_at": now.isoformat()},
+                )
+            except raw_store.RawStoreConflict:
+                # The publisher edited this story under the same identifier.
+                # News is the one source in this project that cannot be
+                # re-fetched, so the updated bytes must never be dropped:
+                # archive them under a NEW, deterministic key instead (see
+                # `_versioned_key`). The original key's blob and its
+                # original `observed_at` are left completely untouched --
+                # this never overwrites, it only adds a new archive entry.
+                versioned_key = _versioned_key(key, content)
+                version_already_present = raw_store.exists("news", versioned_key)
+                raw_store.store(
+                    "news",
+                    versioned_key,
+                    content,
+                    now,
+                    meta={
+                        "feed": feed_name,
+                        "observed_at": now.isoformat(),
+                        "versions_of": key,
+                    },
+                )
+                conflicts += 1
+                print(
+                    f"news item changed for feed {feed_name!r}: {key!r} was "
+                    f"already archived with different content; the update "
+                    f"was archived as a new version {versioned_key!r} "
+                    "(original left untouched, nothing was discarded)"
+                )
+                if not version_already_present:
+                    new += 1
+                continue
         except Exception as exc:  # a malformed entry must not abort the batch
             skipped += 1
             print(f"skipping malformed entry in feed {feed_name!r}: {exc}")
@@ -211,11 +274,26 @@ def poll_all(now: datetime | None = None, session=None) -> dict[str, FeedResult]
     return results
 
 
-def ingest_archived_news(con) -> int:
+def ingest_archived_news(con) -> IngestStats:
     """Load archived news JSON from the raw store into `news_items`.
 
-    Returns the number of rows actually written (newly-seen items only;
-    see the idempotency note below).
+    Returns an `IngestStats` with the number of rows actually written
+    (newly-seen items only; see the idempotency note below) and the number
+    of archived manifest entries skipped because their feed is not one of
+    `FEEDS`.
+
+    FEED ALLOWLIST: the raw store under the "news" source can contain
+    entries from anything that was ever archived there, including one-off
+    probe/test runs against the real archive that used a feed name never
+    wired into this module (this happened for real: 22 rows from a feed
+    named "good_espn", which appears nowhere in this file, ended up in
+    `news_items` before this filter existed). Only entries whose `feed`
+    is currently a key of `FEEDS` are ingested; anything else is skipped
+    and counted, and logged so an operator can see it -- never dropped
+    silently, since a legitimately renamed feed would show up the same
+    way and needs a human to notice and update `FEEDS`. This filter is
+    forward-only: `ON CONFLICT DO NOTHING` never deletes, so it cannot
+    retroactively remove rows a prior, unfiltered run already wrote.
 
     `observed_at` is read from the manifest entry's `meta`, NOT from the
     archived blob's own JSON. The blob written by `archive_entries` above
@@ -252,6 +330,7 @@ def ingest_archived_news(con) -> int:
     move its recorded `observed_at`.
     """
     written = 0
+    skipped_unknown_feed = 0
     # Resolved through db.POINT_IN_TIME_TABLES rather than spelled as a
     # literal here -- the physical "_raw" table names are only allowed to
     # appear as string literals in db.py/asof.py (see
@@ -268,6 +347,15 @@ def ingest_archived_news(con) -> int:
         key = entry["key"]
         payload = json.loads(raw_store.load("news", key))
         meta = entry.get("meta") or {}
+        feed = payload.get("feed", meta.get("feed", ""))
+        if feed not in FEEDS:
+            skipped_unknown_feed += 1
+            print(
+                f"skipping archived news item {key!r}: feed {feed!r} is not "
+                "a configured feed (predictor.sources.news_rss.FEEDS) -- "
+                "not ingested into news_items"
+            )
+            continue
         observed_at_raw = meta.get("observed_at") or entry.get("fetched_at")
         if not observed_at_raw:
             # Never silently lose data: a manifest line with no timestamp
@@ -285,7 +373,7 @@ def ingest_archived_news(con) -> int:
             insert_sql,
             [
                 key,
-                payload.get("feed", meta.get("feed", "")),
+                feed,
                 payload.get("title", ""),
                 payload.get("link", ""),
                 payload.get("summary", ""),
@@ -294,4 +382,4 @@ def ingest_archived_news(con) -> int:
         ).fetchall()
         if rows:
             written += 1
-    return written
+    return IngestStats(written=written, skipped_unknown_feed=skipped_unknown_feed)

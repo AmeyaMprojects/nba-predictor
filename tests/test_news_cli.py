@@ -47,7 +47,11 @@ def test_poll_news_reports_failed_feed_and_exits_nonzero(tmp_path, monkeypatch):
             "deadfeed": _result(False, error="HTTP 404"),
         },
     )
-    monkeypatch.setattr(news_rss, "ingest_archived_news", lambda con: 3)
+    monkeypatch.setattr(
+        news_rss,
+        "ingest_archived_news",
+        lambda con: news_rss.IngestStats(written=3, skipped_unknown_feed=0),
+    )
 
     result = runner.invoke(cli.app, ["poll-news"])
 
@@ -65,7 +69,11 @@ def test_poll_news_exits_zero_when_all_feeds_succeed(tmp_path, monkeypatch):
         "poll_all",
         lambda: {"espn": _result(True, new=1), "cbs": _result(True, new=0)},
     )
-    monkeypatch.setattr(news_rss, "ingest_archived_news", lambda con: 1)
+    monkeypatch.setattr(
+        news_rss,
+        "ingest_archived_news",
+        lambda con: news_rss.IngestStats(written=1, skipped_unknown_feed=0),
+    )
 
     result = runner.invoke(cli.app, ["poll-news"])
 

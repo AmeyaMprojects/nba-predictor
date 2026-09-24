@@ -88,20 +88,60 @@ def test_feeds_are_configured():
 
 
 # --- F3: dedup must not bypass raw_store's conflict guard -----------------
+# --- Finding 1: an updated story must be VERSIONED, never discarded -------
 
 
-def test_archive_entries_counts_conflict_for_id_reused_with_different_content(store):
+def test_archive_entries_versions_updated_content_instead_of_discarding_it(store):
     first = SimpleNamespace(id="dup", title="first story", link="http://x/1", summary="s")
     stats1 = news_rss.archive_entries("espn", SimpleNamespace(entries=[first]), NOW)
     assert stats1.new == 1
     assert stats1.conflicts == 0
 
-    # Same id, genuinely different content -- must be recorded as a
-    # conflict, not silently dropped by an `exists()` pre-check.
-    reused = SimpleNamespace(id="dup", title="a completely different story", link="http://x/1", summary="s")
-    stats2 = news_rss.archive_entries("espn", SimpleNamespace(entries=[reused]), NOW)
-    assert stats2.new == 0
+    original_key = news_rss.item_key("espn", "dup")
+
+    # Same id, genuinely different content (a publisher edit) -- must be
+    # archived under a NEW versioned key, not silently dropped by an
+    # `exists()` pre-check, and not discarded when raw_store refuses to
+    # overwrite the original.
+    reused = SimpleNamespace(
+        id="dup", title="a completely different story", link="http://x/1", summary="s"
+    )
+    later = datetime(2026, 1, 3, 9, 30, tzinfo=UTC)
+    stats2 = news_rss.archive_entries("espn", SimpleNamespace(entries=[reused]), later)
+    # The updated content lands as an ADDITIONAL archive entry (a new
+    # `new` item under a new key), and `conflicts` still reports that an
+    # identifier's content changed -- it just no longer means "discarded".
+    assert stats2.new == 1
     assert stats2.conflicts == 1
+    assert stats2.skipped == 0
+
+    # The ORIGINAL blob and its ORIGINAL observed_at are completely
+    # untouched: bytes...
+    original_payload = json.loads(raw_store.load("news", original_key))
+    assert original_payload["title"] == "first story"
+    # ...and manifest metadata (observed_at), including after the later poll.
+    original_manifest_entry = next(
+        e for e in raw_store.iter_manifest("news") if e["key"] == original_key
+    )
+    assert original_manifest_entry["meta"]["observed_at"] == NOW.isoformat()
+
+    # The updated content is archived under a DIFFERENT key.
+    manifest = list(raw_store.iter_manifest("news"))
+    assert len(manifest) == 2
+    versioned_entries = [e for e in manifest if e["key"] != original_key]
+    assert len(versioned_entries) == 1
+    versioned_key = versioned_entries[0]["key"]
+    assert versioned_key != original_key
+    versioned_payload = json.loads(raw_store.load("news", versioned_key))
+    assert versioned_payload["title"] == "a completely different story"
+
+    # IDEMPOTENT: re-polling the exact same updated content again must not
+    # create a third copy -- it maps to the same versioned key.
+    stats3 = news_rss.archive_entries("espn", SimpleNamespace(entries=[reused]), later)
+    assert stats3.new == 0
+    assert stats3.conflicts == 1
+    manifest_after_repoll = list(raw_store.iter_manifest("news"))
+    assert len(manifest_after_repoll) == 2, "re-polling the same edit must not add a 3rd copy"
 
 
 # --- F4: a malformed entry must not abort the rest of the batch -----------

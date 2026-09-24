@@ -1,6 +1,6 @@
 """Tests for loading archived news items into the database.
 
-See `news_rss.ingest_archived_news` for the two deviations from a naive
+See `news_rss.ingest_archived_news` for the deviations from a naive
 reading of the raw-store archive:
 
 1. `observed_at` is read from the manifest entry's `meta`, not from the
@@ -11,6 +11,10 @@ reading of the raw-store archive:
    key, so an `INSERT OR REPLACE` would silently rewrite history. This is
    pinned by `test_reingest_with_a_later_manifest_entry_keeps_first_observed_at`
    below.
+3. Only archived entries whose `feed` is in `news_rss.FEEDS` are ingested
+   -- anything else is skipped and counted (`IngestStats.skipped_unknown_feed`),
+   never silently ingested or silently dropped. Pinned by
+   `test_ingest_skips_and_counts_entries_from_a_feed_not_in_feeds` below.
 """
 
 import json
@@ -56,7 +60,9 @@ _TABLE = db.POINT_IN_TIME_TABLES["news_items"]
 
 def test_ingest_loads_archived_items_into_the_table(env):
     news_rss.archive_entries("espn", _parsed(["a", "b"]), NOW)
-    assert news_rss.ingest_archived_news(env) == 2
+    stats = news_rss.ingest_archived_news(env)
+    assert stats.written == 2
+    assert stats.skipped_unknown_feed == 0
     rows = env.execute(
         f"SELECT feed, title, observed_at FROM {_TABLE} ORDER BY item_key"
     ).fetchall()
@@ -73,7 +79,34 @@ def test_ingest_is_idempotent(env):
 
 
 def test_ingest_with_no_archive_returns_zero(env):
-    assert news_rss.ingest_archived_news(env) == 0
+    stats = news_rss.ingest_archived_news(env)
+    assert stats.written == 0
+    assert stats.skipped_unknown_feed == 0
+
+
+# --- Finding 2: ingestion must only load configured feeds ------------------
+
+
+def test_ingest_skips_and_counts_entries_from_a_feed_not_in_feeds(env):
+    """Pins the real contamination this defect caused: 22 rows from a feed
+    named "good_espn" (which appears nowhere in news_rss.py) ended up in
+    news_items_raw because ingestion had no allowlist. A manifest entry for
+    an unconfigured feed must be skipped and counted, never ingested and
+    never silently dropped without a trace (an operator must be able to see
+    it happened, in case it's actually a legitimately renamed feed).
+    """
+    assert "good_espn" not in news_rss.FEEDS
+
+    news_rss.archive_entries("espn", _parsed(["a"]), NOW)
+    news_rss.archive_entries("good_espn", _parsed(["z"]), NOW)
+
+    stats = news_rss.ingest_archived_news(env)
+
+    assert stats.written == 1
+    assert stats.skipped_unknown_feed == 1
+
+    rows = env.execute(f"SELECT feed FROM {_TABLE}").fetchall()
+    assert rows == [("espn",)], "only the configured feed's item may be ingested"
 
 
 def test_reingest_with_a_later_manifest_entry_keeps_first_observed_at(env):
@@ -132,7 +165,7 @@ def test_ingest_reads_observed_at_from_manifest_meta_not_the_blob(env):
     payload = json.loads(raw_store.load("news", key))
     assert "observed_at" not in payload
 
-    assert news_rss.ingest_archived_news(env) == 1
+    assert news_rss.ingest_archived_news(env).written == 1
     row = env.execute(
         f"SELECT observed_at FROM {_TABLE} WHERE item_key = ?", [key]
     ).fetchone()
