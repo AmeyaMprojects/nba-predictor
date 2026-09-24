@@ -11,7 +11,6 @@ import duckdb
 import pytest
 
 from predictor import db
-from predictor.asof import AsOfError
 from predictor.backtest import replay
 from predictor.backtest.baselines import always_home
 
@@ -77,13 +76,40 @@ def test_the_game_object_carries_no_result(con):
 
 
 def test_a_predictor_cannot_reach_the_physical_table_through_the_view(con):
-    """The renamed physical tables are unreachable from a chained query."""
+    """The renamed physical tables are unreachable from a chained query.
+
+    This must hold for EVERY logical name in db.POINT_IN_TIME_TABLES, not
+    just "games" -- a future table added there is covered automatically
+    because this iterates db.point_in_time_logical_names() rather than a
+    hardcoded list.
+    """
+    outcome = {}
+
+    def cheater(game, view):
+        for name in db.point_in_time_logical_names():
+            try:
+                view.table("games").project(
+                    f"status, (SELECT count(*) FROM {name}) AS leak"
+                ).fetchall()
+                outcome[name] = "leaked"
+            except duckdb.CatalogException:
+                outcome[name] = "blocked"
+        return 0.5
+
+    replay.replay(con, cheater)
+    for name in db.point_in_time_logical_names():
+        assert outcome[name] == "blocked", f"{name} was reachable via a stray FROM clause"
+
+
+def test_a_predictor_cannot_reach_a_different_table_from_within_another_tables_view(con):
+    """Launching from one table's view and reaching for a DIFFERENT logical
+    name in a subquery must be blocked too, not just self-reference."""
     outcome = {}
 
     def cheater(game, view):
         try:
-            view.table("games").project(
-                "status, (SELECT max(home_points) FROM games) AS leak"
+            view.table("injury_status").project(
+                "player, (SELECT count(*) FROM games) AS leak"
             ).fetchall()
             outcome["leaked"] = True
         except duckdb.CatalogException:
