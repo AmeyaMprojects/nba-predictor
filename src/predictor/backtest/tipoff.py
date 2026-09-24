@@ -6,6 +6,14 @@ from zoneinfo import ZoneInfo
 
 from predictor import db
 
+# This module reads the injury-report point-in-time table directly rather
+# than through AsOfView. That is a deliberate exemption, not an oversight: tip-off
+# resolution ESTABLISHES the as-of cutoff for everything else, so it
+# cannot itself be filtered by a cutoff without circularity -- you need
+# the tip-off time before you can know what "before tip-off" means. The
+# resolved tip-off datetime is used only to COMPUTE a cutoff; it is never
+# handed to a predictor as a feature, so reading it unfiltered here cannot
+# leak future information into a model.
 EASTERN = ZoneInfo("America/New_York")
 
 # '07:00 (ET)' and '08:00(ET)' both occur -- the two PDF layouts differ in
@@ -40,11 +48,25 @@ def tipoff_index(con) -> dict[tuple[date, str], datetime]:
     """Map (game_date, team) -> tip-off instant, from the injury reports.
 
     The injury report is the only place a tip-off time exists in this schema.
+
+    Different report vintages for the same (game_date, team) can disagree
+    -- an early report can carry a stale or since-corrected time (real
+    rescheduled games swing by hours between vintages). Without a
+    deterministic tie-break, `SELECT DISTINCT` has no defined row order and
+    the Python dict takes whichever row DuckDB happens to emit last, so the
+    same query can silently return a different tip-off across runs. The
+    `QUALIFY` clause below breaks the tie by keeping only the row with the
+    latest `observed_at` per (game_date, team): the most recently filed
+    report is the best available statement of when the game actually tipped
+    off, and this way the tie-break lives in one place instead of at every
+    call site.
     """
     table = db.POINT_IN_TIME_TABLES["injury_status"]
     rows = con.execute(
-        f"SELECT DISTINCT game_date, team, game_time FROM {table} "
-        "WHERE game_date IS NOT NULL AND game_time IS NOT NULL AND game_time <> ''"
+        f"SELECT game_date, team, game_time FROM {table} "
+        "WHERE game_date IS NOT NULL AND game_time IS NOT NULL AND game_time <> '' "
+        "QUALIFY row_number() OVER "
+        "(PARTITION BY game_date, team ORDER BY observed_at DESC) = 1"
     ).fetchall()
     index: dict[tuple[date, str], datetime] = {}
     for game_date, team, raw in rows:

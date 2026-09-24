@@ -1,8 +1,32 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
+from predictor import db
 from predictor.backtest import tipoff
+
+
+@pytest.fixture
+def con(tmp_path):
+    c = db.connect(tmp_path / "t.duckdb")
+    db.migrate(c)
+    return c
+
+
+def _insert_injury_row(con, game_date, team, game_time, observed_at, player="p"):
+    con.execute(
+        "INSERT INTO injury_status_raw (report_date, game_date, game_time, team,"
+        " player, status, observed_at) VALUES (?,?,?,?,?,?,?)",
+        [
+            observed_at.date(),
+            game_date,
+            game_time,
+            team,
+            player,
+            "Out",
+            observed_at,
+        ],
+    )
 
 
 def test_evening_game_is_pm():
@@ -39,3 +63,44 @@ def test_daylight_saving_is_honoured():
 def test_unparseable_returns_none():
     for bad in ["", "TBD", "not a time", "25:00 (ET)"]:
         assert tipoff.parse_game_time(bad, date(2025, 1, 15)) is None
+
+
+def test_tipoff_index_breaks_a_conflicting_time_by_latest_observed_at(con):
+    # A rescheduled game: an early report says 8pm, a later one corrects it
+    # to 5:30pm. The latest observed_at must win, deterministically.
+    gd = date(2022, 11, 9)
+    early = datetime(2022, 11, 8, 12, 0, tzinfo=UTC)
+    late = early + timedelta(hours=6)
+    _insert_injury_row(con, gd, "DAL", "08:00 (ET)", early)
+    _insert_injury_row(con, gd, "DAL", "05:30 (ET)", late)
+
+    expected = tipoff.parse_game_time("05:30 (ET)", gd)
+    for _ in range(5):
+        index = tipoff.tipoff_index(con)
+        assert index[(gd, "DAL")] == expected
+
+
+def test_resolve_tipoff_prefers_home_team(con):
+    gd = date(2025, 1, 15)
+    observed = datetime(2025, 1, 14, 12, 0, tzinfo=UTC)
+    _insert_injury_row(con, gd, "PHI", "07:00 (ET)", observed)
+    _insert_injury_row(con, gd, "NYK", "07:30 (ET)", observed, player="q")
+
+    index = tipoff.tipoff_index(con)
+    got = tipoff.resolve_tipoff(index, gd, "PHI", "NYK")
+    assert got == tipoff.parse_game_time("07:00 (ET)", gd)
+
+
+def test_resolve_tipoff_falls_back_to_away_team(con):
+    gd = date(2025, 1, 15)
+    observed = datetime(2025, 1, 14, 12, 0, tzinfo=UTC)
+    _insert_injury_row(con, gd, "NYK", "07:30 (ET)", observed)
+
+    index = tipoff.tipoff_index(con)
+    got = tipoff.resolve_tipoff(index, gd, "PHI", "NYK")
+    assert got == tipoff.parse_game_time("07:30 (ET)", gd)
+
+
+def test_resolve_tipoff_returns_none_when_neither_team_has_an_entry(con):
+    index = tipoff.tipoff_index(con)
+    assert tipoff.resolve_tipoff(index, date(2025, 1, 15), "PHI", "NYK") is None
