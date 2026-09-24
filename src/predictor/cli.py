@@ -173,5 +173,25 @@ def ingest_season_cmd(season: str = typer.Argument(..., help="e.g. 2024-25")) ->
         raise typer.Exit(code=1)
 
 
+@app.command("ingest-odds")
+def ingest_odds_cmd() -> None:
+    """Fetch and store one odds snapshot. Budgeted to one call per run."""
+    from predictor import db
+    from predictor.config import settings
+    from predictor.sources import odds
+
+    settings.ensure_dirs()
+    con = db.connect()
+    db.migrate(con)
+    try:
+        typer.echo(f"stored {odds.ingest_current(con)} odds rows")
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from None
+    except odds.OddsQuotaExceeded as exc:
+        typer.echo(f"ODDS QUOTA EXCEEDED: {exc}", err=True)
+        raise typer.Exit(code=1) from None
+
+
 if __name__ == "__main__":
     app()
