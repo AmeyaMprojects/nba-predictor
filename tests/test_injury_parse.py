@@ -68,6 +68,18 @@ def test_statuses_are_from_the_known_vocabulary(parsed):
     assert {r.status for r in parsed.rows} <= known
 
 
+def test_not_yet_submitted_placeholder_is_never_attached_to_a_reason(parsed):
+    # Same regression as the old-layout case below, in the new layout:
+    # a team with no report filed gets its own row, reason
+    # "NOTYETSUBMITTED" (concatenated here), no player/status -- and
+    # before this fix could attach to the nearest real anchor.
+    # "Travers,Luke" (page 10 of this fixture) sits near several such
+    # placeholder rows for the CLE@OKC / other late matchups.
+    by_player = {r.player: r for r in parsed.rows}
+    assert by_player["Travers,Luke"].reason == "GLeague-Two-Way"
+    assert not any("SUBMIT" in r.reason.upper() for r in parsed.rows)
+
+
 def test_pages_after_the_first_are_parsed(parsed):
     # Page 1 alone yields 15 rows; anything near that means later pages were dropped.
     assert len(parsed.rows) > 100
@@ -148,6 +160,23 @@ def test_old_format_wrapped_reason_text_is_reassembled(parsed_old):
         by_player["Fultz, Markelle"].reason
         == "Injury/Illness - Left Knee; Injury Recovery; Health & SafetyProtocols"
     )
+
+
+def test_old_format_not_yet_submitted_placeholder_is_never_attached_to_a_reason(
+    parsed_old,
+):
+    # Regression guard (post-Task-8 finding): a team with no report filed
+    # yet gets its own row -- team name, no player, no status, reason
+    # "NOT YET SUBMITTED" -- which looks exactly like a wrapped-Reason
+    # continuation fragment to the nearest-anchor attachment logic and,
+    # before this fix, got glued onto some nearby player's real reason.
+    # "Freedom, Enes" on page 2 of this fixture is exactly that case: its
+    # true reason is "Health and Safety Protocols", but a Boston Celtics
+    # "NOT YET SUBMITTED" placeholder row sits closer to Freedom's anchor
+    # line than to anything else and used to attach there.
+    by_player = {r.player: r for r in parsed_old.rows}
+    assert by_player["Freedom, Enes"].reason == "Health and Safety Protocols"
+    assert not any("SUBMIT" in r.reason.upper() for r in parsed_old.rows)
 
 
 def test_old_format_reason_can_contain_the_word_team(parsed_old):

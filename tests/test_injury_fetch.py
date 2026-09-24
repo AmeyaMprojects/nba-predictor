@@ -2,6 +2,7 @@ import time
 from datetime import UTC, date, datetime
 
 import pytest
+import requests
 
 from predictor import raw_store
 from predictor.config import Settings
@@ -136,11 +137,66 @@ def test_fetch_raises_transient_error_on_503_after_retries():
     assert len(session.calls) == injury_report._MAX_ATTEMPTS
 
 
-def test_fetch_propagates_network_exception_immediately():
+def test_fetch_propagates_unrelated_exceptions_immediately():
+    # Python's builtin ConnectionError is a coincidentally similarly-named
+    # but UNRELATED exception to requests.exceptions.ConnectionError (the
+    # one _RETRYABLE_NETWORK_EXCEPTIONS actually catches -- see the
+    # requests-specific tests below). This guards against a future change
+    # widening the retry net by matching exception NAMES rather than the
+    # specific requests.exceptions types it's scoped to: any exception
+    # outside that set (this one included) must still propagate on the
+    # first attempt, uncaught.
     session = RaisingSession(ConnectionError("boom"))
     with pytest.raises(ConnectionError):
         injury_report.fetch_report(date(2025, 1, 15), "05PM", session)
-    assert len(session.calls) == 1, "a network error must not be retried"
+    assert len(session.calls) == 1, "an unrelated exception must not be retried"
+
+
+def test_fetch_raises_transient_error_after_retrying_a_connection_error():
+    # Regression guard (Task 8 review Finding 2): a dropped/reset TCP
+    # connection previously propagated immediately and killed an
+    # unattended ~2,500-slot backfill about 40% through. It must now be
+    # retried the same way a transient HTTP status is, and, once retries
+    # are exhausted, converted to TransientFetchError -- not left as a
+    # raw requests exception -- so callers keep the documented two-outcome
+    # contract ("confirmed absent" vs. "could not check").
+    session = RaisingSession(
+        requests.exceptions.ConnectionError(
+            "('Connection aborted.', ConnectionResetError(54, 'Connection reset by peer'))"
+        )
+    )
+    with pytest.raises(injury_report.TransientFetchError) as exc_info:
+        injury_report.fetch_report(date(2025, 1, 15), "05PM", session)
+    assert "ConnectionError" in str(exc_info.value)
+    assert len(session.calls) == injury_report._MAX_ATTEMPTS, (
+        "a dropped connection should retry up to the attempt limit, not fail immediately"
+    )
+
+
+def test_fetch_raises_transient_error_after_retrying_a_timeout():
+    session = RaisingSession(requests.exceptions.Timeout("timed out"))
+    with pytest.raises(injury_report.TransientFetchError) as exc_info:
+        injury_report.fetch_report(date(2025, 1, 15), "05PM", session)
+    assert "Timeout" in str(exc_info.value)
+    assert len(session.calls) == injury_report._MAX_ATTEMPTS
+
+
+def test_fetch_raises_transient_error_after_retrying_a_chunked_encoding_error():
+    session = RaisingSession(requests.exceptions.ChunkedEncodingError("truncated response"))
+    with pytest.raises(injury_report.TransientFetchError):
+        injury_report.fetch_report(date(2025, 1, 15), "05PM", session)
+    assert len(session.calls) == injury_report._MAX_ATTEMPTS
+
+
+def test_fetch_returns_none_on_403_or_404_even_with_network_retry_enabled():
+    # Regression guard: adding connection-error retry must not touch the
+    # confirmed-absent 403/404 path -- it must still short-circuit on the
+    # FIRST attempt. Burning _MAX_ATTEMPTS on every genuinely-absent
+    # offseason slot would slow the backfill for no reason.
+    for status in (403, 404):
+        session = ConstantStatusSession(status)
+        assert injury_report.fetch_report(date(2025, 1, 15), "05PM", session) is None
+        assert len(session.calls) == 1
 
 
 def test_archive_report_skips_before_archive_start_without_request(store):

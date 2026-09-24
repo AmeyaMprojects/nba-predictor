@@ -47,12 +47,13 @@ _MAX_WAIT_SECONDS = 30
 class TransientFetchError(Exception):
     """A fetch attempt failed in a way that does not mean "not published".
 
-    Raised for 429, 5xx, or any other unexpected HTTP status, after
-    retries with exponential backoff are exhausted. Distinct from the
-    quiet `None` that `fetch_report` returns for a genuine 403/404 "not
-    published" response, and distinct from a network-level exception
-    (connection error, timeout), which propagates immediately without
-    retry, exactly as before.
+    Raised for 429, 5xx, or any other unexpected HTTP status, OR for a
+    connection-level failure (`requests.exceptions.ConnectionError`/
+    `Timeout`/`ChunkedEncodingError` -- a dropped/reset connection, a
+    timeout, or the response cutting off mid-download), after retries
+    with exponential backoff are exhausted. Distinct from the quiet
+    `None` that `fetch_report` returns for a genuine 403/404 "not
+    published" response, which is checked without any retry.
     """
 
     def __init__(
@@ -155,6 +156,26 @@ def _classify_response(response, day: date, hour_label: str) -> bytes | None:
     )
 
 
+# Network-level failures that mean "the request never got a response at
+# all" -- a dropped/reset connection, a connect/read timeout, or the
+# connection closing mid-download. Distinct from an HTTP error status
+# (handled by `_classify_response`/`TransientFetchError` below): these
+# never reach `session.get`'s return value, they raise instead. For a
+# single call letting them propagate is correct and loud; for an
+# unattended ~2,500-request backfill it is fatal -- a single reset
+# killed a live run (Task 8 review Finding 2) roughly 40% through.
+# Retried the same way as a transient HTTP status (same backoff, same
+# attempt cap) by converting them to TransientFetchError below, which
+# both makes them retryable (the retry condition here only matches
+# TransientFetchError) and keeps the exhausted-retries exception type
+# consistent with fetch_report's documented two-outcome contract.
+_RETRYABLE_NETWORK_EXCEPTIONS = (
+    requests.exceptions.ConnectionError,
+    requests.exceptions.Timeout,
+    requests.exceptions.ChunkedEncodingError,
+)
+
+
 @tenacity.retry(
     retry=tenacity.retry_if_exception_type(TransientFetchError),
     wait=_wait_seconds,
@@ -163,7 +184,22 @@ def _classify_response(response, day: date, hour_label: str) -> bytes | None:
     reraise=True,
 )
 def _fetch_attempt(session, day: date, hour_label: str) -> bytes | None:
-    response = session.get(report_url(day, hour_label), timeout=30)
+    key = raw_key(day, hour_label)
+    try:
+        response = session.get(report_url(day, hour_label), timeout=30)
+    except _RETRYABLE_NETWORK_EXCEPTIONS as exc:
+        # No response, no status code, no Retry-After header to honor --
+        # this falls back to the same plain exponential backoff a
+        # Retry-After-less transient HTTP status already uses (see
+        # `_wait_seconds`). 403/404 never reach this branch (they're a
+        # completed HTTP response, not an exception), so they still skip
+        # the retry loop entirely -- burning four attempts on every
+        # confirmed-absent offseason slot would slow the backfill for no
+        # reason.
+        print(f"injury: network error -- {key} -> {type(exc).__name__}: {exc}")
+        raise TransientFetchError(
+            f"network error fetching {key}: {type(exc).__name__}: {exc}"
+        ) from exc
     return _classify_response(response, day, hour_label)
 
 
@@ -171,12 +207,16 @@ def fetch_report(day: date, hour_label: str, session=None) -> bytes | None:
     """Fetch one report slot.
 
     Returns the raw bytes on success, or `None` if the slot is confirmed
-    to never have been published (403/404). A network-level exception
-    (connection error, timeout, ...) propagates immediately, uncaught.
-    A 429/5xx/unexpected status is retried with exponential backoff
-    (honoring a `Retry-After` header when the response provides one) and,
-    once retries are exhausted, raises `TransientFetchError` -- this must
-    NOT be treated as "not published" by callers.
+    to never have been published (403/404, checked without any retry).
+    Both a 429/5xx/unexpected status AND a connection-level failure
+    (`requests.exceptions.ConnectionError`/`Timeout`/`ChunkedEncodingError`
+    -- a dropped/reset connection, a timeout, or the response cutting off
+    mid-download) are retried with exponential backoff (honoring a
+    `Retry-After` header when an HTTP response provides one) and, once
+    retries are exhausted, both raise `TransientFetchError` -- this must
+    NOT be treated as "not published" by callers. Any OTHER exception
+    (e.g. a `requests` exception not in that retryable set) propagates
+    immediately, uncaught.
     """
     session = session or requests.Session()
     return _fetch_attempt(session, day, hour_label)
@@ -466,11 +506,44 @@ def _lines(page, bounds):
     return out
 
 
+def _is_not_yet_submitted(reason: str) -> bool:
+    """True iff `reason` is exactly the "team hasn't filed yet" placeholder.
+
+    A team with no injury report filed for a slate gets its own row --
+    team name, no player, no status, reason "NOT YET SUBMITTED" (or,
+    concatenated-format, "NOTYETSUBMITTED") -- meaning the OPPOSITE of an
+    injury: nobody has said anything yet. That row has no player/status,
+    so it looks exactly like a wrapped-Reason continuation fragment to
+    the nearest-anchor attachment logic below, and without this filter
+    it gets glued onto some nearby player's real reason (observed
+    concatenating repeatedly when several such teams are stacked near
+    the same anchor, e.g. "...Bone bruiseNOT YET SUBMITTEDNOT YET
+    SUBMITTED...").
+
+    Matched by exact content (normalized: whitespace stripped,
+    case-insensitive), not by row shape (e.g. "has a Team but no
+    Player/Status"): a genuine wrapped-reason fragment can legitimately
+    share a physical line with an unrelated team-section-header label
+    that happens to render at the same y-coordinate (observed in the
+    2019-12-01..17 archived reports, which have a narrower Reason
+    column and more line-wrapping) -- excluding by shape would silently
+    drop that real reason text instead of just the placeholder.
+    Checked against the archive: no other wording for this placeholder
+    was found; every fragment matching "not (player and status)" that
+    isn't this exact string turned out to be genuine reason text.
+    """
+    return reason.replace(" ", "").upper() == "NOTYETSUBMITTED"
+
+
 def _parse_page(page, bounds, carry):
     lines = _lines(page, bounds)
     anchors = [(t, c) for t, c in lines if c[PLAYER] and c[STATUS]]
     fragments = [
-        (t, c[REASON]) for t, c in lines if not (c[PLAYER] and c[STATUS]) and c[REASON]
+        (t, c[REASON])
+        for t, c in lines
+        if not (c[PLAYER] and c[STATUS])
+        and c[REASON]
+        and not _is_not_yet_submitted(c[REASON])
     ]
 
     rows = [
@@ -653,13 +726,16 @@ def backfill_range(
       `reingest_archived`, which ingests already-archived PDFs with no
       network fetch at all.
 
-    A raw network-level exception (connection error, timeout, ...) is
-    deliberately NOT caught here -- `fetch_report` documents that it
-    propagates such an error immediately, uncaught, and existing tests
-    pin that contract. Catching it in this loop would silently blur that
-    boundary. It aborts the run, same as today; resumability (via
-    `skipped`) means a re-run only repeats work from that point forward,
-    not from the start.
+    A connection-level failure (dropped/reset connection, timeout,
+    truncated response) is now retried inside `fetch_report` itself (Task
+    8 review Finding 2 -- a single reset previously killed an unattended
+    ~40%-through run) and, once its own retries are exhausted, surfaces
+    here as `TransientFetchError`, same as a 429/5xx -- so it is counted
+    as `transient`, not treated as an abort, same as any other transient
+    failure. Any OTHER raw exception (not in that retryable set) is
+    deliberately NOT caught here and still aborts the run, same as
+    before; resumability (via `skipped`) means a re-run only repeats work
+    from that point forward, not from the start.
     """
     session = session or requests.Session()
     stats = {
