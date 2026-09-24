@@ -36,7 +36,7 @@ def parse_game_time(raw: str, game_date: date) -> datetime | None:
     return local.astimezone(UTC)
 
 
-def tipoff_index(con, season: str | None = None) -> dict[tuple[date, str], datetime]:
+def tipoff_index(con) -> dict[tuple[date, str], datetime]:
     """Map (game_date, team) -> tip-off instant, from the injury reports.
 
     The injury report is the only place a tip-off time exists in this schema.
