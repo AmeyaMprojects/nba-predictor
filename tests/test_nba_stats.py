@@ -146,3 +146,32 @@ def test_ingest_rejects_naive_observed_at(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError):
         nba_stats.ingest_season(con, "2024-25", observed_at=datetime(2025, 6, 23, 0, 0))
+
+
+def test_ingest_season_populates_caller_supplied_dropped_list(tmp_path, monkeypatch):
+    # Mirrors pair_team_rows: a caller-supplied `dropped` list must be
+    # populated with any game that could not be written to the database,
+    # and the pinned `int` return contract (count of games ACTUALLY
+    # ingested) must still hold even when some games were dropped.
+    con = db.connect(tmp_path / "t3.duckdb")
+    db.migrate(con)
+    df = _frame(
+        [
+            # One good, pairable game...
+            ["0042400407", "2025-06-22", "IND @ OKC", "L", 91, "IND"],
+            ["0042400407", "2025-06-22", "OKC vs. IND", "W", 103, "OKC"],
+            # ...and one genuinely unresolvable group.
+            ["0099999999", "2025-01-01", "GARBLED TEXT", "W", 100, "AAA"],
+            ["0099999999", "2025-01-01", "GARBLED TEXT", "L", 90, "BBB"],
+        ]
+    )
+    monkeypatch.setattr(nba_stats, "fetch_season", lambda season: df)
+
+    dropped: list[nba_stats.DroppedGame] = []
+    count = nba_stats.ingest_season(con, "2024-25", observed_at=OBSERVED, dropped=dropped)
+
+    assert count == 1
+    assert len(dropped) == 1
+    assert dropped[0].game_id == "0099999999"
+    written = con.execute("SELECT count(*) FROM games_raw").fetchone()[0]
+    assert written == 1

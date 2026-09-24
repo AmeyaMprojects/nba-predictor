@@ -154,7 +154,23 @@ def ingest_season_cmd(season: str = typer.Argument(..., help="e.g. 2024-25")) ->
     settings.ensure_dirs()
     con = db.connect()
     db.migrate(con)
-    typer.echo(f"ingested {nba_stats.ingest_season(con, season)} games for {season}")
+
+    dropped: list[nba_stats.DroppedGame] = []
+    count = nba_stats.ingest_season(con, season, dropped=dropped)
+    typer.echo(f"ingested {count} games for {season}")
+
+    if dropped:
+        game_ids = ", ".join(d.game_id for d in dropped)
+        typer.echo(
+            f"WARNING: {len(dropped)} game(s) for the {season} season could "
+            "NOT be saved to the database, because this tool could not "
+            "figure out which team was home and which was away for them. "
+            f"The affected game ID(s): {game_ids}. See the lines above "
+            "starting with 'nba_stats: DROPPED' for the reason for each "
+            "one. This season's data is INCOMPLETE until those games are "
+            "fixed and re-ingested."
+        )
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

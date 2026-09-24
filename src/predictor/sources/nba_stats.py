@@ -160,10 +160,26 @@ def pair_team_rows(
     return games
 
 
-def ingest_season(con, season: str, observed_at: datetime | None = None) -> int:
+def ingest_season(
+    con,
+    season: str,
+    observed_at: datetime | None = None,
+    dropped: list[DroppedGame] | None = None,
+) -> int:
+    """Fetch and ingest one season; returns the count of games ingested.
+
+    `dropped`, mirroring `pair_team_rows`, is an optional caller-supplied
+    list that gets populated with every GAME_ID group that could not be
+    paired into a GameRow (and therefore was NOT written to the database).
+    Passing it is how a caller -- notably `ingest_season_cmd` -- learns
+    whether a season silently lost games, rather than relying solely on
+    the printed log lines below. If the caller does not pass one, a local
+    list is used instead so the summary print below still fires; either
+    way, nothing dropped goes unreported.
+    """
     observed_at = db.require_utc(observed_at or datetime.now(UTC), "observed_at")
-    dropped: list[DroppedGame] = []
-    games = pair_team_rows(fetch_season(season), season, dropped=dropped)
+    local_dropped: list[DroppedGame] = dropped if dropped is not None else []
+    games = pair_team_rows(fetch_season(season), season, dropped=local_dropped)
     # Resolved through db.POINT_IN_TIME_TABLES rather than spelled as a
     # literal here -- the physical "_raw" table names are only allowed to
     # appear as string literals in db.py/asof.py (see
@@ -191,14 +207,14 @@ def ingest_season(con, season: str, observed_at: datetime | None = None) -> int:
                 observed_at,
             ],
         )
-    if dropped:
+    if local_dropped:
         # Loud, unconditional report of anything that did NOT make it into
         # the database for this season -- individual DROPPED lines were
         # already printed by pair_team_rows/_log_dropped above; this is the
         # summary a caller (CLI or otherwise) sees at the end of the run.
         print(
-            f"nba_stats: WARNING -- {len(dropped)} game(s) for season {season} "
-            "could not be paired into a game row and were NOT ingested: "
-            f"{[d.game_id for d in dropped]}"
+            f"nba_stats: WARNING -- {len(local_dropped)} game(s) for season "
+            f"{season} could not be paired into a game row and were NOT "
+            f"ingested: {[d.game_id for d in local_dropped]}"
         )
     return len(games)
