@@ -217,5 +217,29 @@ def ingest_odds_cmd() -> None:
         raise typer.Exit(code=1) from None
 
 
+@app.command()
+def status() -> None:
+    """Report data freshness in plain English."""
+    from predictor import db
+    from predictor import status as status_mod
+    from predictor.config import settings
+
+    settings.ensure_dirs()
+    con = db.connect()
+    db.migrate(con)
+    typer.echo(status_mod.format_report(status_mod.check_sources(con)))
+
+
+@app.command()
+def setup() -> None:
+    """Create directories and initialise the database."""
+    from predictor import db
+    from predictor.config import settings
+
+    settings.ensure_dirs()
+    db.migrate(db.connect())
+    typer.echo(f"ready. data dir: {settings.data_dir}")
+
+
 if __name__ == "__main__":
     app()
