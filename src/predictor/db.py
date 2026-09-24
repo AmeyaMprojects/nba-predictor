@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS games_raw (
     home_points   INTEGER,
     away_points   INTEGER,
     status        VARCHAR NOT NULL,
+    reconstructed BOOLEAN NOT NULL DEFAULT FALSE,
     observed_at   TIMESTAMP WITH TIME ZONE NOT NULL,
     PRIMARY KEY (game_id, observed_at)
 );
@@ -137,3 +138,26 @@ def connect(path: Path | None = None) -> duckdb.DuckDBPyConnection:
 
 def migrate(con: duckdb.DuckDBPyConnection) -> None:
     con.execute(_SCHEMA)
+    _add_games_reconstructed_column(con)
+
+
+def _add_games_reconstructed_column(con: duckdb.DuckDBPyConnection) -> None:
+    """Idempotent upgrade for databases created before `reconstructed` existed.
+
+    `_SCHEMA` above uses CREATE TABLE IF NOT EXISTS, which is a no-op on a
+    database that already has `games_raw` without this column -- it does
+    NOT retroactively add it. This runs on every migrate() call (including
+    against a fresh database, where it is a harmless no-op since the
+    column already exists) so an existing database picks up the column
+    without any separate one-time script. DuckDB's ALTER TABLE ADD COLUMN
+    does not support inline NOT NULL, so the constraint is applied as a
+    separate step after backfilling any existing rows -- both steps are
+    safe to repeat: ADD COLUMN IF NOT EXISTS is a no-op once the column is
+    present, the UPDATE only touches rows that are still NULL (none, after
+    the first run), and SET NOT NULL on an already-NOT-NULL column
+    succeeds without error. This never touches injury_status_raw or any
+    other table.
+    """
+    con.execute("ALTER TABLE games_raw ADD COLUMN IF NOT EXISTS reconstructed BOOLEAN DEFAULT FALSE")
+    con.execute("UPDATE games_raw SET reconstructed = FALSE WHERE reconstructed IS NULL")
+    con.execute("ALTER TABLE games_raw ALTER COLUMN reconstructed SET NOT NULL")

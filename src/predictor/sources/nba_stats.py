@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time, timedelta
 
 import pandas as pd
 from nba_api.stats.endpoints import leaguegamefinder
@@ -160,6 +160,44 @@ def pair_team_rows(
     return games
 
 
+# How long before tip-off an NBA schedule is knowable. NBA schedules are
+# published months ahead of the season, so 7 days is very conservative --
+# see the safety rule in _derive_observed_at below.
+_SCHEDULED_LEAD_DAYS = 7
+
+# How long after GAME_DATE the final score is knowable. LeagueGameFinder
+# gives only a calendar date, not a tip-off time, so this cannot be derived
+# from an actual final-buzzer time -- it is deliberately set past even the
+# latest West-Coast game's finish.
+_FINAL_LAG_DAYS = 1
+
+
+def _derive_observed_at(game_date: date) -> tuple[datetime, datetime]:
+    """Derive (scheduled_observed_at, final_observed_at) for a historical game.
+
+    Governing safety rule: a derived observed_at must NEVER be earlier than
+    the moment the fact truly became knowable. Too late is merely
+    conservative; too early is a leak, and a leak silently invalidates
+    every backtest number built on top of it. Both offsets below are
+    chosen deliberately on the late/conservative side:
+
+    - SCHEDULED (fixture only -- teams, date, NULL scores): NBA schedules
+      are published months ahead of tip-off, so `game_date - 7 days at
+      12:00 UTC` is a very safe lower bound for when the fixture became
+      knowable.
+    - FINAL (the result): set to `game_date + 1 day at 08:00 UTC` (roughly
+      3-4am Eastern the following morning), well after even the latest
+      West-Coast tip-off's game has concluded.
+    """
+    scheduled_at = datetime.combine(
+        game_date - timedelta(days=_SCHEDULED_LEAD_DAYS), time(12, 0), tzinfo=UTC
+    )
+    final_at = datetime.combine(
+        game_date + timedelta(days=_FINAL_LAG_DAYS), time(8, 0), tzinfo=UTC
+    )
+    return scheduled_at, final_at
+
+
 def ingest_season(
     con,
     season: str,
@@ -176,8 +214,27 @@ def ingest_season(
     the printed log lines below. If the caller does not pass one, a local
     list is used instead so the summary print below still fires; either
     way, nothing dropped goes unreported.
+
+    `observed_at`:
+
+    - If supplied explicitly (the pinned-test path), it is used verbatim
+      for every game, exactly as before this function grew historical-
+      backfill support -- one row per game, `reconstructed=False` (the
+      caller vouches for the timestamp being real, not derived).
+    - If omitted (the real ingestion path, used by the CLI), observed_at is
+      DERIVED per game from `game_date` via `_derive_observed_at` and TWO
+      rows are written for a played game: a SCHEDULED row (NULL scores) at
+      the derived pre-tipoff timestamp, and a FINAL row (real scores) at
+      the derived post-game timestamp. An unplayed/future game gets only
+      the SCHEDULED row. Both derived rows are stamped `reconstructed=True`
+      so a backtest can report results with and without them -- these
+      timestamps approximate when the fact became knowable, they were not
+      observed at ingestion time the way a live injury report's publish
+      timestamp is.
     """
-    observed_at = db.require_utc(observed_at or datetime.now(UTC), "observed_at")
+    explicit_observed_at = observed_at is not None
+    if explicit_observed_at:
+        observed_at = db.require_utc(observed_at, "observed_at")
     local_dropped: list[DroppedGame] = dropped if dropped is not None else []
     games = pair_team_rows(fetch_season(season), season, dropped=local_dropped)
     # Resolved through db.POINT_IN_TIME_TABLES rather than spelled as a
@@ -189,10 +246,33 @@ def ingest_season(
     table = db.POINT_IN_TIME_TABLES["games"]
     insert_sql = (
         f"INSERT OR REPLACE INTO {table} (game_id, season, game_date, home_team,"
-        " away_team, home_points, away_points, status, observed_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?)"
+        " away_team, home_points, away_points, status, reconstructed, observed_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)"
     )
     for game in games:
+        if explicit_observed_at:
+            con.execute(
+                insert_sql,
+                [
+                    game.game_id,
+                    season,
+                    game.game_date,
+                    game.home_team,
+                    game.away_team,
+                    game.home_points,
+                    game.away_points,
+                    game.status,
+                    False,
+                    observed_at,
+                ],
+            )
+            continue
+
+        scheduled_at, final_at = _derive_observed_at(game.game_date)
+        # SCHEDULED observation: the fixture only -- scores are always
+        # NULL here, even for a game that has since been played, so a
+        # pre-tipoff cutoff sees a fixture with no result rather than the
+        # eventual outcome leaking in through the score columns.
         con.execute(
             insert_sql,
             [
@@ -201,12 +281,31 @@ def ingest_season(
                 game.game_date,
                 game.home_team,
                 game.away_team,
-                game.home_points,
-                game.away_points,
-                game.status,
-                observed_at,
+                None,
+                None,
+                "SCHEDULED",
+                True,
+                scheduled_at,
             ],
         )
+        if game.status == "FINAL":
+            # FINAL observation: only written for games that were actually
+            # played -- a future/unplayed game gets just the SCHEDULED row.
+            con.execute(
+                insert_sql,
+                [
+                    game.game_id,
+                    season,
+                    game.game_date,
+                    game.home_team,
+                    game.away_team,
+                    game.home_points,
+                    game.away_points,
+                    "FINAL",
+                    True,
+                    final_at,
+                ],
+            )
     if local_dropped:
         # Loud, unconditional report of anything that did NOT make it into
         # the database for this season -- individual DROPPED lines were
