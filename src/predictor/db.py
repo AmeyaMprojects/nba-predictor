@@ -80,16 +80,30 @@ CREATE TABLE IF NOT EXISTS games_raw (
 -- primary key; if a row's game date is unparseable, ingestion must
 -- substitute the report's own publication (report_date) rather than
 -- dropping the row -- losing an injury row is worse than an imperfect date.
+-- team/player hold the CANONICAL key form (a 3-letter team abbreviation --
+-- also the join key against games_raw.home_team/away_team -- and a
+-- whitespace-stripped player name); team_display/player_display hold the
+-- original human-readable text as parsed from the PDF ("Golden State
+-- Warriors" / "Curry, Stephen"). See the idempotent
+-- `_add_injury_normalization_columns` migration below and its docstring
+-- for why this is columns rather than an in-place rewrite, and
+-- `injury_report.ingest_report` for where the split happens. game_time
+-- (e.g. "07:00(ET)") is parsed from every report; without it there is no
+-- tip-off time anywhere in the schema for a consumer to compute a correct
+-- per-game cutoff from.
 CREATE TABLE IF NOT EXISTS injury_status_raw (
-    report_date   DATE NOT NULL,
-    game_date     DATE NOT NULL,
-    matchup       VARCHAR,
-    team          VARCHAR NOT NULL,
-    player        VARCHAR NOT NULL,
-    status        VARCHAR NOT NULL,
-    reason        VARCHAR,
-    reconstructed BOOLEAN NOT NULL DEFAULT FALSE,
-    observed_at   TIMESTAMP WITH TIME ZONE NOT NULL,
+    report_date    DATE NOT NULL,
+    game_date      DATE NOT NULL,
+    game_time      VARCHAR,
+    matchup        VARCHAR,
+    team           VARCHAR NOT NULL,
+    team_display   VARCHAR,
+    player         VARCHAR NOT NULL,
+    player_display VARCHAR,
+    status         VARCHAR NOT NULL,
+    reason         VARCHAR,
+    reconstructed  BOOLEAN NOT NULL DEFAULT FALSE,
+    observed_at    TIMESTAMP WITH TIME ZONE NOT NULL,
     PRIMARY KEY (observed_at, team, player, game_date)
 );
 
@@ -139,6 +153,7 @@ def connect(path: Path | None = None) -> duckdb.DuckDBPyConnection:
 def migrate(con: duckdb.DuckDBPyConnection) -> None:
     con.execute(_SCHEMA)
     _add_games_reconstructed_column(con)
+    _add_injury_normalization_columns(con)
 
 
 def _add_games_reconstructed_column(con: duckdb.DuckDBPyConnection) -> None:
@@ -161,3 +176,39 @@ def _add_games_reconstructed_column(con: duckdb.DuckDBPyConnection) -> None:
     con.execute("ALTER TABLE games_raw ADD COLUMN IF NOT EXISTS reconstructed BOOLEAN DEFAULT FALSE")
     con.execute("UPDATE games_raw SET reconstructed = FALSE WHERE reconstructed IS NULL")
     con.execute("ALTER TABLE games_raw ALTER COLUMN reconstructed SET NOT NULL")
+
+
+def _add_injury_normalization_columns(con: duckdb.DuckDBPyConnection) -> None:
+    """Idempotent upgrade for databases created before C2's fix existed.
+
+    C2 (final whole-branch review): the two injury-report PDF layouts
+    render the same player/team differently ("Curry, Stephen" vs
+    "Curry,Stephen", "Miami Heat" vs "MiamiHeat"), splitting 41% of
+    players into two identities and leaving NO join key at all between
+    injury_status_raw and games_raw. The fix normalizes `team`/`player`
+    themselves into the canonical key form (a 3-letter team abbreviation
+    -- the same form games_raw already uses -- and a whitespace-stripped
+    player name) at ingest time, going forward.
+
+    Columns, not an in-place rewrite of existing rows here, because: (1)
+    normalizing requires re-deriving the canonical form from the ORIGINAL
+    parsed text, which this migration does not have -- only a full
+    `reingest-injuries` re-parse of the archived PDFs (already the
+    documented recovery path for any injury_report fix) can actually
+    populate correct values, exactly like `reconstructed` above; a blind
+    SQL rewrite of existing `team`/`player` values here could not resolve
+    "MiamiHeat" back to "MIA" without the same team-name table
+    `injury_report.py` already has, and duplicating that here would be a
+    second copy of the same knowledge; (2) a human-readable display form
+    is an explicit part of the fix's requirements, which an in-place
+    rewrite would have nowhere to keep. This mirrors
+    `_add_games_reconstructed_column`: safe to call on a fresh database
+    (all three ADD COLUMNs are no-ops once the columns exist) and safe to
+    call repeatedly on an existing one. Pre-migration rows are left with
+    NULL team_display/player_display/game_time until the next
+    `reingest-injuries` run repopulates them -- NULL, not a guessed value,
+    is the honest state for data this migration cannot itself derive.
+    """
+    con.execute("ALTER TABLE injury_status_raw ADD COLUMN IF NOT EXISTS team_display VARCHAR")
+    con.execute("ALTER TABLE injury_status_raw ADD COLUMN IF NOT EXISTS player_display VARCHAR")
+    con.execute("ALTER TABLE injury_status_raw ADD COLUMN IF NOT EXISTS game_time VARCHAR")

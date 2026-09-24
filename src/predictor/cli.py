@@ -155,6 +155,10 @@ def reingest_injuries(
 
     typer.echo(f"found: {stats['found']} archived injury report(s)")
     typer.echo(f"ingested ok: {stats['ingested_ok']}")
+    typer.echo(
+        f"empty slates (no real filings -- not a failure): "
+        f"{stats['empty_no_filings']}"
+    )
     typer.echo(f"still failed to parse: {stats['still_failed']}")
     typer.echo(f"rows written: {stats['rows_written']}")
 
@@ -227,7 +231,15 @@ def status() -> None:
     settings.ensure_dirs()
     con = db.connect()
     db.migrate(con)
-    typer.echo(status_mod.format_report(status_mod.check_sources(con)))
+    health = status_mod.check_sources(con)
+    typer.echo(status_mod.format_report(health))
+    # I5: every OTHER command in this CLI exits 1 on a problem; `status`
+    # (the one command whose whole purpose is health reporting) did not,
+    # so it could never be wired into an external monitor/cron job to
+    # alert on staleness -- it had to be read by a human every time. The
+    # output text itself is unchanged; only the exit code is new.
+    if any(source.stale for source in health):
+        raise typer.Exit(code=1)
 
 
 @app.command()

@@ -178,3 +178,77 @@ def test_stale_cache_does_not_duplicate_manifest_entry(store):
 
     entries = list(raw_store.iter_manifest("injury"))
     assert len(entries) == 1
+
+
+# --- I4: a torn manifest line must not take down the whole source --------
+
+
+def test_iter_manifest_skips_a_torn_trailing_line_and_keeps_the_rest(store, capsys):
+    raw_store.store("injury", "a.pdf", b"first", NOW)
+    raw_store.store("injury", "b.pdf", b"second", NOW)
+    manifest = raw_store._manifest_path("injury")
+    # Simulate the exact damage an interrupted write (no fsync -- Ruling
+    # 10) leaves behind: a truncated, unparseable JSON fragment with no
+    # trailing newline, appended after two good lines.
+    with manifest.open("a") as fh:
+        fh.write('{"source": "injury", "key": "torn.pdf", "sha256": "dead')
+
+    entries = list(raw_store.iter_manifest("injury"))
+    assert {e["key"] for e in entries} == {"a.pdf", "b.pdf"}
+    assert "WARNING" in capsys.readouterr().out
+
+
+def test_index_load_skips_a_torn_line_instead_of_raising(store):
+    raw_store.store("injury", "a.pdf", b"first", NOW)
+    manifest = raw_store._manifest_path("injury")
+    with manifest.open("a") as fh:
+        fh.write("{not even close to valid json")
+
+    # Building the index from disk (what _refresh_index/_load_index_from_disk
+    # do) must not raise -- a fresh process reading this exact manifest for
+    # the first time must still see "a.pdf" as archived.
+    raw_store._index_cache.clear()
+    idx = raw_store._index("injury")
+    assert "a.pdf" in idx
+
+
+def test_a_torn_trailing_line_does_not_permanently_break_store(store):
+    # The compounding half of I4: before this fix, `_refresh_index` (which
+    # `store()` calls on the path that decides whether to append) re-read
+    # the manifest on every new-key append -- so a single torn line, once
+    # written, made EVERY future store() call for that source raise
+    # forever. This is the regression that matters most: the news
+    # archiver (the one source that cannot be recovered retroactively)
+    # must keep archiving after a torn line, not stop permanently.
+    raw_store.store("injury", "a.pdf", b"first", NOW)
+    manifest = raw_store._manifest_path("injury")
+    with manifest.open("a") as fh:
+        fh.write('{"source": "injury", "key": "torn')  # no trailing newline
+
+    raw_store.store("injury", "c.pdf", b"third", NOW)
+
+    assert raw_store.exists("injury", "c.pdf")
+    entries = {e["key"] for e in raw_store.iter_manifest("injury")}
+    assert entries == {"a.pdf", "c.pdf"}
+
+
+def test_store_isolates_a_torn_line_instead_of_fusing_onto_it(store):
+    # Second half of I4: a torn fragment has no trailing newline, so a
+    # naive append would concatenate the new, well-formed JSON line onto
+    # the tail of the torn one -- permanently fusing them into a second,
+    # different unparseable line. store() must insert a newline first so
+    # the torn fragment stays isolated as its own (still-torn, still
+    # skipped) line, and the new entry becomes its own clean line.
+    raw_store.store("injury", "a.pdf", b"first", NOW)
+    manifest = raw_store._manifest_path("injury")
+    with manifest.open("a") as fh:
+        fh.write('{"source": "injury", "key": "torn.pdf", "sha256": "dead')
+
+    raw_store.store("injury", "c.pdf", b"third", NOW)
+
+    lines = manifest.read_text().splitlines()
+    # The line the append produced for "c.pdf" must parse on its own and
+    # must not have absorbed the torn fragment's text.
+    matching = [json.loads(line) for line in lines if '"c.pdf"' in line]
+    assert len(matching) == 1
+    assert matching[0]["key"] == "c.pdf"

@@ -83,23 +83,50 @@ def load(source: str, key: str) -> bytes:
     return blob_path(source, key).read_bytes()
 
 
+def _iter_manifest_lines(source: str, path: Path) -> Iterator[dict]:
+    """Shared line-parsing core for `iter_manifest`/`_load_index_from_disk`.
+
+    I4: a torn/malformed manifest line (the deliberate no-fsync decision --
+    see Ruling 10 -- is what creates one, if the process is killed mid-
+    append) used to raise an uncaught `json.JSONDecodeError` straight out
+    of BOTH readers. Because `_refresh_index` re-reads the manifest on
+    every `store()` call that appends a new key, that single torn line
+    didn't just break iteration -- it broke `store()` ITSELF, permanently,
+    for every future write to that source. For the news archiver (the one
+    source that cannot be recovered retroactively), that meant one bad
+    line silently stopped it from ever archiving anything again. Skipping
+    and warning loudly is the fix: every entry on disk before and after
+    the torn line is still real, recoverable data, and must not be thrown
+    away just because one line in the middle is damaged.
+    """
+    for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+        if not line.strip():
+            continue
+        try:
+            yield json.loads(line)
+        except json.JSONDecodeError as exc:
+            print(
+                f"raw_store: WARNING -- skipping unparseable manifest line "
+                f"{lineno} in {path} -- {exc}. This entry is likely torn "
+                "(an interrupted write); everything else in the manifest "
+                "is still intact and will be read normally."
+            )
+            continue
+
+
 def iter_manifest(source: str) -> Iterator[dict]:
     path = _manifest_path(source)
     if not path.exists():
         return
-    for line in path.read_text().splitlines():
-        if line.strip():
-            yield json.loads(line)
+    yield from _iter_manifest_lines(source, path)
 
 
 def _load_index_from_disk(source: str) -> dict[str, str]:
     path = _manifest_path(source)
     idx: dict[str, str] = {}
     if path.exists():
-        for line in path.read_text().splitlines():
-            if line.strip():
-                entry = json.loads(line)
-                idx[entry["key"]] = entry["sha256"]
+        for entry in _iter_manifest_lines(source, path):
+            idx[entry["key"]] = entry["sha256"]
     return idx
 
 
@@ -205,7 +232,24 @@ def store(
         "size": len(content),
         "meta": meta or {},
     }
-    with _manifest_path(source).open("a") as fh:
+    manifest_path = _manifest_path(source)
+    # I4 (second half): a torn trailing fragment left by an interrupted
+    # write (see Ruling 10 -- no fsync is deliberate) has NO trailing
+    # newline. Appending straight onto that would concatenate our new,
+    # well-formed JSON line onto the tail of the torn one, permanently
+    # fusing them into a second, different unparseable line -- turning a
+    # recoverable one-line scar into un-recoverable, compounding damage.
+    # A leading newline before the append is a no-op on a healthy manifest
+    # (an empty line is skipped by both readers above) and, on a torn one,
+    # isolates our new line as its own line instead of corrupting it too.
+    if manifest_path.exists() and manifest_path.stat().st_size > 0:
+        with manifest_path.open("rb") as fh:
+            fh.seek(-1, 2)
+            ends_with_newline = fh.read(1) == b"\n"
+        if not ends_with_newline:
+            with manifest_path.open("a") as fh:
+                fh.write("\n")
+    with manifest_path.open("a") as fh:
         fh.write(json.dumps(entry) + "\n")
     # Self-heal in the other direction: keep the cached index in sync so a
     # missing manifest record (e.g. after a crash) is repaired in place

@@ -85,6 +85,7 @@ def test_cli_reingest_injuries_exits_nonzero_when_reports_still_fail(tmp_path, m
             "found": 2,
             "ingested_ok": 1,
             "still_failed": 1,
+            "empty_no_filings": 0,
             "rows_written": 50,
         },
     )
@@ -104,6 +105,7 @@ def test_cli_reingest_injuries_exits_zero_when_all_succeed(tmp_path, monkeypatch
             "found": 2,
             "ingested_ok": 2,
             "still_failed": 0,
+            "empty_no_filings": 0,
             "rows_written": 300,
         },
     )
@@ -111,3 +113,32 @@ def test_cli_reingest_injuries_exits_zero_when_all_succeed(tmp_path, monkeypatch
     result = runner.invoke(cli.app, ["reingest-injuries"])
 
     assert result.exit_code == 0
+
+
+# --- I3: empty_no_filings must never drive the exit code -----------------
+
+
+def test_cli_reingest_injuries_exits_zero_when_only_empty_slates_found(tmp_path, monkeypatch):
+    # I3: a genuinely empty "NOT YET SUBMITTED"-only slate (Summer League,
+    # the All-Star break, a playoff off-day) must NOT be treated as a
+    # failure -- before this fix, every one of the 107 real archived
+    # examples counted as `still_failed`, so this command exited 1 on
+    # EVERY run regardless of whether anything was actually broken.
+    _point_settings_at_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        injury_report,
+        "reingest_archived",
+        lambda *a, **k: {
+            "found": 5,
+            "ingested_ok": 3,
+            "still_failed": 0,
+            "empty_no_filings": 2,
+            "rows_written": 100,
+        },
+    )
+
+    result = runner.invoke(cli.app, ["reingest-injuries"])
+
+    assert result.exit_code == 0
+    assert "empty slates" in result.stdout
+    assert "2" in result.stdout

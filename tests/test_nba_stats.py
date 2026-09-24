@@ -181,19 +181,24 @@ def test_ingest_season_populates_caller_supplied_dropped_list(tmp_path, monkeypa
 # --- Historical-backfill observed_at derivation (no explicit observed_at) ---
 
 PLAYED_GAME_DATE = date(2025, 1, 15)
+# Deliberately a "002"-prefixed (regular season) game_id: these tests cover
+# the general derived-observed_at mechanism, not I1's postseason-specific
+# 1-day lead (see test_postseason_game_gets_a_one_day_scheduled_lead below
+# for that), and a "004"/"005"/"006" prefix would take the shorter lead
+# instead of the 7-day one asserted here.
 _EXPECTED_SCHEDULED_AT = datetime.combine(
     PLAYED_GAME_DATE - timedelta(days=7), time(12, 0), tzinfo=UTC
 )
 _EXPECTED_FINAL_AT = datetime.combine(
-    PLAYED_GAME_DATE + timedelta(days=1), time(8, 0), tzinfo=UTC
+    PLAYED_GAME_DATE + timedelta(days=1), time(12, 0), tzinfo=UTC
 )
 
 
 def _played_game_frame():
     return _frame(
         [
-            ["0042400500", "2025-01-15", "IND @ OKC", "L", 91, "IND"],
-            ["0042400500", "2025-01-15", "OKC vs. IND", "W", 103, "OKC"],
+            ["0022400500", "2025-01-15", "IND @ OKC", "L", 91, "IND"],
+            ["0022400500", "2025-01-15", "OKC vs. IND", "W", 103, "OKC"],
         ]
     )
 
@@ -234,7 +239,7 @@ def test_played_game_without_explicit_observed_at_produces_scheduled_and_final_r
 
     rows = con.execute(
         "SELECT status, home_points, away_points, reconstructed, observed_at "
-        "FROM games_raw WHERE game_id = '0042400500' ORDER BY observed_at"
+        "FROM games_raw WHERE game_id = '0022400500' ORDER BY observed_at"
     ).fetchall()
     assert len(rows) == 2
 
@@ -274,7 +279,7 @@ def test_asof_before_tipoff_sees_fixture_with_no_leaked_score(tmp_path, monkeypa
     assert pre_tipoff_cutoff < _EXPECTED_FINAL_AT
 
     view = AsOfView(con, pre_tipoff_cutoff)
-    rows = view.table("games").filter("game_id = '0042400500'").fetchall()
+    rows = view.table("games").filter("game_id = '0022400500'").fetchall()
     assert len(rows) == 1
     columns = view.table("games").columns
     row = dict(zip(columns, rows[0]))
@@ -284,7 +289,7 @@ def test_asof_before_tipoff_sees_fixture_with_no_leaked_score(tmp_path, monkeypa
 
     post_final_cutoff = _EXPECTED_FINAL_AT + timedelta(hours=1)
     view_after = AsOfView(con, post_final_cutoff)
-    rows_after = view_after.table("games").filter("game_id = '0042400500'").fetchall()
+    rows_after = view_after.table("games").filter("game_id = '0022400500'").fetchall()
     columns_after = view_after.table("games").columns
     statuses = {dict(zip(columns_after, r))["status"] for r in rows_after}
     assert "FINAL" in statuses
@@ -307,7 +312,7 @@ def test_asof_latest_before_tipoff_returns_scheduled_not_final(tmp_path, monkeyp
     view = AsOfView(con, pre_tipoff_cutoff)
     rows = view.latest("games").fetchall()
     columns = view.latest("games").columns
-    matching = [dict(zip(columns, r)) for r in rows if r[columns.index("game_id")] == "0042400500"]
+    matching = [dict(zip(columns, r)) for r in rows if r[columns.index("game_id")] == "0022400500"]
     assert len(matching) == 1
     assert matching[0]["status"] == "SCHEDULED"
     assert matching[0]["home_points"] is None
@@ -322,7 +327,7 @@ def test_reconstructed_flag_true_on_derived_rows_false_on_explicit(tmp_path, mon
     derived_flags = {
         r[0]
         for r in con.execute(
-            "SELECT reconstructed FROM games_raw WHERE game_id = '0042400500'"
+            "SELECT reconstructed FROM games_raw WHERE game_id = '0022400500'"
         ).fetchall()
     }
     assert derived_flags == {True}
@@ -331,9 +336,86 @@ def test_reconstructed_flag_true_on_derived_rows_false_on_explicit(tmp_path, mon
     db.migrate(con2)
     nba_stats.ingest_season(con2, "2024-25", observed_at=OBSERVED)
     explicit_flag = con2.execute(
-        "SELECT reconstructed FROM games_raw WHERE game_id = '0042400500'"
+        "SELECT reconstructed FROM games_raw WHERE game_id = '0022400500'"
     ).fetchone()[0]
     assert explicit_flag is False
+
+
+# --- I1: postseason fixtures must not be stamped before they were knowable ---
+
+
+def _playoff_game_frame(game_id: str):
+    return _frame(
+        [
+            [game_id, "2025-05-15", "IND @ OKC", "L", 91, "IND"],
+            [game_id, "2025-05-15", "OKC vs. IND", "W", 103, "OKC"],
+        ]
+    )
+
+
+@pytest.mark.parametrize("game_id", ["0042400500", "0052400500", "0062400500"])
+def test_postseason_game_gets_a_one_day_scheduled_lead(tmp_path, monkeypatch, game_id):
+    # game_id prefixes 004 (playoffs), 005 (play-in), 006 (Cup knockout) --
+    # a postseason fixture only exists once prior rounds/games resolve, so
+    # the regular season's 7-day lead would back-date its EXISTENCE to
+    # before it was knowable (measured against the real archive: 485 of
+    # 630 postseason/play-in/Cup games had a SCHEDULED row predating
+    # results of earlier games in the same series).
+    con = db.connect(tmp_path / "postseason.duckdb")
+    db.migrate(con)
+    monkeypatch.setattr(nba_stats, "fetch_season", lambda season: _playoff_game_frame(game_id))
+
+    nba_stats.ingest_season(con, "2024-25")
+
+    scheduled_at = con.execute(
+        "SELECT observed_at FROM games_raw WHERE game_id = ? AND status = 'SCHEDULED'",
+        [game_id],
+    ).fetchone()[0]
+    expected = datetime.combine(date(2025, 5, 15) - timedelta(days=1), time(12, 0), tzinfo=UTC)
+    assert scheduled_at == expected
+
+
+def test_regular_season_game_id_prefix_still_gets_seven_day_lead(tmp_path, monkeypatch):
+    # Regression guard alongside the parametrized postseason test above:
+    # a "002"-prefixed (regular season) game_id must be entirely
+    # unaffected by I1's postseason carve-out.
+    con = db.connect(tmp_path / "regular.duckdb")
+    db.migrate(con)
+    monkeypatch.setattr(
+        nba_stats, "fetch_season", lambda season: _playoff_game_frame("0022400777")
+    )
+
+    nba_stats.ingest_season(con, "2024-25")
+
+    scheduled_at = con.execute(
+        "SELECT observed_at FROM games_raw WHERE game_id = '0022400777' AND status = 'SCHEDULED'"
+    ).fetchone()[0]
+    expected = datetime.combine(date(2025, 5, 15) - timedelta(days=7), time(12, 0), tzinfo=UTC)
+    assert scheduled_at == expected
+
+
+# --- I2: require_utc must guard the DERIVED path too, not just explicit ---
+
+
+def test_derived_observed_at_rejects_a_naive_datetime_from_derive(tmp_path, monkeypatch):
+    # I2: the DERIVED path (no explicit observed_at) writes 100% of real
+    # rows, but only the explicit-observed_at path called db.require_utc --
+    # correct only by accident, since _derive_observed_at always happened
+    # to build tzinfo=UTC datetimes. Prove the guard is now actually
+    # wired in on the derived path by making _derive_observed_at return a
+    # naive datetime and asserting ingest_season refuses it loudly rather
+    # than silently writing a naive timestamp.
+    con = db.connect(tmp_path / "naive.duckdb")
+    db.migrate(con)
+    monkeypatch.setattr(nba_stats, "fetch_season", lambda season: _played_game_frame())
+    monkeypatch.setattr(
+        nba_stats,
+        "_derive_observed_at",
+        lambda game_date, game_id="": (datetime(2025, 1, 8, 12, 0), datetime(2025, 1, 16, 12, 0)),
+    )
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        nba_stats.ingest_season(con, "2024-25")
 
 
 def test_migrate_adds_reconstructed_column_idempotently_without_data_loss(tmp_path):

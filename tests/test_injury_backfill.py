@@ -412,6 +412,50 @@ def test_reingest_archived_reports_still_unparseable_report_without_aborting(env
     assert stats["rows_written"] == 161
 
 
+def test_reingest_archived_buckets_empty_slates_separately_from_still_failed(env, monkeypatch):
+    # I3: a genuinely empty "NOT YET SUBMITTED"-only slate (Summer League,
+    # the All-Star break, a playoff off-day) must be counted separately
+    # from a real, still-unresolved parse defect -- otherwise the
+    # documented recovery command (`predictor reingest-injuries`) can
+    # never report success, since all 107 real archived failures are
+    # exactly this case.
+    empty_day, good_day = date(2025, 2, 14), date(2025, 1, 15)
+    empty_key = injury_report.raw_key(empty_day, "05PM")
+    good_key = injury_report.raw_key(good_day, "05PM")
+
+    raw_store.store(
+        "injury",
+        empty_key,
+        b"%PDF-placeholder-only-report",
+        datetime(2025, 2, 14, 22, 0, tzinfo=UTC),
+        meta={"day": empty_day.isoformat(), "hour_label": "05PM"},
+    )
+    raw_store.store(
+        "injury",
+        good_key,
+        FIXTURE_BYTES,
+        datetime(2025, 1, 15, 22, 0, tzinfo=UTC),
+        meta={"day": good_day.isoformat(), "hour_label": "05PM"},
+    )
+
+    real_parse_report = injury_report.parse_report
+
+    def fake_parse_report(pdf_bytes):
+        if pdf_bytes == b"%PDF-placeholder-only-report":
+            raise injury_report.InjuryReportEmptyError("no real filings")
+        return real_parse_report(pdf_bytes)
+
+    monkeypatch.setattr(injury_report, "parse_report", fake_parse_report)
+
+    stats = injury_report.reingest_archived(env)
+
+    assert stats["found"] == 2
+    assert stats["ingested_ok"] == 1
+    assert stats["empty_no_filings"] == 1
+    assert stats["still_failed"] == 0
+    assert stats["rows_written"] == 161
+
+
 def test_reingest_archived_respects_date_range_filter(env):
     in_range, out_of_range = date(2025, 1, 15), date(2025, 2, 1)
     raw_store.store(

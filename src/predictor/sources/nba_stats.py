@@ -161,18 +161,52 @@ def pair_team_rows(
 
 
 # How long before tip-off an NBA schedule is knowable. NBA schedules are
-# published months ahead of the season, so 7 days is very conservative --
-# see the safety rule in _derive_observed_at below.
+# published months ahead of the REGULAR season, so 7 days is very
+# conservative there -- see the safety rule in _derive_observed_at below.
+# NOT safe for the postseason: a postseason/play-in/Cup-knockout fixture
+# only exists once the teams that will play in it are actually determined
+# (prior rounds/games resolve), so stamping it 7 days early back-dates its
+# existence to before it was knowable. Measured against the real archive:
+# 485 of 630 postseason/play-in/Cup games had a SCHEDULED row predating
+# results of earlier games in the same series, and 180 of 630 were stamped
+# before a participant had even finished its prior series -- fixture
+# EXISTENCE itself encodes who advanced, and enumerating "upcoming games as
+# of time T" is exactly how a dated prediction gets generated. A 1-day lead
+# is still conservative (brackets/pairings are set immediately once the
+# preceding round ends) without reaching back before that information
+# existed.
 _SCHEDULED_LEAD_DAYS = 7
+_SCHEDULED_LEAD_DAYS_POSTSEASON = 1
+
+# GAME_ID prefixes that mean "postseason, play-in, or in-season (Cup)
+# knockout" per the NBA's own game_id numbering convention -- see
+# https://github.com/swar/nba_api's documented ID scheme: 001=preseason,
+# 002=regular season, 003=all-star, 004=playoffs, 005=play-in, 006=NBA Cup
+# knockout rounds (the Cup's regular-season "group play" games use the
+# normal 002 prefix and are NOT included here -- pairings for those are
+# known from the regular-season schedule just like any other regular-season
+# game; only the winner-takes-the-single-elimination-round knockout stage
+# has the "only knowable once a prior round resolves" problem).
+_POSTSEASON_GAME_ID_PREFIXES = ("004", "005", "006")
 
 # How long after GAME_DATE the final score is knowable. LeagueGameFinder
 # gives only a calendar date, not a tip-off time, so this cannot be derived
 # from an actual final-buzzer time -- it is deliberately set past even the
-# latest West-Coast game's finish.
+# latest West-Coast game's finish. 08:00 UTC (~3-4am Eastern) leaves only
+# ~2h of margin after the latest possible tip (10:30pm ET / 03:30 UTC;
+# regulation alone ends ~06:00 UTC) -- a multi-overtime game plus any
+# broadcast delay could reach it. 12:00 UTC costs nothing (FINAL rows are
+# already "well after the fact", never on any hot path) and removes that
+# whole class of near-miss.
 _FINAL_LAG_DAYS = 1
+_FINAL_LAG_HOUR_UTC = 12
 
 
-def _derive_observed_at(game_date: date) -> tuple[datetime, datetime]:
+def _is_postseason_game_id(game_id: str) -> bool:
+    return game_id[:3] in _POSTSEASON_GAME_ID_PREFIXES
+
+
+def _derive_observed_at(game_date: date, game_id: str = "") -> tuple[datetime, datetime]:
     """Derive (scheduled_observed_at, final_observed_at) for a historical game.
 
     Governing safety rule: a derived observed_at must NEVER be earlier than
@@ -181,19 +215,25 @@ def _derive_observed_at(game_date: date) -> tuple[datetime, datetime]:
     every backtest number built on top of it. Both offsets below are
     chosen deliberately on the late/conservative side:
 
-    - SCHEDULED (fixture only -- teams, date, NULL scores): NBA schedules
-      are published months ahead of tip-off, so `game_date - 7 days at
-      12:00 UTC` is a very safe lower bound for when the fixture became
-      knowable.
-    - FINAL (the result): set to `game_date + 1 day at 08:00 UTC` (roughly
-      3-4am Eastern the following morning), well after even the latest
-      West-Coast tip-off's game has concluded.
+    - SCHEDULED (fixture only -- teams, date, NULL scores): for the
+      regular season, `game_date - 7 days` is a very safe lower bound
+      (schedules publish months ahead). For a postseason/play-in/Cup-
+      knockout game_id (see `_is_postseason_game_id`), only 1 day is used
+      instead -- see the module-level note by `_SCHEDULED_LEAD_DAYS` for
+      why 7 is unsafe there.
+    - FINAL (the result): set to `game_date + 1 day at 12:00 UTC`, well
+      after even the latest West-Coast tip-off's game has concluded.
     """
+    lead_days = (
+        _SCHEDULED_LEAD_DAYS_POSTSEASON
+        if _is_postseason_game_id(game_id)
+        else _SCHEDULED_LEAD_DAYS
+    )
     scheduled_at = datetime.combine(
-        game_date - timedelta(days=_SCHEDULED_LEAD_DAYS), time(12, 0), tzinfo=UTC
+        game_date - timedelta(days=lead_days), time(12, 0), tzinfo=UTC
     )
     final_at = datetime.combine(
-        game_date + timedelta(days=_FINAL_LAG_DAYS), time(8, 0), tzinfo=UTC
+        game_date + timedelta(days=_FINAL_LAG_DAYS), time(_FINAL_LAG_HOUR_UTC, 0), tzinfo=UTC
     )
     return scheduled_at, final_at
 
@@ -268,7 +308,16 @@ def ingest_season(
             )
             continue
 
-        scheduled_at, final_at = _derive_observed_at(game.game_date)
+        scheduled_at, final_at = _derive_observed_at(game.game_date, game.game_id)
+        # I2: this DERIVED path writes 100% of real games rows (the
+        # explicit-observed_at branch above is only the pinned-test path),
+        # so it is the write path `db.require_utc` actually needs to guard
+        # -- unvalidated until now, correct only by accident (both derived
+        # timestamps are already built with tzinfo=UTC, but nothing
+        # enforced that). Mirrors the guard already applied on the
+        # explicit-observed_at branch above.
+        scheduled_at = db.require_utc(scheduled_at, "scheduled_at")
+        final_at = db.require_utc(final_at, "final_at")
         # SCHEDULED observation: the fixture only -- scores are always
         # NULL here, even for a game that has since been played, so a
         # pre-tipoff cutoff sees a fixture with no result rather than the

@@ -327,6 +327,12 @@ GAME_DATE, GAME_TIME, MATCHUP, TEAM, PLAYER, STATUS, REASON = range(7)
 
 _STAMP = re.compile(r"(\d{2}/\d{2}/\d{2})\s+(\d{1,2}:\d{2})\s*(AM|PM)")
 
+# Matches a "Page X of Y" footer line once its cell text has been
+# whitespace-stripped and concatenated -- e.g. "Page1of10". See the note
+# where this is used in `_lines()` for why it must be filtered out before
+# forward-fill ever sees it.
+_PAGE_FOOTER = re.compile(r"^Page\d+of\d+$")
+
 
 @dataclass(frozen=True)
 class InjuryRow:
@@ -357,6 +363,25 @@ class InjuryReportParseError(Exception):
     were legitimate, producing an invisible hole in a Task 9 backfill of
     roughly 2,500 reports -- exactly what "never silently lose data --
     surface loudly" forbids.
+    """
+
+
+class InjuryReportEmptyError(InjuryReportParseError):
+    """Raised when headers WERE located but the report has no real filings.
+
+    I3: distinct from the base `InjuryReportParseError` (which means
+    "column headers were never located at all" -- format drift, an
+    unexpected layout, a corrupted file). This subclass means the OPPOSITE
+    of that: parsing worked fine, but every team on the slate either filed
+    nothing or explicitly said "NOT YET SUBMITTED" -- Summer League, the
+    All-Star break, and playoff off-days all genuinely produce reports
+    like this (all 107 real archived parse failures sampled were exactly
+    this case, none were actual format drift). `reingest_archived` buckets
+    this separately (`empty_no_filings`, not `still_failed`) so the
+    documented recovery command (`predictor reingest-injuries`) can
+    finally report success: previously EVERY run exited 1 for these 107
+    genuinely-fine reports, so an operator could never tell "fixed and
+    fully recovered" apart from "still broken".
     """
 
 
@@ -500,7 +525,21 @@ def _lines(page, bounds):
         for word in sorted(line_words, key=lambda w: w["x0"]):
             i = _column_index(word["x0"], edges)
             cells[i] = (cells[i] + " " + word["text"]).strip()
-        if "InjuryReport:" in "".join(cells).replace(" ", ""):
+        joined = "".join(cells).replace(" ", "")
+        if "InjuryReport:" in joined:
+            continue
+        if _PAGE_FOOTER.match(joined):
+            # A "Page X of Y" footer's text happens to fall inside the
+            # TEAM column's x-range on the page, so `_column_index` files
+            # it there. Harmless historically (this line was never an
+            # anchor or a kept fragment, so it was invisible to
+            # forward-fill), but the forward-fill loop in `_parse_page`
+            # now walks EVERY line (see that function's docstring), which
+            # would otherwise carry the literal text "Page1of10" into
+            # `carry[TEAM]` and corrupt every row until a real TEAM value
+            # appeared again. Must be dropped here, before forward-fill
+            # ever sees it -- same treatment as the "InjuryReport:" title
+            # line above.
             continue
         out.append((min(w["top"] for w in line_words), cells))
     return out
@@ -537,14 +576,44 @@ def _is_not_yet_submitted(reason: str) -> bool:
 
 def _parse_page(page, bounds, carry):
     lines = _lines(page, bounds)
-    anchors = [(t, c) for t, c in lines if c[PLAYER] and c[STATUS]]
-    fragments = [
-        (t, c[REASON])
-        for t, c in lines
-        if not (c[PLAYER] and c[STATUS])
-        and c[REASON]
-        and not _is_not_yet_submitted(c[REASON])
-    ]
+
+    # GAME_DATE/GAME_TIME/MATCHUP/TEAM must be forward-filled from EVERY
+    # line on the page, in top-to-bottom order -- not just from lines that
+    # go on to become an InjuryRow (an "anchor": has both PLAYER and
+    # STATUS). A team that filed no report at all for a slate gets a
+    # placeholder line (team + matchup, reason "NOT YET SUBMITTED", no
+    # player/status) that is never emitted as a row -- but it can be the
+    # ONLY line in the whole page announcing that a new game/team section
+    # has begun. Forward-filling only from anchors (the pre-fix code)
+    # silently threw that section-boundary information away: the very
+    # next anchor line (an unrelated team/matchup) would then blank-fill
+    # MATCHUP or TEAM from the PREVIOUS section instead, corrupting the
+    # row with an impossible team/matchup pairing.
+    #
+    # Confirmed against the real archive: Injury-Report_2025-01-16_05PM.pdf
+    # has a "CHA@CHI / CharlotteHornets ... NOT YET SUBMITTED" placeholder
+    # line immediately followed by a "ChicagoBulls" anchor line whose own
+    # MATCHUP cell is blank (correctly relying on forward-fill, since only
+    # the first line of a matchup section prints it). Before this fix, the
+    # placeholder line was invisible to forward-fill, so MATCHUP stayed on
+    # the stale PREVIOUS matchup ("MIN@NYK") instead of updating to
+    # "CHA@CHI" -- producing rows like team=ChicagoBulls,
+    # matchup=MIN@NYK, an internally impossible pairing that
+    # `_validate_team_matches_matchup` below now catches. This single
+    # change (processing all lines, not just anchors, for forward-fill)
+    # fixed 100% of the sampled real corruption -- see module-level notes.
+    anchors: list[tuple[float, list[str]]] = []
+    fragments: list[tuple[float, str]] = []
+    for top, cells in lines:
+        for i in (GAME_DATE, GAME_TIME, MATCHUP, TEAM):
+            if cells[i]:
+                carry[i] = cells[i]
+            else:
+                cells[i] = carry.get(i, "")
+        if cells[PLAYER] and cells[STATUS]:
+            anchors.append((top, cells))
+        elif cells[REASON] and not _is_not_yet_submitted(cells[REASON]):
+            fragments.append((top, cells[REASON]))
 
     rows = [
         {"top": t, "cells": c, "pieces": [(t, c[REASON])] if c[REASON] else []}
@@ -561,11 +630,6 @@ def _parse_page(page, bounds, carry):
     parsed = []
     for row in rows:
         cells = row["cells"]
-        for i in (GAME_DATE, GAME_TIME, MATCHUP, TEAM):
-            if cells[i]:
-                carry[i] = cells[i]
-            else:
-                cells[i] = carry.get(i, "")
         reason = "".join(text for _, text in sorted(row["pieces"]))
         parsed.append(
             InjuryRow(
@@ -618,14 +682,142 @@ def parse_report(pdf_bytes: bytes) -> ParsedReport:
             page_rows, carry = _parse_page(page, bounds, carry)
             rows.extend(page_rows)
 
-    if bounds is None or not rows:
+    if bounds is None:
+        # M1: this is the ONLY branch where "column headers were never
+        # located" is actually true. All 107 real archived failures take
+        # the OTHER branch below (headers WERE found, on some page, but no
+        # anchor row was ever extracted -- e.g. a slate consisting
+        # entirely of "NOT YET SUBMITTED" placeholders, such as Summer
+        # League, the All-Star break, or a playoff off-day) -- the old
+        # single shared message claimed headers were never found in 100%
+        # of those real cases, which is simply false and actively
+        # misleads whoever reads the log.
         raise InjuryReportParseError(
             "parsed zero rows -- column headers were never located on any "
             "page (format drift, an unexpected layout, or a corrupted "
             "PDF); a well-formed report is never actually empty"
         )
+    if not rows:
+        raise InjuryReportEmptyError(
+            "parsed zero rows -- column headers WERE located, but no row "
+            "with both a player and a status was ever extracted (every "
+            "line was either a header, a placeholder like 'NOT YET "
+            "SUBMITTED', or unparseable) -- this is a genuinely empty "
+            "slate (Summer League, All-Star break, a playoff off-day), "
+            "not a parser defect"
+        )
+
+    _validate_team_matches_matchup(rows)
 
     return ParsedReport(published_at=published_at, rows=rows)
+
+
+class InjuryTeamMismatchError(Exception):
+    """Raised when a row's TEAM does not belong to either side of its own MATCHUP.
+
+    This is internally impossible for a real report -- a player's team is
+    always one of the two teams playing in their own game -- so it means
+    the forward-fill carried a value across a game-section boundary it
+    should not have (the exact defect this validation exists to catch;
+    see the note above `_parse_page`'s forward-fill loop). Raised loudly
+    rather than silently dropped or corrected, per the module's "never
+    silently lose data" rule: `backfill_range`/`reingest_archived` bucket
+    this together with any other parse-time exception as `parse_failed`,
+    so it surfaces in the operator-facing counts rather than silently
+    writing a wrong game_date (game_date is a PRIMARY KEY column) for the
+    affected rows.
+    """
+
+
+# Cached lazily (not at import time) so a test that never touches this path
+# never pays for the nba_api static-data load, and so a monkeypatch of
+# `nba_api.stats.static.teams` in a test still takes effect.
+_TEAM_ABBR_BY_NAME: dict[str, str] | None = None
+
+# The official NBA_API full_name for the LA Clippers is "Los Angeles
+# Clippers", but the injury report itself (both layouts, every era sampled)
+# renders it as "LA Clippers" / "LAClippers" -- never the full "Los
+# Angeles" form. Without this alias, every Clippers row would fail to
+# resolve to an abbreviation at all.
+_TEAM_NAME_ALIASES: dict[str, str] = {
+    "LACLIPPERS": "LAC",
+}
+
+
+def _team_abbreviations() -> dict[str, str]:
+    global _TEAM_ABBR_BY_NAME
+    if _TEAM_ABBR_BY_NAME is None:
+        from nba_api.stats.static import teams as nba_teams
+
+        by_name = {
+            team["full_name"].replace(" ", "").upper(): team["abbreviation"]
+            for team in nba_teams.get_teams()
+        }
+        by_name.update(_TEAM_NAME_ALIASES)
+        _TEAM_ABBR_BY_NAME = by_name
+    return _TEAM_ABBR_BY_NAME
+
+
+def team_abbr(team_name: str) -> str | None:
+    """Canonical 3-letter abbreviation for a raw injury-report TEAM cell.
+
+    Tolerates both PDF layout spellings ("Miami Heat" vs "MiamiHeat") by
+    normalizing away whitespace and case before lookup. Returns None for a
+    team name the official nba_api roster (plus the LA Clippers alias)
+    does not recognize at all -- callers must treat that as "cannot
+    canonicalize", never guess.
+    """
+    if not team_name:
+        return None
+    key = team_name.replace(" ", "").upper()
+    return _team_abbreviations().get(key)
+
+
+def _validate_team_matches_matchup(rows: list[InjuryRow]) -> None:
+    """Assert every row's TEAM is one of the two teams in its own MATCHUP.
+
+    A Celtics player filed under a Hornets-at-Knicks game is internally
+    impossible -- this single assertion catches a corrupted forward-fill
+    (see `_parse_page`) the moment it happens, rather than letting it
+    silently reach the database, where `game_date` is a PRIMARY KEY
+    column and a wrong carry also misattributes the injury to the wrong
+    game.
+    """
+    for row in rows:
+        if "@" not in row.matchup:
+            # Malformed/unparsed matchup text -- nothing to validate
+            # against; not this function's job to also invent a matchup.
+            continue
+        away, home = (part.strip() for part in row.matchup.split("@", 1))
+        abbr = team_abbr(row.team)
+        if abbr is None:
+            raise InjuryTeamMismatchError(
+                f"row team {row.team!r} (player {row.player!r}, matchup "
+                f"{row.matchup!r}) is not a recognized NBA team name -- "
+                "cannot validate it against its own matchup"
+            )
+        if abbr not in (away, home):
+            raise InjuryTeamMismatchError(
+                f"row team {row.team!r} (abbr {abbr}, player "
+                f"{row.player!r}) does not appear in its own matchup "
+                f"{row.matchup!r} -- forward-fill likely carried a value "
+                "across a game-section boundary"
+            )
+
+
+def player_key(player: str) -> str:
+    """Canonical, whitespace-stripped identity key for a raw PLAYER cell.
+
+    C2: the two PDF layouts render the same player differently -- the old
+    (spaced) layout keeps a space after the comma ("Curry, Stephen"), the
+    new (concatenated) layout does not ("Curry,Stephen") -- so a naive
+    `player` column silently splits every player's history in two across
+    the 2023 layout boundary (measured: 1,591 raw -> 1,125 normalized
+    identities, 466 duplicates). Stripping ALL whitespace makes both
+    spellings collapse onto the same key without needing to know which
+    layout produced them.
+    """
+    return "".join(player.split())
 
 
 def ingest_report(con, pdf_bytes: bytes) -> int:
@@ -647,10 +839,23 @@ def ingest_report(con, pdf_bytes: bytes) -> int:
     # test_no_physical_table_name_appears_outside_db_and_asof); this
     # ingestion module must not name the physical table directly either.
     table = db.POINT_IN_TIME_TABLES["injury_status"]
+    # C2: `team`/`player` store the CANONICAL key form -- a 3-letter team
+    # abbreviation (also the join key against the games table's
+    # home_team/away_team columns, which nba_stats already writes as
+    # TEAM_ABBREVIATION; there was previously NO join key at all between
+    # the two point-in-time tables) and a whitespace-stripped player name.
+    # `team_display`/`player_display` keep the original, human-readable
+    # text exactly as parsed, so a
+    # person browsing the table still sees "Golden State Warriors" /
+    # "Curry, Stephen" rather than only "GSW" / "Curry,Stephen". Both
+    # columns are added by the idempotent `_add_injury_normalization_columns`
+    # migration in predictor.db (see that function's docstring for why
+    # columns, not an in-place rewrite, was chosen).
     insert_sql = (
         f"INSERT OR REPLACE INTO {table} (report_date, game_date, matchup,"
-        " team, player, status, reason, reconstructed, observed_at)"
-        " VALUES (?,?,?,?,?,?,?,FALSE,?)"
+        " team, team_display, player, player_display, status, reason,"
+        " game_time, reconstructed, observed_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,FALSE,?)"
     )
     for row in report.rows:
         # game_date is NOT NULL and part of the primary key (see schema
@@ -659,16 +864,28 @@ def ingest_report(con, pdf_bytes: bytes) -> int:
         # dropping the row or inserting NULL -- losing an injury row is
         # worse than an imperfect date.
         game_date = row.game_date if row.game_date is not None else report_date
+        # team_abbr() returns None only for a team name that isn't a
+        # recognized NBA team at all -- `_validate_team_matches_matchup`
+        # (called from parse_report) already raises loudly for that case
+        # UNLESS the row's matchup itself was unparseable ("@" missing),
+        # which skips validation entirely. This fallback exists only for
+        # that narrow, already-tolerated edge case: keep the raw text
+        # rather than drop the row, same rule as the game_date fallback
+        # above.
+        team_key = team_abbr(row.team) or row.team
         con.execute(
             insert_sql,
             [
                 report_date,
                 game_date,
                 row.matchup,
+                team_key,
                 row.team,
+                player_key(row.player),
                 row.player,
                 row.status,
                 row.reason,
+                row.game_time,
                 observed_at,
             ],
         )
@@ -847,8 +1064,25 @@ def reingest_archived(
     `start`/`end` (both inclusive, by the report's own `day` metadata
     recorded at archive time) optionally narrow the sweep; omitted, the
     entire archive is walked.
+
+    I3: `InjuryReportEmptyError` (a genuinely empty "NOT YET SUBMITTED"-
+    only slate -- Summer League, the All-Star break, a playoff off-day)
+    is counted separately as `empty_no_filings`, NOT `still_failed`. All
+    107 remaining real archive parse failures are exactly this case, with
+    no data actually lost -- but because the CLI's exit code used to key
+    off `still_failed` alone including these, `predictor reingest-injuries`
+    exited 1 on EVERY run regardless of whether anything was actually
+    broken, so an operator could never tell "fixed and fully recovered"
+    apart from "still broken". `still_failed` is now reserved for a
+    genuine, still-unresolved parse defect.
     """
-    stats = {"found": 0, "ingested_ok": 0, "still_failed": 0, "rows_written": 0}
+    stats = {
+        "found": 0,
+        "ingested_ok": 0,
+        "still_failed": 0,
+        "empty_no_filings": 0,
+        "rows_written": 0,
+    }
 
     for entry in raw_store.iter_manifest("injury"):
         meta = entry.get("meta") or {}
@@ -867,9 +1101,18 @@ def reingest_archived(
         try:
             content = raw_store.load("injury", key)
             rows = ingest_report(con, content)
+        except InjuryReportEmptyError as exc:
+            # Not a failure: a legitimately empty slate. Logged for
+            # visibility, but deliberately NOT counted in `still_failed`
+            # (see I3 docstring note above) -- this must never drive the
+            # CLI's exit code.
+            stats["empty_no_filings"] += 1
+            print(f"injury reingest: EMPTY SLATE (no real filings) -- {key} -- {exc}")
+            continue
         except Exception as exc:  # noqa: BLE001 -- mirrors backfill_range's
             # blanket ingest-time catch: a still-unparseable archived report
-            # must be logged and skipped, never abort the rest of the sweep.
+            # must be logged and skipped, never abort the sweep over the
+            # rest of the archive.
             stats["still_failed"] += 1
             print(
                 f"injury reingest: STILL FAILING -- {key} -- "
