@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import typer
 
+from predictor.backtest.replay import DEFAULT_BUFFER_MINUTES
+
 app = typer.Typer(help="NBA prediction data spine and pipeline.")
 
 
@@ -260,7 +262,7 @@ def backtest_cmd(
     ),
     season: str = typer.Option(None, help="Limit to one season, e.g. 2024-25."),
     buffer_minutes: int = typer.Option(
-        30, help="Minutes before tip-off to cut the data off."
+        DEFAULT_BUFFER_MINUTES, help="Minutes before tip-off to cut the data off."
     ),
 ) -> None:
     """Replay real games and score a predictor on what was knowable pre-tipoff."""
@@ -282,9 +284,13 @@ def backtest_cmd(
     con = db.connect()
     db.migrate(con)
 
-    preds, stats = replay.replay(
-        con, known[model], season=season, buffer_minutes=buffer_minutes
-    )
+    try:
+        preds, stats = replay.replay(
+            con, known[model], season=season, buffer_minutes=buffer_minutes
+        )
+    except ValueError as exc:
+        typer.echo(f"Cannot run the backtest: {exc}.")
+        raise typer.Exit(code=1) from None
     if not preds:
         typer.echo(
             "No games could be scored -- nothing to measure. "

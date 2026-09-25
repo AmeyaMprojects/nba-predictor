@@ -23,3 +23,10 @@ def test_backtest_reports_nothing_to_score_rather_than_crashing(monkeypatch):
     result = runner.invoke(app, ["backtest", "--season", "1999-00"])
     assert result.exit_code != 0
     assert "no games" in result.stdout.lower() or "nothing to score" in result.stdout.lower()
+
+
+def test_backtest_rejects_a_negative_buffer_in_plain_english():
+    result = runner.invoke(app, ["backtest", "--buffer-minutes", "-5", "--season", "2023-24"])
+    assert result.exit_code != 0
+    assert "buffer_minutes must be >= 0, got -5" in result.stdout
+    assert "Traceback" not in result.stdout

@@ -1456,7 +1456,7 @@ uv run predictor backtest --model always-home
 uv run predictor backtest --model coin-flip
 ```
 
-Expected: always-home accuracy near **55.2%** across all scored games, and coin-flip near 50% with a Brier of about 0.25. Record both in the commit message — they are the numbers every future model is measured against.
+Expected: always-home accuracy near **54.9%** across the scored games (the 7,200 with a resolvable tip-off; the figure across all 8,289 regular-season games is 55.2%). Coin-flip reports that same 54.9% accuracy — a flat 0.5 ties toward home under `accuracy`'s `p >= threshold` rule — with a Brier of 0.2500 and a log loss of 0.6931. Brier and log loss, not accuracy, are what show a tied predictor is uninformative. Record all of these in the commit message — they are the numbers every future model is measured against.
 
 - [ ] **Step 7: Commit**
 
