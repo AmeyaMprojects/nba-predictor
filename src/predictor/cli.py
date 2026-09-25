@@ -253,5 +253,49 @@ def setup() -> None:
     typer.echo(f"ready. data dir: {settings.data_dir}")
 
 
+@app.command("backtest")
+def backtest_cmd(
+    model: str = typer.Option(
+        "always-home", help="Which predictor to score: always-home or coin-flip."
+    ),
+    season: str = typer.Option(None, help="Limit to one season, e.g. 2024-25."),
+    buffer_minutes: int = typer.Option(
+        30, help="Minutes before tip-off to cut the data off."
+    ),
+) -> None:
+    """Replay real games and score a predictor on what was knowable pre-tipoff."""
+    from predictor import db
+    from predictor.backtest import baselines, replay, report
+    from predictor.config import settings
+
+    known = {
+        "always-home": baselines.always_home,
+        "coin-flip": baselines.fixed_probability(0.5),
+    }
+    if model not in known:
+        typer.echo(
+            f"Unknown model '{model}'. Available: {', '.join(sorted(known))}."
+        )
+        raise typer.Exit(code=1)
+
+    settings.ensure_dirs()
+    con = db.connect()
+    db.migrate(con)
+
+    preds, stats = replay.replay(
+        con, known[model], season=season, buffer_minutes=buffer_minutes
+    )
+    if not preds:
+        typer.echo(
+            "No games could be scored -- nothing to measure. "
+            f"{stats.considered:,} game(s) were considered; "
+            f"{stats.skipped_no_tipoff:,} had no resolvable tip-off time and "
+            f"{stats.skipped_no_result:,} had no result yet."
+        )
+        raise typer.Exit(code=1)
+
+    typer.echo(report.format_report(report.summarize(preds, stats)))
+
+
 if __name__ == "__main__":
     app()
