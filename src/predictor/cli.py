@@ -323,14 +323,34 @@ def backtest_cmd(
         typer.echo(f"Cannot run the backtest: {exc}.")
         raise typer.Exit(code=1) from None
     if not preds:
+        # FIX 22(c) (final review, part 3): this used to name only 3 of the
+        # 9 skip buckets `replay.replay` tracks -- with only those three
+        # printed, the numbers it prints could fail to add up to
+        # `considered`, silently hiding whatever fell into the other six
+        # (conflicting metadata, score missing, result already visible,
+        # declined, failed). Every nonzero bucket is now named, so this
+        # message always accounts for the full `considered` count.
+        buckets = [
+            (stats.skipped_conflicting_metadata, "had contradictory metadata across "
+             "ingested rows"),
+            (stats.skipped_buffer_too_early, "had a buffer reaching back past the "
+             "harness's reconstructed schedule timestamp"),
+            (stats.skipped_no_tipoff, "had no resolvable tip-off time"),
+            (stats.skipped_no_result, "had no result yet (not yet played)"),
+            (stats.skipped_score_missing, "were played but the archive did not "
+             "record the score"),
+            (stats.skipped_result_visible, "had the result already visible at the "
+             "cutoff (leak guard)"),
+            (stats.declined, "the predictor declined to predict"),
+            (stats.failed, "the predictor failed or returned an impossible "
+             "probability for"),
+        ]
+        detail = "; ".join(f"{n:,} {text}" for n, text in buckets if n)
         message = (
             "No games could be scored -- nothing to measure. "
-            f"{stats.considered:,} game(s) were considered; "
-            f"{stats.skipped_no_tipoff:,} had no resolvable tip-off time, "
-            f"{stats.skipped_buffer_too_early:,} had a buffer reaching back before "
-            "the game was even scheduled, and "
-            f"{stats.skipped_no_result:,} had no result yet."
+            f"{stats.considered:,} game(s) were considered"
         )
+        message += f": {detail}." if detail else "."
         # FIX 12(a): a mistyped --season (e.g. "2024-2025" instead of
         # "2024-25") silently matches zero rows and used to print all
         # zeros with no hint the season string itself was the problem.
@@ -352,18 +372,33 @@ def backtest_cmd(
     # are zero odds rows in the archive at all, so market comparison is
     # unavailable regardless of season/buffer -- that fact is checked live,
     # not assumed, so it stays true the moment 'predictor ingest-odds' runs.
+    #
+    # FIX 22(d) (final review, part 3): a bare `next(...)` here raises
+    # StopIteration (an ugly, unhandled crash, not a plain-English message)
+    # if "odds_snapshots" were ever missing from `check_sources`'s output.
+    # It cannot happen today -- db.POINT_IN_TIME_TABLES always includes it,
+    # and check_sources iterates exactly that mapping -- but a default makes
+    # that guarantee explicit rather than relying on the caller never
+    # changing, and degrades to "market comparison unavailable" instead of
+    # crashing if it ever does.
     odds_health = next(
-        h for h in status_mod.check_sources(con) if h.name == "odds_snapshots"
+        (h for h in status_mod.check_sources(con) if h.name == "odds_snapshots"), None
     )
-    market_available = odds_health.row_count > 0
-    market_reason = (
-        None
-        if market_available
-        else (
-            "no odds data has been collected yet "
-            f"({odds_health.row_count} row(s) in the archive)"
+    if odds_health is None:
+        market_available = False
+        market_reason = "odds data health could not be determined"
+        market_row_count = 0
+    else:
+        market_available = odds_health.row_count > 0
+        market_row_count = odds_health.row_count
+        market_reason = (
+            None
+            if market_available
+            else (
+                "no odds data has been collected yet "
+                f"({odds_health.row_count} row(s) in the archive)"
+            )
         )
-    )
 
     result = report.summarize(
         preds,
@@ -372,7 +407,7 @@ def backtest_cmd(
         buffer_minutes=buffer_minutes,
         market_available=market_available,
         market_reason=market_reason,
-        market_row_count=odds_health.row_count,
+        market_row_count=market_row_count,
     )
     typer.echo(report.format_report(result))
 
