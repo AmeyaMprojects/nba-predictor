@@ -282,6 +282,12 @@ def test_provenance_header_says_all_seasons_when_predictions_span_more_than_one(
 
 
 def test_report_states_buffer_too_early_coverage_honestly():
+    """FIX 21 (final review, part 3): the old wording ("before the game was
+    even on the schedule") claimed a fact about an OBSERVED timestamp, but
+    the SCHEDULED observation this guard compares against is reconstructed
+    from game_date, not observed -- the message must say that plainly and
+    must not claim the run proved anything about real scheduling.
+    """
     preds = [make(0.7, i < 70, f"g{i}") for i in range(100)]
     stats = ReplayStats(
         considered=110, predicted=100, skipped_conflicting_metadata=0,
@@ -293,8 +299,10 @@ def test_report_states_buffer_too_early_coverage_honestly():
         skipped_result_visible=0, declined=0, failed=0,
     )
     text = report.format_report(summarize(preds, stats))
-    assert "10 game(s) skipped -- the buffer reaches back before the game" in text
-    assert "not yet on the schedule" in text or "even on the schedule" in text
+    assert "10 game(s) skipped -- the buffer reaches back" in text
+    assert "RECONSTRUCTED" in text
+    assert "even on the schedule" not in text
+    assert "not measuring anything meaningful" in text
 
 
 # --- FIX 8: the verdict is a paired comparison with a stated margin --------

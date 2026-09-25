@@ -243,10 +243,22 @@ def format_report(result: BacktestResult) -> str:
             "for the affected season(s) to fix them"
         )
     if s.skipped_buffer_too_early:
+        # FIX 21 (final review, part 3): this used to say the buffer reached
+        # "before the game was even on the schedule" -- but the timestamp it
+        # is compared against is RECONSTRUCTED, not observed: the NBA
+        # archive does not record when a game was actually first announced,
+        # so the harness derived it from game_date (7 days before for the
+        # regular season, 1 day before for the postseason). That made the
+        # old sentence false for every game it fired on (measured: none of
+        # 1,229 games flagged at --buffer-minutes 14400 were genuinely
+        # unscheduled at that cutoff). The guard is still a useful sanity
+        # bound -- only the claim about what it checks is corrected.
         lines.append(
             f"    {s.skipped_buffer_too_early:,} game(s) skipped -- the buffer reaches "
-            "back before the game was even on the schedule, so the predictor would "
-            "have been asked to predict a game it had no way of knowing existed yet"
+            "back past the harness's own RECONSTRUCTED schedule timestamp for these "
+            "games, derived from game_date rather than observed (the NBA archive does "
+            "not record when a game was actually first announced), so this run is not "
+            "measuring anything meaningful for them"
         )
     if s.skipped_no_tipoff:
         lines.append(
