@@ -101,24 +101,34 @@ def format_report(result: BacktestResult) -> str:
     header = _provenance_header(result)
 
     # FIX 3: `metrics.accuracy` counts p_home >= threshold as a home pick, so
-    # a predictor that puts EVERY game on the same side of the line (a flat
+    # a predictor that puts EVERY game on the HOME side of the line (a flat
     # 0.5 coin flip included) collapses to the home base rate and reads as
     # if it "MATCHES always-pick-home" -- a publishable, confidently wrong
     # sentence, since a coin flip does not match always-pick-home. When that
     # happens, accuracy cannot discriminate this predictor from the
     # baseline at all, so the verdict must not claim a comparison. This also
     # fires for always-home itself (home_pick_share == 1.0).
+    #
+    # FIX 17 (final review, part 3): this used to also fire for
+    # home_share == 0.0 (a predictor that picks AWAY every game), printing
+    # the same "cannot distinguish this predictor from always-pick-home"
+    # sentence -- which is simply false for an all-away predictor. Unlike
+    # all-home, all-away DISAGREES with always-pick-home on every single
+    # game, so the paired comparison below is perfectly well defined for it
+    # (edge and margin both meaningful) and it must get a normal verdict
+    # through that path instead. Only home_share == 1.0 collapses accuracy
+    # into the baseline's own base rate.
     home_share = metrics.home_pick_share(result.predictions)
 
-    if home_share in (0.0, 1.0):
-        # FIX 12(d): the same "one-sided" message used to read identically
-        # for always-home and for a flat coin-flip predictor, even though a
-        # flat 0.5 predictor is NOT the same predictor as always-home -- it
-        # only happens to make the same PICK on every game, at a different
-        # stated probability. When the probabilities are ALSO identical to
-        # the baseline's (every p_home == 1.0), it is a stronger and clearer
-        # statement to say the predictor simply IS always-pick-home.
-        if home_share == 1.0 and all(p.p_home == 1.0 for p in result.predictions):
+    if home_share == 1.0:
+        # FIX 12(d): a flat 0.5 coin-flip predictor also lands here (0.5 >=
+        # threshold counts as a home pick), even though it is NOT the same
+        # predictor as always-home -- it only happens to make the same PICK
+        # on every game, at a different stated probability. When the
+        # probabilities are ALSO identical to the baseline's (every
+        # p_home == 1.0), it is a stronger and clearer statement to say the
+        # predictor simply IS always-pick-home.
+        if all(p.p_home == 1.0 for p in result.predictions):
             verdict = (
                 "PREDICTOR IS always-pick-home -- every prediction, and every "
                 "stated probability, is identical to the baseline's, so there "
@@ -126,9 +136,8 @@ def format_report(result: BacktestResult) -> str:
                 "table below instead."
             )
         else:
-            side = "home" if home_share == 1.0 else "away"
             verdict = (
-                f"ACCURACY NOT MEANINGFUL -- every prediction favoured the {side} "
+                "ACCURACY NOT MEANINGFUL -- every prediction favoured the home "
                 "side, so accuracy cannot distinguish this predictor from "
                 "always-pick-home. See the Brier score and calibration table "
                 "below instead."

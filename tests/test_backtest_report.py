@@ -177,13 +177,24 @@ def test_always_home_states_it_is_the_baseline_rather_than_not_meaningful():
     assert "not meaningful" not in first.lower()
 
 
-def test_an_all_away_predictor_also_gets_the_not_meaningful_verdict():
+def test_an_all_away_predictor_gets_a_normal_verdict_not_the_not_meaningful_one():
+    """FIX 17 (final review, part 3): an all-away predictor DISAGREES with
+    always-pick-home on every single game -- unlike an all-home predictor,
+    whose picks are identical to the baseline's, its accuracy is perfectly
+    able to distinguish it from the baseline. It must get a normal verdict
+    through the paired path, not the "cannot distinguish" message (which
+    was, incorrectly, printed for this case before this fix). Measured:
+    accuracy 45.0% vs baseline 55.0%, edge -10.0 +/- 20.0 -- a real,
+    well-defined comparison, not nothing.
+    """
     preds = [make(0.1, i < 55, f"g{i}") for i in range(100)]
-    text = report.format_report(summarize(preds))
+    r = summarize(preds)
+    assert r.accuracy == pytest.approx(0.45)
+    assert r.home_baseline == pytest.approx(0.55)
+    text = report.format_report(r)
     first = verdict_line(text)
-    assert not first.startswith(("BEATS", "LOSES TO", "TOO CLOSE TO CALL"))
-    assert "not meaningful" in first.lower()
-    assert "away" in first.lower()
+    assert first.startswith(("BEATS", "LOSES TO", "TOO CLOSE TO CALL"))
+    assert "not meaningful" not in first.lower()
 
 
 # --- FIX 5: conflicting-metadata games are surfaced in the coverage section
