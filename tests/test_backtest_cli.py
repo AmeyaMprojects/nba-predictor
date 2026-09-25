@@ -105,3 +105,61 @@ def test_backtest_tells_the_user_to_ingest_first_when_no_database_exists(tmp_pat
     assert result.exit_code != 0
     assert "ingest" in result.stdout.lower()
     assert "Traceback" not in result.stdout
+
+
+def test_backtest_reports_a_lock_conflict_in_plain_english_not_a_missing_database(
+    tmp_path, monkeypatch
+):
+    """FIX 18 (final review, part 3): a lock conflict (e.g. the scheduled
+    poll-news job holding the write lock) must not be reported as "No
+    database found" -- that remedy ("run predictor ingest-season") needs
+    the same lock, so it sends the user to a command that cannot work
+    either. Reproduced cross-process: a real duckdb.IOException for a lock
+    conflict looks different from one for a missing file only in its
+    message text, not its exception class, so both must be checked for
+    real rather than assumed.
+    """
+    import subprocess
+    import sys
+    import time
+
+    import duckdb
+
+    s = _migrated_db(tmp_path, monkeypatch)
+
+    holder = subprocess.Popen(
+        [
+            sys.executable, "-c",
+            "import duckdb, time, sys\n"
+            "con = duckdb.connect(sys.argv[1])\n"
+            "con.execute('CREATE TABLE IF NOT EXISTS lock_holder(x INT)')\n"
+            "time.sleep(8)\n",
+            str(s.db_path),
+        ],
+    )
+    try:
+        # Poll for the lock to actually be held, rather than a fixed sleep
+        # -- avoids flakiness on a slow CI machine.
+        deadline = time.time() + 5
+        locked = False
+        while time.time() < deadline:
+            try:
+                probe = duckdb.connect(str(s.db_path), read_only=True)
+                probe.close()
+            except duckdb.Error:
+                locked = True
+                break
+            time.sleep(0.1)
+        assert locked, "subprocess never acquired the database lock"
+
+        result = runner.invoke(cli.app, ["backtest"])
+        assert result.exit_code != 0
+        out = result.stdout.lower()
+        assert "ingest" not in out, (
+            "sent the user to a command that needs the same lock"
+        )
+        assert "wait" in out
+        assert "Traceback" not in result.stdout
+    finally:
+        holder.terminate()
+        holder.wait(timeout=5)

@@ -289,12 +289,30 @@ def backtest_cmd(
     # job). read_only=True enforces both.
     try:
         con = db.connect(read_only=True)
-    except duckdb.Error:
-        typer.echo(
-            "No database found to back-test against. Run an ingest command "
-            "first (for example 'predictor ingest-season <season>'), then "
-            "try 'predictor backtest' again."
-        )
+    except duckdb.Error as exc:
+        # FIX 18 (final review, part 3): a lock conflict (the scheduled
+        # poll-news job holding the write lock -- routine, not an error)
+        # used to be reported identically to a missing database file, and
+        # the missing-file remedy ("run predictor ingest-season") needs the
+        # SAME write lock, so it sends the user to a command that cannot
+        # possibly work either. Both cases raise duckdb.Error (an
+        # IOException in both DuckDB's implementation), so the exception
+        # TYPE alone cannot distinguish them -- matched on message text
+        # instead, verified against a real cross-process lock conflict
+        # (see tests/test_backtest_cli.py).
+        if "lock" in str(exc).lower():
+            typer.echo(
+                "Could not open the database -- another 'predictor' command "
+                "is using it right now, most likely the scheduled "
+                "poll-news job. Wait a moment and try 'predictor backtest' "
+                "again."
+            )
+        else:
+            typer.echo(
+                "No database found to back-test against. Run an ingest "
+                "command first (for example 'predictor ingest-season "
+                "<season>'), then try 'predictor backtest' again."
+            )
         raise typer.Exit(code=1) from None
 
     try:
