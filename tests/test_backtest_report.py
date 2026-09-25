@@ -318,6 +318,62 @@ def test_verdict_loses_to_outside_the_margin_states_the_margin():
     assert first == "LOSES TO always-pick-home by 54.5 +/- 18.2 points"
 
 
+# --- FIX 16: a minimum discordant-pair requirement and a continuity
+# correction -- a handful of lucky games must not read as a verdict --------
+
+
+def test_verdict_is_too_close_to_call_below_the_minimum_discordant_games():
+    """4 wins / 0 losses is a perfect record but on only 4 disagreement
+    games -- exact McNemar p there is 0.125, not evidence. Below the
+    minimum, the verdict must say so regardless of the ratio."""
+    preds = _paired_preds(wins=4, losses=0)
+    text = report.format_report(summarize(preds))
+    first = verdict_line(text)
+    assert first.startswith("TOO CLOSE TO CALL")
+    assert "too few" in first.lower()
+    assert "4" in first
+
+
+def test_verdict_is_too_close_to_call_below_the_minimum_even_at_5_to_0():
+    """5/0 (exact McNemar p = 0.0625) is still not evidence."""
+    preds = _paired_preds(wins=5, losses=0)
+    text = report.format_report(summarize(preds))
+    first = verdict_line(text)
+    assert first.startswith("TOO CLOSE TO CALL")
+
+
+def test_paired_comparison_is_well_defined_with_no_disagreement_games():
+    """FIX 22(a): wins == losses == 0 (a predictor that agrees with
+    always-pick-home on every single game) is only unreachable through
+    format_report's own paired branch by an IMPLICIT coupling -- n_discordant
+    == 0 forces home_share == 1.0, which the branch above always catches
+    first. metrics.paired_comparison itself must still behave sanely (no
+    division by zero, no NaN) rather than relying on that coupling to never
+    be asked -- report.format_report's own explicit `n_discordant == 0`
+    guard exists for exactly this reason, so a future change to the
+    home_share branch cannot silently resurrect a bogus
+    'LOSES TO ... by 0.0 +/- 0.0' verdict.
+    """
+    preds = [make(0.9, True, f"h{i}") for i in range(10)]
+    pc = metrics.paired_comparison(preds)
+    assert pc.wins == 0
+    assert pc.losses == 0
+    assert pc.edge == 0.0
+    assert pc.standard_error == 0.0
+
+
+def test_continuity_correction_flips_a_borderline_verdict_to_too_close_to_call():
+    """Without the continuity correction, wins=60/losses=40 (110 total
+    games) sits exactly on the normal-approximation threshold
+    (|60-40| == 2*sqrt(100)) and reads as BEATS. The continuity correction
+    (|wins - losses| - 1) pulls it back under the threshold, where a
+    discrete count this close to the boundary honestly belongs."""
+    preds = _paired_preds(wins=60, losses=40)
+    text = report.format_report(summarize(preds))
+    first = verdict_line(text)
+    assert first.startswith("TOO CLOSE TO CALL")
+
+
 def test_paired_comparison_counts_only_disagreement_games():
     pc = metrics.paired_comparison(_paired_preds(wins=52, losses=48))
     assert pc.wins == 52

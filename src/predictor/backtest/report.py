@@ -7,6 +7,12 @@ from collections.abc import Sequence
 from predictor.backtest import metrics
 from predictor.backtest.replay import Prediction, ReplayStats
 
+# FIX 16 (final review, part 3): below this many discordant (disagreement)
+# games, the paired comparison against always-pick-home is not evidence no
+# matter how lopsided the ratio looks -- e.g. 4 wins/0 losses has an exact
+# McNemar p-value of only 0.125.
+_MIN_DISCORDANT_GAMES = 25
+
 
 @dataclass(frozen=True)
 class BacktestResult:
@@ -139,7 +145,34 @@ def format_report(result: BacktestResult) -> str:
         pc = metrics.paired_comparison(result.predictions)
         edge_pts = pc.edge * 100
         margin_pts = 2 * pc.standard_error * 100
-        if abs(pc.wins - pc.losses) < 2 * math.sqrt(pc.wins + pc.losses):
+        # FIX 22(a) (final review, part 3): guard wins == losses == 0
+        # explicitly rather than relying on it being unreachable by an
+        # implicit coupling to the home_share == 0/1 branch above -- with
+        # no discordant games at all there is nothing paired to compare.
+        n_discordant = pc.wins + pc.losses
+        # FIX 16 (final review, part 3): a handful of discordant games can
+        # produce a huge, lucky-looking ratio -- 4 wins/0 losses is a
+        # perfect record but its exact McNemar p-value is only 0.125, not
+        # evidence, and the old check (below) had no minimum sample size at
+        # all. Below MIN_DISCORDANT games the verdict must say so outright,
+        # regardless of how lopsided the ratio looks. Above that floor, a
+        # continuity-corrected normal approximation (`|wins - losses| - 1`,
+        # floored at 0) replaces the uncorrected one -- the standard
+        # adjustment for using a continuous distribution to approximate a
+        # discrete count.
+        if n_discordant == 0:
+            verdict = (
+                "TOO CLOSE TO CALL -- the predictor never disagreed with "
+                "always-pick-home on a single scored game, so there is "
+                "nothing to compare"
+            )
+        elif n_discordant < _MIN_DISCORDANT_GAMES:
+            verdict = (
+                f"TOO CLOSE TO CALL -- the predictor and always-pick-home "
+                f"only disagreed on {n_discordant:,} game(s), too few to "
+                "tell them apart"
+            )
+        elif max(abs(pc.wins - pc.losses) - 1, 0) < 2 * math.sqrt(n_discordant):
             verdict = (
                 f"TOO CLOSE TO CALL -- edge over always-pick-home is "
                 f"{edge_pts:+.1f} +/- {margin_pts:.1f} points, too small to "
