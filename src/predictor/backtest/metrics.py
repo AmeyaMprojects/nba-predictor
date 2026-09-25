@@ -116,6 +116,49 @@ def calibration_bins(
     return out
 
 
+@dataclass(frozen=True)
+class PairedComparison:
+    """A McNemar-style paired comparison against the always-pick-home baseline.
+
+    Only games where the predictor DISAGREES with always-home (i.e. the
+    predictor's p_home falls below `threshold`, so it favours away) can tell
+    the two predictors apart -- on every game where they agree, both are
+    right or both are wrong together, so that game carries no information
+    about which one is better. `wins + losses` is exactly the count of
+    disagreement games.
+    """
+
+    wins: int
+    losses: int
+    edge: float
+    standard_error: float
+
+
+def paired_comparison(preds: Sequence[Prediction], threshold: float = 0.5) -> PairedComparison:
+    """Paired comparison of `preds` against always-pick-home.
+
+    `wins` = disagreement games the predictor got right (away won).
+    `losses` = disagreement games the predictor got wrong (home won, so
+    always-home was right instead).
+    `edge` = (wins - losses) / N, over ALL scored games N (not just the
+    disagreement games) -- this is the same denominator `accuracy` uses.
+    `standard_error` = sqrt(wins + losses) / N -- the standard error of
+    (wins - losses), expressed as a fraction of N so it is on the same
+    scale as `edge`. Both wins and losses come from the SAME disagreement
+    games, so wins + losses is also the count of those games; the standard
+    error of a difference of two counts drawn from one binomial split is
+    sqrt(wins + losses) (see e.g. the McNemar test).
+    """
+    _require(preds)
+    disagreements = [p for p in preds if p.p_home < threshold]
+    wins = sum(1 for p in disagreements if not p.home_won)
+    losses = sum(1 for p in disagreements if p.home_won)
+    n = len(preds)
+    edge = (wins - losses) / n
+    standard_error = math.sqrt(wins + losses) / n
+    return PairedComparison(wins=wins, losses=losses, edge=edge, standard_error=standard_error)
+
+
 def calibration_error(preds: Sequence[Prediction], n_bins: int = 10) -> float:
     """Count-weighted mean gap between stated probability and observed rate."""
     bins = calibration_bins(preds, n_bins)

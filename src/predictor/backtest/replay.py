@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -30,8 +31,29 @@ class ReplayStats:
     considered: int
     predicted: int
     skipped_conflicting_metadata: int
+    # FIX 7 (final review, part 2): a game whose computed cutoff falls before
+    # its own earliest SCHEDULED observation is being asked of the predictor
+    # before the game was even on the schedule -- an unbounded buffer must
+    # not silently produce a confident report.
+    skipped_buffer_too_early: int
     skipped_no_tipoff: int
+    # FIX 11: per-season breakdown of the two counters above, keyed by
+    # `Prediction.season`. `considered_by_season` is the denominator for
+    # EVERY season (every row considered, regardless of outcome);
+    # `skipped_no_tipoff_by_season` is the numerator for the no-tip-off
+    # line specifically -- together they let the report show "<n> of
+    # <season total>" per season instead of one pooled count that hides a
+    # skew concentrated in one or two seasons.
+    considered_by_season: Mapping[str, int]
+    skipped_no_tipoff_by_season: Mapping[str, int]
+    # FIX 9: split in two. `skipped_no_result` is now ONLY games with no
+    # FINAL row at all (genuinely not yet played). `skipped_score_missing`
+    # is games that DO have a FINAL row but whose score is NULL (played,
+    # but the archive failed to record the score) -- a materially
+    # different situation that needs a different message and a different
+    # fix (re-ingest, not "wait for the game to be played").
     skipped_no_result: int
+    skipped_score_missing: int
     skipped_result_visible: int
     declined: int
     failed: int
@@ -139,6 +161,9 @@ def replay(
     ).fetchall()
 
     considered = predicted = conflicting = no_tip = no_result = leaked = declined = failed = 0
+    buffer_too_early = score_missing = 0
+    considered_by_season: dict[str, int] = {}
+    no_tip_by_season: dict[str, int] = {}
     out: list[Prediction] = []
 
     for (
@@ -148,6 +173,7 @@ def replay(
         if limit is not None and predicted >= limit:
             break
         considered += 1
+        considered_by_season[game_season] = considered_by_season.get(game_season, 0) + 1
 
         if not (n_season == 1 and n_game_date == 1 and n_home_team == 1 and n_away_team == 1):
             conflicting += 1
@@ -161,9 +187,30 @@ def replay(
         tip = tipoff_mod.resolve_tipoff(index, game_date, home_team, away_team)
         if tip is None:
             no_tip += 1
+            no_tip_by_season[game_season] = no_tip_by_season.get(game_season, 0) + 1
             continue
 
         cutoff = tip - timedelta(minutes=buffer_minutes)
+
+        # FIX 7 (final review, part 2): an unbounded buffer (e.g.
+        # --buffer-minutes 100000, ~69 days) can push the cutoff before the
+        # game was ever on the schedule -- the harness would then be asking
+        # the predictor to predict a game it had no way of even knowing
+        # existed yet. Checked against the real data: the earliest SCHEDULED
+        # observation for this exact game, not a hardcoded lead time.
+        earliest_scheduled = con.execute(
+            f"SELECT min(observed_at) FROM {games_table} "
+            "WHERE game_id = ? AND status = 'SCHEDULED'",
+            [game_id],
+        ).fetchone()[0]
+        if earliest_scheduled is not None and cutoff < earliest_scheduled:
+            buffer_too_early += 1
+            print(
+                f"backtest: SKIPPING {game_id} -- buffer reaches cutoff "
+                f"{cutoff.isoformat()}, before this game was even scheduled "
+                f"(first seen {earliest_scheduled.isoformat()}), not predicted"
+            )
+            continue
 
         # Finding 1: the central invariant, verified for real against the
         # data on every game -- not inferred from how large today's margin
@@ -183,6 +230,20 @@ def replay(
             )
             continue
 
+        # FIX 9 (final review, part 2): "no scorable FINAL row" used to be a
+        # single counter regardless of WHY, printed to the report as "not
+        # yet played" -- true for a game with no FINAL row at all, but false
+        # for a game that WAS played and has a FINAL row whose score is
+        # NULL (an archive gap, not an unplayed game). Split into two real
+        # checks so each is only ever reported under its true cause.
+        final_exists = con.execute(
+            f"SELECT 1 FROM {games_table} WHERE game_id = ? AND status = 'FINAL' LIMIT 1",
+            [game_id],
+        ).fetchone()
+        if final_exists is None:
+            no_result += 1
+            continue
+
         result = con.execute(
             f"SELECT home_points, away_points, reconstructed FROM {games_table} "
             f"WHERE game_id = ? AND status = 'FINAL' "
@@ -191,7 +252,7 @@ def replay(
             [game_id],
         ).fetchone()
         if result is None:
-            no_result += 1
+            score_missing += 1
             continue
 
         view = AsOfView(con, cutoff)
@@ -246,10 +307,29 @@ def replay(
         considered=considered,
         predicted=predicted,
         skipped_conflicting_metadata=conflicting,
+        skipped_buffer_too_early=buffer_too_early,
         skipped_no_tipoff=no_tip,
+        considered_by_season=considered_by_season,
+        skipped_no_tipoff_by_season=no_tip_by_season,
         skipped_no_result=no_result,
+        skipped_score_missing=score_missing,
         skipped_result_visible=leaked,
         declined=declined,
         failed=failed,
     )
     return out, stats
+
+
+def known_seasons(con) -> list[str]:
+    """Distinct regular-season labels present in the archive, sorted.
+
+    Used only to help a user who mistyped `--season` (FIX 12(a)): when a
+    season filter matches nothing at all, the report can list what IS
+    actually there instead of printing a wall of zeros with no hint why.
+    """
+    games_table = db.POINT_IN_TIME_TABLES["games"]
+    rows = con.execute(
+        f"SELECT DISTINCT season FROM {games_table} WHERE game_id LIKE '002%' "
+        "ORDER BY season"
+    ).fetchall()
+    return [r[0] for r in rows]

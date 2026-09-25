@@ -72,6 +72,7 @@ def test_unplayed_game_is_skipped_not_scored(con):
     preds, stats = replay.replay(con, always_home)
     assert preds == []
     assert stats.skipped_no_result == 1
+    assert stats.skipped_score_missing == 0
 
 
 def test_predictor_returning_an_impossible_probability_is_counted_not_silent(con):
@@ -182,7 +183,12 @@ def test_final_row_with_one_null_score_does_not_abort_run(con):
 
     preds, stats = replay.replay(con, always_home)
 
-    assert stats.skipped_no_result == 1
+    # FIX 9 (final review, part 2): this game WAS played -- it has a FINAL
+    # row -- but the archive failed to record its score. That is a
+    # different, more actionable situation than "not yet played" and must
+    # be pinned under its own counter, not the same one.
+    assert stats.skipped_score_missing == 1
+    assert stats.skipped_no_result == 0
     assert stats.predicted == 1
     assert [p.game_id for p in preds] == ["0022400999"]
 
@@ -219,8 +225,62 @@ def test_counters_reconcile_with_limit_set(con):
     total = (
         stats.predicted
         + stats.skipped_conflicting_metadata
+        + stats.skipped_buffer_too_early
         + stats.skipped_no_tipoff
         + stats.skipped_no_result
+        + stats.skipped_score_missing
+        + stats.skipped_result_visible
+        + stats.declined
+        + stats.failed
+    )
+    assert total == stats.considered
+
+
+def test_counters_reconcile_with_no_limit_set(con):
+    # FIX 13(e): only the `limit` case was covered -- the far more common
+    # path (a full, unbounded replay) had no reconciliation test at all.
+    g = db.POINT_IN_TIME_TABLES["games"]
+    i = db.POINT_IN_TIME_TABLES["injury_status"]
+    for n in range(3):
+        d = date(2025, 1, 17 + n)
+        tip = datetime(2025, 1, 18 + n, 0, 0, tzinfo=UTC)
+        gid = f"002240099{n}"
+        con.execute(
+            f"INSERT INTO {g} (game_id, season, game_date, home_team, away_team,"
+            " home_points, away_points, status, observed_at, reconstructed)"
+            " VALUES (?,?,?,?,?,?,?,?,?,TRUE)",
+            [gid, "2024-25", d, "BOS", "LAL", 100, 90, "FINAL", tip + timedelta(hours=3)],
+        )
+        con.execute(
+            f"INSERT INTO {i} (report_date, game_date, matchup, team, player,"
+            " status, reason, observed_at, game_time)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            [d, d, "LAL@BOS", "BOS", "P", "Out", "x",
+             tip - timedelta(hours=2), "07:00 (ET)"],
+        )
+    # Also add one game with no resolvable tip-off, so more than one
+    # counter is nonzero -- a reconciliation bug that only shows up when a
+    # skip path fires would otherwise slip past a test with zero skips.
+    con.execute(
+        f"INSERT INTO {g} (game_id, season, game_date, home_team, away_team,"
+        " home_points, away_points, status, observed_at, reconstructed)"
+        " VALUES (?,?,?,?,?,?,?,?,?,TRUE)",
+        ["0022400888", "2024-25", date(2025, 1, 25), "MIA", "ORL",
+         100, 90, "FINAL", datetime(2025, 1, 26, 12, 0, tzinfo=UTC) + timedelta(hours=3)],
+    )
+
+    preds, stats = replay.replay(con, always_home)
+
+    assert stats.considered == 5  # fixture's 1 + the 3 added + the no-tip-off one
+    assert stats.skipped_no_tipoff == 1
+    assert stats.predicted == 4
+    total = (
+        stats.predicted
+        + stats.skipped_conflicting_metadata
+        + stats.skipped_buffer_too_early
+        + stats.skipped_no_tipoff
+        + stats.skipped_no_result
+        + stats.skipped_score_missing
         + stats.skipped_result_visible
         + stats.declined
         + stats.failed
@@ -277,3 +337,74 @@ def test_predictor_declining_is_counted_separately_from_failed(con):
     assert preds == []
     assert stats.declined == 1
     assert stats.failed == 0
+
+
+# --- FIX 13(e): the season filter is currently untested --------------------
+
+
+def test_season_filter_restricts_the_scored_set(con):
+    g = db.POINT_IN_TIME_TABLES["games"]
+    i = db.POINT_IN_TIME_TABLES["injury_status"]
+    other_tip = datetime(2023, 12, 20, 0, 0, tzinfo=UTC)
+    con.execute(
+        f"INSERT INTO {g} (game_id, season, game_date, home_team, away_team,"
+        " home_points, away_points, status, observed_at, reconstructed)"
+        " VALUES (?,?,?,?,?,?,?,?,?,TRUE)",
+        ["0022300777", "2023-24", date(2023, 12, 19), "BOS", "LAL",
+         100, 90, "FINAL", other_tip + timedelta(hours=3)],
+    )
+    con.execute(
+        f"INSERT INTO {i} (report_date, game_date, matchup, team, player,"
+        " status, reason, observed_at, game_time)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        [date(2023, 12, 19), date(2023, 12, 19), "LAL@BOS", "BOS", "P", "Out", "x",
+         other_tip - timedelta(hours=2), "07:00 (ET)"],
+    )
+
+    all_preds, all_stats = replay.replay(con, always_home)
+    assert all_stats.considered == 2
+    assert {p.season for p in all_preds} == {"2024-25", "2023-24"}
+
+    filtered_preds, filtered_stats = replay.replay(con, always_home, season="2024-25")
+    assert filtered_stats.considered == 1
+    assert [p.game_id for p in filtered_preds] == ["0022400561"]
+    assert {p.season for p in filtered_preds} == {"2024-25"}
+
+
+# --- FIX 7: an unbounded buffer must not reach before the schedule existed -
+
+
+def test_buffer_reaching_before_the_schedule_existed_is_skipped_and_counted(con):
+    """The fixture's SCHEDULED row is stamped 7 days before tip-off. A
+    buffer larger than that pushes the cutoff before the game was ever on
+    the schedule -- the harness must not hand the predictor a game it had
+    no way of knowing existed yet."""
+    seen: list[str] = []
+
+    def spy(game, view):
+        seen.append(game.game_id)
+        return 1.0
+
+    preds, stats = replay.replay(con, spy, buffer_minutes=60 * 24 * 30)  # 30 days
+
+    assert preds == []
+    assert stats.skipped_buffer_too_early == 1
+    assert stats.predicted == 0
+    assert seen == [], "predictor must never be invoked for a too-early buffer"
+
+
+def test_a_normal_buffer_does_not_trip_the_too_early_check(con):
+    preds, stats = replay.replay(con, always_home, buffer_minutes=30)
+    assert stats.skipped_buffer_too_early == 0
+    assert stats.predicted == 1
+
+
+# --- FIX 11: the no-tip-off skip carries its season -------------------------
+
+
+def test_no_tipoff_skip_is_tracked_by_season(con):
+    i = db.POINT_IN_TIME_TABLES["injury_status"]
+    con.execute(f"DELETE FROM {i}")
+    _, stats = replay.replay(con, always_home)
+    assert stats.skipped_no_tipoff_by_season == {"2024-25": 1}
+    assert stats.considered_by_season == {"2024-25": 1}

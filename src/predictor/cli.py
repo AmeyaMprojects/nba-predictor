@@ -269,6 +269,7 @@ def backtest_cmd(
     import duckdb
 
     from predictor import db
+    from predictor import status as status_mod
     from predictor.backtest import baselines, replay, report
     from predictor.config import settings
 
@@ -304,15 +305,57 @@ def backtest_cmd(
         typer.echo(f"Cannot run the backtest: {exc}.")
         raise typer.Exit(code=1) from None
     if not preds:
-        typer.echo(
+        message = (
             "No games could be scored -- nothing to measure. "
             f"{stats.considered:,} game(s) were considered; "
-            f"{stats.skipped_no_tipoff:,} had no resolvable tip-off time and "
+            f"{stats.skipped_no_tipoff:,} had no resolvable tip-off time, "
+            f"{stats.skipped_buffer_too_early:,} had a buffer reaching back before "
+            "the game was even scheduled, and "
             f"{stats.skipped_no_result:,} had no result yet."
         )
+        # FIX 12(a): a mistyped --season (e.g. "2024-2025" instead of
+        # "2024-25") silently matches zero rows and used to print all
+        # zeros with no hint the season string itself was the problem.
+        if stats.considered == 0 and season is not None:
+            seasons = replay.known_seasons(con)
+            if seasons:
+                message += (
+                    f" No games at all matched season '{season}'. Seasons present "
+                    f"in the archive: {', '.join(seasons)}."
+                )
+            else:
+                message += " No games at all exist in the archive yet."
+        typer.echo(message)
         raise typer.Exit(code=1)
 
-    typer.echo(report.format_report(report.summarize(preds, stats)))
+    # FIX 10: reuse status.py's own determination of whether odds data
+    # exists (row_count over the correctly-resolved physical table) rather
+    # than duplicating that SQL or hardcoding an assumed cause. Today there
+    # are zero odds rows in the archive at all, so market comparison is
+    # unavailable regardless of season/buffer -- that fact is checked live,
+    # not assumed, so it stays true the moment 'predictor ingest-odds' runs.
+    odds_health = next(
+        h for h in status_mod.check_sources(con) if h.name == "odds_snapshots"
+    )
+    market_available = odds_health.row_count > 0
+    market_reason = (
+        None
+        if market_available
+        else (
+            "no odds data has been collected yet "
+            f"({odds_health.row_count} row(s) in the archive)"
+        )
+    )
+
+    result = report.summarize(
+        preds,
+        stats,
+        model=model,
+        buffer_minutes=buffer_minutes,
+        market_available=market_available,
+        market_reason=market_reason,
+    )
+    typer.echo(report.format_report(result))
 
 
 if __name__ == "__main__":

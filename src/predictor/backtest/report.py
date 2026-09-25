@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from collections.abc import Sequence
 
@@ -11,6 +12,8 @@ from predictor.backtest.replay import Prediction, ReplayStats
 class BacktestResult:
     predictions: Sequence[Prediction]
     stats: ReplayStats
+    model: str
+    buffer_minutes: int
     brier: float
     log_loss: float
     accuracy: float
@@ -18,24 +21,46 @@ class BacktestResult:
     calibration_error: float
     bins: list[metrics.CalibrationBin]
     market_available: bool
+    market_reason: str | None
     reconstructed_share: float
 
 
 def summarize(
-    preds: Sequence[Prediction], stats: ReplayStats
+    preds: Sequence[Prediction],
+    stats: ReplayStats,
+    *,
+    model: str,
+    buffer_minutes: int,
+    market_available: bool,
+    market_reason: str | None = None,
 ) -> BacktestResult:
     """Compute every headline metric. Raises if there is nothing to score."""
     return BacktestResult(
         predictions=preds,
         stats=stats,
+        # FIX 6 (final review, part 2): the report used to say nothing about
+        # which model produced it, what season/buffer it ran with, or which
+        # games it actually scored -- a reader could not tell two runs
+        # apart. `model` and `buffer_minutes` cannot be derived from `preds`
+        # (they are inputs to the run, not outputs of it), so the caller
+        # must pass them through.
+        model=model,
+        buffer_minutes=buffer_minutes,
         brier=metrics.brier_score(preds),
         log_loss=metrics.log_loss(preds),
         accuracy=metrics.accuracy(preds),
         home_baseline=metrics.home_rate(preds),
         calibration_error=metrics.calibration_error(preds),
         bins=metrics.calibration_bins(preds),
-        # No odds data exists yet; the market comparison is built but cannot run.
-        market_available=False,
+        # FIX 10 (final review, part 2): whether odds data actually exists
+        # is determined by the caller (predictor.status's own row-count
+        # check, reused rather than duplicated -- see cli.py) and passed in
+        # here, rather than hardcoded. Hardcoding `False` with a guessed
+        # cause ("no ODDS_API_KEY set") was only true by coincidence: the
+        # moment `ingest-odds` runs, that sentence goes false while the
+        # report keeps printing it.
+        market_available=market_available,
+        market_reason=market_reason,
         # FIX 2: computed over `preds` (each Prediction already carries its
         # own `reconstructed` flag, read by replay.py through
         # db.POINT_IN_TIME_TABLES -- no physical table name belongs here).
@@ -45,15 +70,29 @@ def summarize(
     )
 
 
+def _provenance_header(result: BacktestResult) -> list[str]:
+    """FIX 6: what this report is a report OF -- printed above everything else.
+
+    A reader months from now, or anyone the user publishes this to, must be
+    able to tell which model produced it, which season(s), what buffer, and
+    which games were actually scored -- without knowing anything about how
+    this harness works.
+    """
+    seasons = sorted({p.season for p in result.predictions})
+    season_label = seasons[0] if len(seasons) == 1 else "all seasons"
+    game_dates = sorted(p.game_date for p in result.predictions)
+    return [
+        f"  Model               : {result.model}",
+        f"  Season              : {season_label}",
+        f"  Buffer              : {result.buffer_minutes:,} minutes before tip-off",
+        f"  Games scored        : {game_dates[0].isoformat()} to {game_dates[-1].isoformat()}",
+        "",
+    ]
+
+
 def format_report(result: BacktestResult) -> str:
     """A report someone can read in thirty seconds and trust."""
-    edge = result.accuracy - result.home_baseline
-    if edge > 0.005:
-        verdict = f"BEATS always-pick-home by {edge * 100:.1f} points"
-    elif edge < -0.005:
-        verdict = f"LOSES TO always-pick-home by {abs(edge) * 100:.1f} points"
-    else:
-        verdict = "MATCHES always-pick-home"
+    header = _provenance_header(result)
 
     # FIX 3: `metrics.accuracy` counts p_home >= threshold as a home pick, so
     # a predictor that puts EVERY game on the same side of the line (a flat
@@ -62,29 +101,70 @@ def format_report(result: BacktestResult) -> str:
     # sentence, since a coin flip does not match always-pick-home. When that
     # happens, accuracy cannot discriminate this predictor from the
     # baseline at all, so the verdict must not claim a comparison. This also
-    # fires for always-home itself (home_pick_share == 1.0) -- that is
-    # correct and desirable: its accuracy genuinely IS the baseline, and
-    # saying accuracy isn't a meaningful comparison here is still honest,
-    # not wrong.
+    # fires for always-home itself (home_pick_share == 1.0).
     home_share = metrics.home_pick_share(result.predictions)
+    accuracy_suffix = ""
+
     if home_share in (0.0, 1.0):
-        side = "home" if home_share == 1.0 else "away"
-        verdict = (
-            f"ACCURACY NOT MEANINGFUL -- every prediction favoured the {side} "
-            "side, so accuracy cannot distinguish this predictor from "
-            "always-pick-home. See the Brier score and calibration table "
-            "below instead."
-        )
+        # FIX 12(d): the same "one-sided" message used to read identically
+        # for always-home and for a flat coin-flip predictor, even though a
+        # flat 0.5 predictor is NOT the same predictor as always-home -- it
+        # only happens to make the same PICK on every game, at a different
+        # stated probability. When the probabilities are ALSO identical to
+        # the baseline's (every p_home == 1.0), it is a stronger and clearer
+        # statement to say the predictor simply IS always-pick-home.
+        if home_share == 1.0 and all(p.p_home == 1.0 for p in result.predictions):
+            verdict = (
+                "PREDICTOR IS always-pick-home -- every prediction, and every "
+                "stated probability, is identical to the baseline's, so there "
+                "is nothing to compare. See the Brier score and calibration "
+                "table below instead."
+            )
+        else:
+            side = "home" if home_share == 1.0 else "away"
+            verdict = (
+                f"ACCURACY NOT MEANINGFUL -- every prediction favoured the {side} "
+                "side, so accuracy cannot distinguish this predictor from "
+                "always-pick-home. See the Brier score and calibration table "
+                "below instead."
+            )
+    else:
+        # FIX 8 (final review, part 2): a hardcoded `edge > 0.005` verdict
+        # had no notion of sample size -- on a single season (~400 games)
+        # noise alone is worth several points of "edge". Use the standard
+        # paired (McNemar) comparison against always-pick-home instead:
+        # only games where the predictor disagrees with the baseline (picks
+        # away) carry any information, and the verdict must say so is not
+        # distinguishable from chance whenever the observed edge is smaller
+        # than its own margin.
+        pc = metrics.paired_comparison(result.predictions)
+        edge_pts = pc.edge * 100
+        margin_pts = 2 * pc.standard_error * 100
+        accuracy_suffix = f"  +/- {margin_pts:.1f}"
+        if abs(pc.wins - pc.losses) < 2 * math.sqrt(pc.wins + pc.losses):
+            verdict = (
+                f"TOO CLOSE TO CALL -- edge over always-pick-home is "
+                f"{edge_pts:+.1f} +/- {margin_pts:.1f} points, too small to "
+                "tell from chance"
+            )
+        elif edge_pts > 0:
+            verdict = f"BEATS always-pick-home by {edge_pts:.1f} +/- {margin_pts:.1f} points"
+        else:
+            verdict = (
+                f"LOSES TO always-pick-home by {abs(edge_pts):.1f} +/- "
+                f"{margin_pts:.1f} points"
+            )
 
     s = result.stats
-    lines = [
+    lines = header + [
         verdict,
         "",
         f"  games scored        : {s.predicted:,} of {s.considered:,} considered",
-        f"  accuracy            : {result.accuracy * 100:.1f}%",
+        f"  accuracy            : {result.accuracy * 100:.1f}%{accuracy_suffix}",
         f"  always-pick-home    : {result.home_baseline * 100:.1f}%  (the baseline)",
         f"  Brier score         : {result.brier:.4f}  (lower is better; 0.25 is a coin flip)",
-        f"  log loss            : {result.log_loss:.4f}",
+        f"  log loss            : {result.log_loss:.4f}  (lower is better; 0.6931 is a "
+        "coin flip; punishes confident wrong answers far harder than Brier does)",
         f"  calibration error   : {result.calibration_error * 100:.1f} points average gap",
         "",
         "  Calibration -- when it said X%, how often did that happen?",
@@ -98,6 +178,14 @@ def format_report(result: BacktestResult) -> str:
         )
 
     lines += ["", "  Coverage and exclusions:"]
+    # FIX 12(c): the harness only ever scores REGULAR-SEASON games (the
+    # replay's own game_id filter is 'LIKE 002%') -- playoffs, play-in, and
+    # preseason games are excluded entirely and never appear in the
+    # "considered" count above. Said plainly, always, not just when asked.
+    lines.append(
+        "    Scope: regular-season games only -- playoffs, play-in, and preseason "
+        "games are out of scope and are not counted above"
+    )
     if s.skipped_conflicting_metadata:
         lines.append(
             f"    {s.skipped_conflicting_metadata:,} game(s) skipped -- the archive holds "
@@ -105,13 +193,34 @@ def format_report(result: BacktestResult) -> str:
             "disagrees between ingested rows), so re-run 'predictor ingest-season' "
             "for the affected season(s) to fix them"
         )
+    if s.skipped_buffer_too_early:
+        lines.append(
+            f"    {s.skipped_buffer_too_early:,} game(s) skipped -- the buffer reaches "
+            "back before the game was even on the schedule, so the predictor would "
+            "have been asked to predict a game it had no way of knowing existed yet"
+        )
     if s.skipped_no_tipoff:
         lines.append(
             f"    {s.skipped_no_tipoff:,} game(s) skipped -- no tip-off time could be "
             "resolved, so no honest pre-game cutoff exists for them"
         )
+        # FIX 11: a pooled count reads as scattered noise; broken down by
+        # season it can reveal that the exclusion is concentrated in one or
+        # two seasons instead (measured: 65% of 2025-26, 27% of 2019-20,
+        # near zero everywhere else).
+        for season in sorted(s.skipped_no_tipoff_by_season):
+            n = s.skipped_no_tipoff_by_season[season]
+            if n:
+                total = s.considered_by_season.get(season, n)
+                lines.append(f"        {season}: {n:,} of {total:,}")
     if s.skipped_no_result:
         lines.append(f"    {s.skipped_no_result:,} game(s) skipped -- not yet played")
+    if s.skipped_score_missing:
+        lines.append(
+            f"    {s.skipped_score_missing:,} game(s) skipped -- played, but the archive "
+            "did not record the score, so re-run 'predictor ingest-season' for the "
+            "affected season(s) to fix them"
+        )
     if s.skipped_result_visible:
         lines.append(
             f"    {s.skipped_result_visible:,} game(s) skipped -- result already visible at "
@@ -131,8 +240,8 @@ def format_report(result: BacktestResult) -> str:
     if not result.market_available:
         lines += [
             "",
-            "  Market comparison: unavailable -- no odds data has been collected "
-            "(no ODDS_API_KEY set), so there is nothing to compare against.",
+            f"  Market comparison: unavailable -- {result.market_reason}, so there is "
+            "nothing to compare against.",
         ]
 
     # FIX 2: every published number rests on reconstructed timestamps this

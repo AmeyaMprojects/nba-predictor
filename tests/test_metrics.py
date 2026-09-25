@@ -121,3 +121,35 @@ def test_home_pick_share_is_the_fraction_of_home_picks():
 def test_home_pick_share_on_an_empty_list_raises():
     with pytest.raises(metrics.MetricsError):
         metrics.home_pick_share([])
+
+
+# --- FIX 8: paired_comparison ------------------------------------------
+
+
+def test_paired_comparison_ignores_games_where_the_predictor_agrees_with_home():
+    # Home picks (p_home >= 0.5) never count toward wins/losses -- they
+    # carry no information about whether this predictor beats always-home.
+    preds = [make(0.9, True), make(0.9, False), make(0.5, True)]
+    pc = metrics.paired_comparison(preds)
+    assert pc.wins == 0
+    assert pc.losses == 0
+    assert pc.edge == 0.0
+
+
+def test_paired_comparison_counts_wins_and_losses_from_disagreement_games():
+    # 3 away picks: 2 correct (away won), 1 wrong (home won) -- plus 2 home
+    # picks that must be ignored.
+    preds = [
+        make(0.2, False), make(0.2, False), make(0.2, True),
+        make(0.9, True), make(0.9, False),
+    ]
+    pc = metrics.paired_comparison(preds)
+    assert pc.wins == 2
+    assert pc.losses == 1
+    assert pc.edge == pytest.approx((2 - 1) / 5)
+    assert pc.standard_error == pytest.approx(3**0.5 / 5)
+
+
+def test_paired_comparison_on_an_empty_list_raises():
+    with pytest.raises(metrics.MetricsError):
+        metrics.paired_comparison([])
