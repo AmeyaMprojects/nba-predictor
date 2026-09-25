@@ -153,3 +153,32 @@ def test_paired_comparison_counts_wins_and_losses_from_disagreement_games():
 def test_paired_comparison_on_an_empty_list_raises():
     with pytest.raises(metrics.MetricsError):
         metrics.paired_comparison([])
+
+
+# --- FIX 24 (final review, part 4): exact binomial sign test --------------
+
+
+def test_sign_test_p_value_of_a_24_to_0_split_matches_the_verified_archive_value():
+    # Matches the exact value verified in the final-fix-4 brief.
+    assert metrics.sign_test_p_value(24, 0) == pytest.approx(1.1920928955078125e-07)
+
+
+def test_sign_test_p_value_is_one_with_no_disagreement_games():
+    assert metrics.sign_test_p_value(0, 0) == 1.0
+
+
+def test_sign_test_p_value_is_symmetric_in_wins_and_losses():
+    assert metrics.sign_test_p_value(80, 20) == metrics.sign_test_p_value(20, 80)
+
+
+def test_sign_test_p_value_is_one_when_the_split_is_even():
+    assert metrics.sign_test_p_value(50, 50) == pytest.approx(1.0)
+
+
+def test_paired_comparison_carries_the_exact_sign_test_p_value():
+    preds = [
+        make(0.2, False), make(0.2, False), make(0.2, True),
+        make(0.9, True), make(0.9, False),
+    ]
+    pc = metrics.paired_comparison(preds)
+    assert pc.p_value == metrics.sign_test_p_value(pc.wins, pc.losses)

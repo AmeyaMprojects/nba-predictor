@@ -42,13 +42,22 @@ def log_loss(preds: Sequence[Prediction]) -> float:
 def accuracy(preds: Sequence[Prediction], threshold: float = 0.5) -> float:
     """Fraction of games where the favoured side actually won.
 
-    WARNING: if every prediction falls on the same side of `threshold` (see
-    `home_pick_share`), this collapses to a base rate -- a flat 0.5 predictor
-    (a coin flip) picks home every time and its accuracy becomes exactly the
-    home win rate, making it LOOK identical to always-pick-home even though
-    the two are not the same predictor. Do not compare this number to a
-    baseline without also checking `home_pick_share`; `report.format_report`
-    does this before printing its verdict line.
+    WARNING: if `home_pick_share` is exactly 1.0 -- every prediction favours
+    home -- this collapses to the home win rate, the SAME number
+    `home_rate` reports as the always-pick-home baseline. A flat 0.5
+    predictor (a coin flip) is the case to watch for: 0.5 >= threshold
+    counts as a home pick, so it picks home every time and its accuracy
+    becomes exactly the baseline's, making it LOOK identical to
+    always-pick-home even though the two are not the same predictor.
+
+    FIX 17 (final review, part 3): the opposite extreme -- `home_pick_share
+    == 0.0`, a predictor that favours away every time -- does NOT have this
+    problem. It disagrees with always-pick-home on every single game, so
+    its accuracy (the away win rate) is a real, well-defined comparison
+    against the baseline, not a collapse into looking like it. Only the
+    `== 1.0` case needs guarding against. Do not compare this number to a
+    baseline without also checking `home_pick_share == 1.0`;
+    `report.format_report` does this before printing its verdict line.
     """
     _require(preds)
     hits = sum(1 for p in preds if (p.p_home >= threshold) == p.home_won)
@@ -116,9 +125,36 @@ def calibration_bins(
     return out
 
 
+def sign_test_p_value(wins: int, losses: int) -> float:
+    """Exact two-sided binomial sign test p-value for `wins` vs `losses`.
+
+    FIX 24 (final review, part 4): replaces a normal approximation, a
+    continuity correction, and a flat 25-discordant-game floor that
+    together printed sentences that could be false as stated -- an edge
+    that visibly EXCEEDED its own printed margin while being called "too
+    small to tell from chance" (reachable at any N), and lopsided splits
+    below the floor (e.g. 24-0, exact p = 1.19e-07) dismissed as "too few
+    to tell them apart". The exact binomial test subsumes all three: it
+    needs no approximation, no correction, and no arbitrary minimum -- it
+    is correct at every N, including N as low as 1.
+
+    With `n = wins + losses`, under the null hypothesis (each disagreement
+    game is an independent coin flip between the two predictors), the
+    probability of a split at least as extreme as the observed one in
+    either direction is `2 * P(X >= max(wins, losses))` for `X ~
+    Binomial(n, 0.5)`, capped at 1.0 (the two tails can overlap when
+    wins == losses).
+    """
+    n = wins + losses
+    if n == 0:
+        return 1.0
+    tail = sum(math.comb(n, k) for k in range(max(wins, losses), n + 1))
+    return min(1.0, 2 * tail / 2**n)
+
+
 @dataclass(frozen=True)
 class PairedComparison:
-    """A McNemar-style paired comparison against the always-pick-home baseline.
+    """A paired comparison against the always-pick-home baseline.
 
     Only games where the predictor DISAGREES with always-home (i.e. the
     predictor's p_home falls below `threshold`, so it favours away) can tell
@@ -132,6 +168,7 @@ class PairedComparison:
     losses: int
     edge: float
     standard_error: float
+    p_value: float
 
 
 def paired_comparison(preds: Sequence[Prediction], threshold: float = 0.5) -> PairedComparison:
@@ -147,7 +184,12 @@ def paired_comparison(preds: Sequence[Prediction], threshold: float = 0.5) -> Pa
     scale as `edge`. Both wins and losses come from the SAME disagreement
     games, so wins + losses is also the count of those games; the standard
     error of a difference of two counts drawn from one binomial split is
-    sqrt(wins + losses) (see e.g. the McNemar test).
+    sqrt(wins + losses) (see e.g. the McNemar test). Informational only --
+    `report.format_report` no longer uses it to decide the verdict (see
+    `p_value`), only, if at all, as a labelled scale of chance variation.
+    `p_value` = the exact two-sided binomial sign test p-value (see
+    `sign_test_p_value`) -- this, not `standard_error`, is what
+    `report.format_report` uses to decide the verdict.
     """
     _require(preds)
     disagreements = [p for p in preds if p.p_home < threshold]
@@ -156,7 +198,10 @@ def paired_comparison(preds: Sequence[Prediction], threshold: float = 0.5) -> Pa
     n = len(preds)
     edge = (wins - losses) / n
     standard_error = math.sqrt(wins + losses) / n
-    return PairedComparison(wins=wins, losses=losses, edge=edge, standard_error=standard_error)
+    p_value = sign_test_p_value(wins, losses)
+    return PairedComparison(
+        wins=wins, losses=losses, edge=edge, standard_error=standard_error, p_value=p_value,
+    )
 
 
 def calibration_error(preds: Sequence[Prediction], n_bins: int = 10) -> float:

@@ -1,17 +1,19 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from collections.abc import Sequence
 
 from predictor.backtest import metrics
 from predictor.backtest.replay import Prediction, ReplayStats
 
-# FIX 16 (final review, part 3): below this many discordant (disagreement)
-# games, the paired comparison against always-pick-home is not evidence no
-# matter how lopsided the ratio looks -- e.g. 4 wins/0 losses has an exact
-# McNemar p-value of only 0.125.
-_MIN_DISCORDANT_GAMES = 25
+# FIX 24 (final review, part 4): the verdict is decided by the EXACT
+# two-sided binomial sign test p-value (`metrics.sign_test_p_value`), not by
+# a normal approximation, a continuity correction, or a flat minimum
+# discordant-game count -- see `_paired_verdict` below. There is no sample
+# size below which a lopsided-enough split stops being evidence: a 24-0
+# split (24 discordant games, far below the OLD 25-game floor this wave
+# removes) has an exact p-value of 1.19e-07.
+_SIGNIFICANCE_LEVEL = 0.05
 
 
 @dataclass(frozen=True)
@@ -154,54 +156,56 @@ def format_report(result: BacktestResult) -> str:
     else:
         # FIX 8 (final review, part 2): a hardcoded `edge > 0.005` verdict
         # had no notion of sample size -- on a single season (~400 games)
-        # noise alone is worth several points of "edge". Use the standard
-        # paired (McNemar) comparison against always-pick-home instead:
-        # only games where the predictor disagrees with the baseline (picks
-        # away) carry any information, and the verdict must say so is not
-        # distinguishable from chance whenever the observed edge is smaller
-        # than its own margin.
+        # noise alone is worth several points of "edge". Use a paired
+        # comparison against always-pick-home instead: only games where the
+        # predictor disagrees with the baseline (picks away) carry any
+        # information.
+        #
+        # FIX 24 (final review, part 4): the decision now rests entirely on
+        # `pc.p_value` -- the EXACT two-sided binomial sign test -- which
+        # replaces a normal approximation, a continuity correction, and the
+        # old flat `_MIN_DISCORDANT_GAMES` floor (all three removed; the
+        # exact test needs none of them and is correct at every N). Wave 3's
+        # version decided the verdict with one statistic (the
+        # continuity-corrected normal approximation) but PRINTED another
+        # (the uncorrected `+/- margin_pts`) -- for 446 reachable
+        # (wins, losses) combinations the printed edge visibly EXCEEDED its
+        # own printed margin while the sentence called it "too small to tell
+        # from chance". And 146 combinations below the old 25-game floor had
+        # an exact two-sided p < 0.05 (a 24-0 split: p = 1.19e-07) yet were
+        # printed as "too few to tell them apart". No sentence below states
+        # a margin at all, so neither failure mode is reachable any more --
+        # every branch states the edge, the number of disagreement games,
+        # and the exact p-value, and none of those three can contradict
+        # each other because none is derived from a different statistic
+        # than the one that decided the verdict.
         pc = metrics.paired_comparison(result.predictions)
         edge_pts = pc.edge * 100
-        margin_pts = 2 * pc.standard_error * 100
         # FIX 22(a) (final review, part 3): guard wins == losses == 0
         # explicitly rather than relying on it being unreachable by an
         # implicit coupling to the home_share == 0/1 branch above -- with
         # no discordant games at all there is nothing paired to compare.
         n_discordant = pc.wins + pc.losses
-        # FIX 16 (final review, part 3): a handful of discordant games can
-        # produce a huge, lucky-looking ratio -- 4 wins/0 losses is a
-        # perfect record but its exact McNemar p-value is only 0.125, not
-        # evidence, and the old check (below) had no minimum sample size at
-        # all. Below MIN_DISCORDANT games the verdict must say so outright,
-        # regardless of how lopsided the ratio looks. Above that floor, a
-        # continuity-corrected normal approximation (`|wins - losses| - 1`,
-        # floored at 0) replaces the uncorrected one -- the standard
-        # adjustment for using a continuous distribution to approximate a
-        # discrete count.
         if n_discordant == 0:
             verdict = (
                 "TOO CLOSE TO CALL -- the predictor never disagreed with "
                 "always-pick-home on a single scored game, so there is "
                 "nothing to compare"
             )
-        elif n_discordant < _MIN_DISCORDANT_GAMES:
+        elif pc.p_value < _SIGNIFICANCE_LEVEL:
+            direction = "BEATS" if edge_pts > 0 else "LOSES TO"
             verdict = (
-                f"TOO CLOSE TO CALL -- the predictor and always-pick-home "
-                f"only disagreed on {n_discordant:,} game(s), too few to "
-                "tell them apart"
+                f"{direction} always-pick-home by {abs(edge_pts):.1f} points "
+                f"-- {n_discordant:,} disagreement(s), exact sign-test "
+                f"p={pc.p_value:.3g}"
             )
-        elif max(abs(pc.wins - pc.losses) - 1, 0) < 2 * math.sqrt(n_discordant):
-            verdict = (
-                f"TOO CLOSE TO CALL -- edge over always-pick-home is "
-                f"{edge_pts:+.1f} +/- {margin_pts:.1f} points, too small to "
-                "tell from chance"
-            )
-        elif edge_pts > 0:
-            verdict = f"BEATS always-pick-home by {edge_pts:.1f} +/- {margin_pts:.1f} points"
         else:
             verdict = (
-                f"LOSES TO always-pick-home by {abs(edge_pts):.1f} +/- "
-                f"{margin_pts:.1f} points"
+                f"TOO CLOSE TO CALL -- edge over always-pick-home is "
+                f"{edge_pts:+.1f} points over {n_discordant:,} "
+                f"disagreement(s); an edge this size or larger arises by "
+                f"chance with p={pc.p_value:.3g} (not below the "
+                f"{_SIGNIFICANCE_LEVEL:g} significance threshold used here)"
             )
 
     s = result.stats

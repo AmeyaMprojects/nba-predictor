@@ -318,27 +318,35 @@ def _paired_preds(wins, losses, agreeing=10):
     return preds
 
 
-def test_verdict_is_too_close_to_call_within_the_margin():
+def test_verdict_is_too_close_to_call_when_the_exact_p_value_is_not_significant():
+    """wins=52/losses=48 (100 disagreement games): exact two-sided sign-test
+    p = 0.764, nowhere near significant, despite a positive raw edge."""
     preds = _paired_preds(wins=52, losses=48)
     text = report.format_report(summarize(preds))
     first = verdict_line(text)
     assert first.startswith("TOO CLOSE TO CALL")
-    assert "+3.6 +/- 18.2 points" in first
+    assert "+3.6" in first
+    assert "100 disagreement" in first
+    assert "p=0.764" in first
 
 
-def test_verdict_beats_outside_the_margin_states_the_margin():
+def test_verdict_beats_states_the_exact_p_value():
+    """wins=80/losses=20 (100 disagreement games): exact two-sided sign-test
+    p = 1.12e-09."""
     preds = _paired_preds(wins=80, losses=20)
     text = report.format_report(summarize(preds))
     first = verdict_line(text)
-    assert first == "BEATS always-pick-home by 54.5 +/- 18.2 points"
+    assert first == (
+        "BEATS always-pick-home by 54.5 points -- 100 disagreement(s), "
+        "exact sign-test p=1.12e-09"
+    )
     assert "accuracy            :" in text
 
 
-def test_accuracy_line_never_carries_the_edges_margin():
-    """FIX 15: the margin on the verdict line is the standard error of the
-    EDGE (wins - losses); printing it again on the accuracy line stated the
-    wrong quantity -- 2.5x too wide, and unlabelled. The verdict line is the
-    only place a margin belongs."""
+def test_accuracy_line_never_carries_a_margin():
+    """FIX 15 / FIX 24: no `+/-` margin belongs on the accuracy line -- and,
+    since FIX 24 removed the normal-approximation margin from the verdict
+    line too, `+/-` should not appear anywhere in the report at all."""
     preds = _paired_preds(wins=80, losses=20)
     text = report.format_report(summarize(preds))
     accuracy_line = next(
@@ -346,37 +354,87 @@ def test_accuracy_line_never_carries_the_edges_margin():
     )
     assert "+/-" not in accuracy_line
     assert "%" in accuracy_line
+    assert "+/-" not in text
 
 
-def test_verdict_loses_to_outside_the_margin_states_the_margin():
+def test_verdict_loses_to_states_the_exact_p_value():
     preds = _paired_preds(wins=20, losses=80)
     text = report.format_report(summarize(preds))
     first = verdict_line(text)
-    assert first == "LOSES TO always-pick-home by 54.5 +/- 18.2 points"
+    assert first == (
+        "LOSES TO always-pick-home by 54.5 points -- 100 disagreement(s), "
+        "exact sign-test p=1.12e-09"
+    )
 
 
-# --- FIX 16: a minimum discordant-pair requirement and a continuity
-# correction -- a handful of lucky games must not read as a verdict --------
+# --- FIX 24 (final review, part 4): the exact binomial sign test replaces
+# the normal approximation, the continuity correction, and the flat
+# 25-discordant-game floor -- all three are gone; the exact test needs none
+# of them and is correct at every N. -----------------------------------
 
 
-def test_verdict_is_too_close_to_call_below_the_minimum_discordant_games():
+def test_verdict_is_too_close_to_call_below_significance_at_4_to_0():
     """4 wins / 0 losses is a perfect record but on only 4 disagreement
-    games -- exact McNemar p there is 0.125, not evidence. Below the
-    minimum, the verdict must say so regardless of the ratio."""
+    games -- exact sign-test p there is 0.125, not evidence."""
     preds = _paired_preds(wins=4, losses=0)
     text = report.format_report(summarize(preds))
     first = verdict_line(text)
     assert first.startswith("TOO CLOSE TO CALL")
-    assert "too few" in first.lower()
-    assert "4" in first
+    assert "4 disagreement" in first
+    assert "p=0.125" in first
 
 
-def test_verdict_is_too_close_to_call_below_the_minimum_even_at_5_to_0():
-    """5/0 (exact McNemar p = 0.0625) is still not evidence."""
+def test_verdict_is_too_close_to_call_below_significance_at_5_to_0():
+    """5/0 (exact sign-test p = 0.0625) is still not evidence."""
     preds = _paired_preds(wins=5, losses=0)
     text = report.format_report(summarize(preds))
     first = verdict_line(text)
     assert first.startswith("TOO CLOSE TO CALL")
+    assert "p=0.0625" in first
+
+
+def test_a_24_to_0_split_is_called_significant_even_though_it_is_below_the_old_floor():
+    """FIX 24's core case: a 24-0 split (24 disagreement games) sat below
+    Wave 3's flat 25-game floor and was printed as "too few to tell them
+    apart" -- but its exact two-sided sign-test p-value is 1.19e-07, about
+    as significant as paired comparisons get. The old floor was simply
+    wrong for a split this lopsided; the exact test has no such blind spot.
+    """
+    preds = _paired_preds(wins=24, losses=0)
+    text = report.format_report(summarize(preds))
+    first = verdict_line(text)
+    assert first.startswith("BEATS")
+    assert "24 disagreement" in first
+    assert "p=1.19e-07" in first
+
+
+def test_a_small_edge_over_many_discordant_games_is_not_significant():
+    """520 wins / 480 losses (1,000 disagreement games) is a positive raw
+    edge, but the exact sign-test p-value (0.217) is nowhere near 0.05 --
+    a large N does not by itself make a small edge meaningful."""
+    preds = _paired_preds(wins=520, losses=480)
+    text = report.format_report(summarize(preds))
+    first = verdict_line(text)
+    assert first.startswith("TOO CLOSE TO CALL")
+    assert "1,000 disagreement" in first
+    assert "p=0.217" in first
+
+
+def test_no_verdict_sentence_ever_states_a_margin_the_edge_could_exceed():
+    """Wave 3 decided the verdict with a continuity-corrected normal
+    approximation but PRINTED the uncorrected `+/- margin_pts` -- 446
+    reachable (wins, losses) combinations printed an edge that visibly
+    EXCEEDED its own stated margin while calling it "too small to tell
+    from chance". FIX 24 removes the margin from every verdict sentence
+    entirely, so this cannot recur: across a sweep of (wins, losses)
+    combinations that reproduce that bug's shape (small edge, sizeable N),
+    no verdict line may contain a '+/-' at all.
+    """
+    for wins, losses in [(1, 0), (15, 9), (60, 40), (520, 480), (24, 0), (80, 20)]:
+        preds = _paired_preds(wins=wins, losses=losses)
+        text = report.format_report(summarize(preds))
+        first = verdict_line(text)
+        assert "+/-" not in first, (wins, losses, first)
 
 
 def test_paired_comparison_is_well_defined_with_no_disagreement_games():
@@ -388,8 +446,7 @@ def test_paired_comparison_is_well_defined_with_no_disagreement_games():
     division by zero, no NaN) rather than relying on that coupling to never
     be asked -- report.format_report's own explicit `n_discordant == 0`
     guard exists for exactly this reason, so a future change to the
-    home_share branch cannot silently resurrect a bogus
-    'LOSES TO ... by 0.0 +/- 0.0' verdict.
+    home_share branch cannot silently resurrect a bogus verdict.
     """
     preds = [make(0.9, True, f"h{i}") for i in range(10)]
     pc = metrics.paired_comparison(preds)
@@ -397,18 +454,20 @@ def test_paired_comparison_is_well_defined_with_no_disagreement_games():
     assert pc.losses == 0
     assert pc.edge == 0.0
     assert pc.standard_error == 0.0
+    assert pc.p_value == 1.0
 
 
-def test_continuity_correction_flips_a_borderline_verdict_to_too_close_to_call():
-    """Without the continuity correction, wins=60/losses=40 (110 total
-    games) sits exactly on the normal-approximation threshold
-    (|60-40| == 2*sqrt(100)) and reads as BEATS. The continuity correction
-    (|wins - losses| - 1) pulls it back under the threshold, where a
-    discrete count this close to the boundary honestly belongs."""
+def test_verdict_is_too_close_to_call_at_the_old_continuity_correction_boundary():
+    """wins=60/losses=40 (100 disagreement games) used to sit exactly on
+    Wave 3's continuity-corrected normal-approximation boundary. Under the
+    exact sign test its p-value is 0.0569 -- still just above the 0.05
+    threshold, so it stays TOO CLOSE TO CALL, but now because an exact
+    calculation says so, not because of an ad hoc correction."""
     preds = _paired_preds(wins=60, losses=40)
     text = report.format_report(summarize(preds))
     first = verdict_line(text)
     assert first.startswith("TOO CLOSE TO CALL")
+    assert "p=0.0569" in first
 
 
 def test_paired_comparison_counts_only_disagreement_games():
