@@ -103,7 +103,6 @@ def format_report(result: BacktestResult) -> str:
     # baseline at all, so the verdict must not claim a comparison. This also
     # fires for always-home itself (home_pick_share == 1.0).
     home_share = metrics.home_pick_share(result.predictions)
-    accuracy_suffix = ""
 
     if home_share in (0.0, 1.0):
         # FIX 12(d): the same "one-sided" message used to read identically
@@ -140,7 +139,6 @@ def format_report(result: BacktestResult) -> str:
         pc = metrics.paired_comparison(result.predictions)
         edge_pts = pc.edge * 100
         margin_pts = 2 * pc.standard_error * 100
-        accuracy_suffix = f"  +/- {margin_pts:.1f}"
         if abs(pc.wins - pc.losses) < 2 * math.sqrt(pc.wins + pc.losses):
             verdict = (
                 f"TOO CLOSE TO CALL -- edge over always-pick-home is "
@@ -160,7 +158,7 @@ def format_report(result: BacktestResult) -> str:
         verdict,
         "",
         f"  games scored        : {s.predicted:,} of {s.considered:,} considered",
-        f"  accuracy            : {result.accuracy * 100:.1f}%{accuracy_suffix}",
+        f"  accuracy            : {result.accuracy * 100:.1f}%",
         f"  always-pick-home    : {result.home_baseline * 100:.1f}%  (the baseline)",
         f"  Brier score         : {result.brier:.4f}  (lower is better; 0.25 is a coin flip)",
         f"  log loss            : {result.log_loss:.4f}  (lower is better; 0.6931 is a "

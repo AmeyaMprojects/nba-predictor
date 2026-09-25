@@ -295,7 +295,20 @@ def test_verdict_beats_outside_the_margin_states_the_margin():
     first = verdict_line(text)
     assert first == "BEATS always-pick-home by 54.5 +/- 18.2 points"
     assert "accuracy            :" in text
-    assert "+/- 18.2" in text  # appended to the accuracy line too
+
+
+def test_accuracy_line_never_carries_the_edges_margin():
+    """FIX 15: the margin on the verdict line is the standard error of the
+    EDGE (wins - losses); printing it again on the accuracy line stated the
+    wrong quantity -- 2.5x too wide, and unlabelled. The verdict line is the
+    only place a margin belongs."""
+    preds = _paired_preds(wins=80, losses=20)
+    text = report.format_report(summarize(preds))
+    accuracy_line = next(
+        line for line in text.splitlines() if line.strip().startswith("accuracy")
+    )
+    assert "+/-" not in accuracy_line
+    assert "%" in accuracy_line
 
 
 def test_verdict_loses_to_outside_the_margin_states_the_margin():
