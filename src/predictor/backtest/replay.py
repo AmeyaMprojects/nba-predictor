@@ -150,13 +150,31 @@ def replay(
     # MIN() is used (not ANY_VALUE/first) purely for determinism; when a
     # group is unambiguous every row agrees, so MIN() and "the" value are
     # the same thing.
+    #
+    # FIX 19 (final review, part 3): `clause` (which includes the
+    # `--season` predicate) used to filter the rows BEFORE this GROUP BY,
+    # so a game whose rows carry two different season labels could pass
+    # the uniqueness check under `--season`: filtering to just the
+    # matching-season row(s) first hid the OTHER, conflicting row from the
+    # aggregate entirely, and the guard this whole query exists for never
+    # saw the conflict. Reproduced: such a game is correctly skipped in a
+    # full run but silently scored under `--season` -- the exact
+    # double-scoring the guard exists to prevent.
+    #
+    # The subquery below decides WHICH game ids to include (every game
+    # when there is no `--season`, or every game with AT LEAST ONE row
+    # matching it when there is); the outer query then groups over EVERY
+    # row for those game ids, conflicting rows included, so a game whose
+    # rows disagree on season is caught and skipped identically whether or
+    # not `--season` is passed.
     rows = con.execute(
         f"SELECT game_id, MIN(season) AS season, MIN(game_date) AS game_date, "
         f"MIN(home_team) AS home_team, MIN(away_team) AS away_team, "
         f"count(DISTINCT season) AS n_season, count(DISTINCT game_date) AS n_game_date, "
         f"count(DISTINCT home_team) AS n_home_team, count(DISTINCT away_team) AS n_away_team "
-        f"FROM {games_table} WHERE {clause} GROUP BY game_id "
-        f"ORDER BY game_date, game_id",
+        f"FROM {games_table} WHERE game_id LIKE '002%' AND game_id IN "
+        f"(SELECT game_id FROM {games_table} WHERE {clause}) "
+        f"GROUP BY game_id ORDER BY game_date, game_id",
         params,
     ).fetchall()
 

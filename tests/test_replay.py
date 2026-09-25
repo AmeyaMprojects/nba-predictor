@@ -317,6 +317,32 @@ def test_conflicting_metadata_across_rows_is_skipped_not_double_predicted(con):
     assert stats.considered == 1
 
 
+def test_conflicting_season_is_skipped_identically_with_or_without_season_filter(con):
+    """FIX 19 (final review, part 3): the season predicate used to apply
+    BEFORE the uniqueness check, so `--season` matching just ONE of a
+    conflicting game's two season labels hid the OTHER row from the
+    aggregate entirely, letting the game pass the check it should have
+    failed and get predicted (and scored) -- the exact double-scoring the
+    guard exists to prevent. Must be skipped identically with no
+    --season, with the fixture's real season, and with the other
+    (bogus, conflicting) season label.
+    """
+    g = db.POINT_IN_TIME_TABLES["games"]
+    con.execute(
+        f"INSERT INTO {g} (game_id, season, game_date, home_team, away_team,"
+        " home_points, away_points, status, observed_at, reconstructed)"
+        " VALUES (?,?,?,?,?,?,?,?,?,TRUE)",
+        ["0022400561", "2023-24", date(2025, 1, 15), "PHI", "NYK",
+         None, None, "SCHEDULED", TIP - timedelta(days=30)],
+    )
+
+    for season in (None, "2024-25", "2023-24"):
+        preds, stats = replay.replay(con, always_home, season=season)
+        assert preds == [], f"season={season!r} predicted a conflicting game"
+        assert stats.skipped_conflicting_metadata == 1, f"season={season!r}"
+        assert stats.predicted == 0, f"season={season!r}"
+
+
 # --- Finding 5: a negative buffer moves the cutoff past tip-off ---
 
 
