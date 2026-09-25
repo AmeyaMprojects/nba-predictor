@@ -4,6 +4,7 @@ import duckdb
 import pytest
 
 from predictor import db
+from predictor.config import PROJECT_ROOT
 
 
 @pytest.fixture
@@ -197,6 +198,37 @@ def test_injury_status_insert_or_replace_collapses_identical_key(con):
     ).fetchall()
     assert len(rows) == 1
     assert rows[0][0] == "Out"
+
+
+# --- FIX 1 rail: refuse to open the real database during a test run ------
+
+
+def test_connect_refuses_the_real_database_path_during_a_test_run():
+    """A regression here would let a future test silently write to the
+
+    real, irreplaceable archive again -- exactly FIX 1's failure mode. This
+    calls connect() with the real path explicitly (not via settings.db_path,
+    which conftest.py already redirects); PYTEST_CURRENT_TEST is set by
+    pytest itself for the whole duration of this test, so the rail must
+    trip -- and it must do so before ever touching the real file on disk.
+    """
+    real_path = PROJECT_ROOT / "data" / "predictor.duckdb"
+    with pytest.raises(RuntimeError, match="PREDICTOR_DATA_DIR"):
+        db.connect(real_path)
+
+
+def test_connect_allows_the_real_database_path_outside_a_test_run(monkeypatch, tmp_path):
+    """The rail is scoped to test runs only -- it must not fire in production.
+
+    Uses a decoy file standing in for the real path (monkeypatched onto
+    db._REAL_DB_PATH) so this test cannot accidentally open the genuine
+    archive even with PYTEST_CURRENT_TEST cleared.
+    """
+    decoy = tmp_path / "predictor.duckdb"
+    monkeypatch.setattr(db, "_REAL_DB_PATH", decoy)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    con = db.connect(decoy)
+    con.close()
 
 
 def test_injury_status_game_date_is_not_null(con):

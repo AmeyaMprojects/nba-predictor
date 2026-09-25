@@ -1456,7 +1456,7 @@ uv run predictor backtest --model always-home
 uv run predictor backtest --model coin-flip
 ```
 
-Expected: always-home accuracy near **55.2%** across all scored games, and coin-flip near 50% with a Brier of about 0.25. Record both in the commit message — they are the numbers every future model is measured against.
+Expected: always-home accuracy near **54.9%** across the scored games (the 7,200 with a resolvable tip-off; the figure across all 8,289 regular-season games is 55.2%). Coin-flip reports that same 54.9% accuracy — a flat 0.5 ties toward home under `accuracy`'s `p >= threshold` rule — with a Brier of 0.2500 and a log loss of 0.6931. Brier and log loss, not accuracy, are what show a tied predictor is uninformative. Record all of these in the commit message — they are the numbers every future model is measured against.
 
 - [ ] **Step 7: Commit**
 
@@ -1471,8 +1471,15 @@ git commit -m "feat: backtest CLI command"
 
 - [ ] `uv run pytest -v` passes, including every test in `tests/test_backtest_leakage.py`.
 - [ ] `uv run predictor backtest --model always-home --season 2023-24` scores roughly 1,229 games.
-- [ ] Always-pick-home accuracy over the full window is approximately 55.2%, matching the independently measured baseline.
-- [ ] A coin-flip predictor scores a Brier of approximately 0.25.
+- [ ] Always-pick-home accuracy over the full window is approximately 54.9%.
+  NOTE: 55.2% is the home win rate over ALL 8,289 regular-season games; the
+  harness scores only the 7,200 with a resolvable tip-off, whose home win rate
+  is 54.9%. The harness's own sample is the right denominator.
+- [ ] A coin-flip predictor scores a Brier of approximately 0.25. NOTE: its
+  reported *accuracy* will NOT be near 50% — `accuracy` counts `p >= threshold`
+  as a home pick, so a flat 0.5 predictor ties toward home on every game and
+  its accuracy collapses to the home base rate. Brier and log loss are the
+  metrics that correctly show a tied predictor is uninformative.
 - [ ] The report states tip-off coverage and exclusions explicitly rather than silently scoring a subset.
 - [ ] The report says market comparison is unavailable rather than printing a misleading zero.
 - [ ] No predictor can reach a final score through the view handed to it, proven by the adversarial tests.

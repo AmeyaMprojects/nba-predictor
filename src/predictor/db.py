@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import KeysView
 from datetime import datetime
 from pathlib import Path
@@ -8,7 +9,14 @@ from typing import Mapping
 
 import duckdb
 
-from predictor.config import settings
+from predictor.config import PROJECT_ROOT, settings
+
+# FIX 1 (final review, part 1): the real, irreplaceable archive. A test run
+# (PYTEST_CURRENT_TEST is set by pytest itself for the duration of every
+# test) must never open this file -- see the rail in connect() below and
+# tests/conftest.py, which points settings.data_dir at a throwaway temp
+# directory before predictor.config is ever imported.
+_REAL_DB_PATH = PROJECT_ROOT / "data" / "predictor.duckdb"
 
 # Logical name (what feature code and AsOfView callers use) -> physical
 # table name (what actually exists in the DuckDB catalog). The physical
@@ -140,10 +148,28 @@ CREATE TABLE IF NOT EXISTS ingest_runs (
 """
 
 
-def connect(path: Path | None = None) -> duckdb.DuckDBPyConnection:
+def connect(
+    path: Path | None = None, *, read_only: bool = False
+) -> duckdb.DuckDBPyConnection:
     target = path or settings.db_path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    con = duckdb.connect(str(target))
+    # FIX 1 rail: this must trip even when a caller passes an explicit
+    # `path` pointing at the real file, not just when it falls back to
+    # `settings.db_path` -- a regression could reintroduce either. Resolved
+    # so a relative or symlinked path pointing at the same file cannot slip
+    # past a straight string/Path equality check.
+    if os.environ.get("PYTEST_CURRENT_TEST") and target.resolve() == _REAL_DB_PATH.resolve():
+        raise RuntimeError(
+            f"refusing to open the real database at {target} during a test "
+            "run (PYTEST_CURRENT_TEST is set). Tests must never touch the "
+            "real, irreplaceable archive -- point PREDICTOR_DATA_DIR at a "
+            "throwaway directory, or pass db.connect() a tmp_path-based "
+            "path, instead."
+        )
+    if read_only:
+        con = duckdb.connect(str(target), read_only=True)
+    else:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        con = duckdb.connect(str(target))
     # Without this, DuckDB returns timestamptz values in the machine's local
     # zone, so identical code yields different-looking results per machine.
     con.execute("SET TimeZone='UTC'")
