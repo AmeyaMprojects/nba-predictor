@@ -266,6 +266,8 @@ def backtest_cmd(
     ),
 ) -> None:
     """Replay real games and score a predictor on what was knowable pre-tipoff."""
+    import duckdb
+
     from predictor import db
     from predictor.backtest import baselines, replay, report
     from predictor.config import settings
@@ -280,9 +282,19 @@ def backtest_cmd(
         )
         raise typer.Exit(code=1)
 
-    settings.ensure_dirs()
-    con = db.connect()
-    db.migrate(con)
+    # FIX 1(c): backtest only ever READS the archive -- it must not migrate
+    # (rewrite schema across every real row on every run) or take DuckDB's
+    # exclusive write lock (which would collide with the live poll-news
+    # job). read_only=True enforces both.
+    try:
+        con = db.connect(read_only=True)
+    except duckdb.Error:
+        typer.echo(
+            "No database found to back-test against. Run an ingest command "
+            "first (for example 'predictor ingest-season <season>'), then "
+            "try 'predictor backtest' again."
+        )
+        raise typer.Exit(code=1) from None
 
     try:
         preds, stats = replay.replay(
