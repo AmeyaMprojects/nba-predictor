@@ -45,9 +45,14 @@ Five sub-projects. Each receives its own implementation plan. Order is dependenc
 |---|---|---|
 | 1 | Data spine | Yes |
 | 2 | Backtest harness | Yes |
+| 2.5 | Schedule source | Yes |
 | 3 | Prediction core | Yes |
 | 4 | Context engine | No |
 | 5 | Artifact layer | Partial (charts + log) |
+
+Sub-project 2.5 was added after sub-projects 1 and 2 shipped, when
+`ScheduleLeagueV2` was found to close four open gaps at once. See
+**1.1 Schedule source**.
 
 Sub-project 1 begins immediately, before the rest of the design is built out. News history cannot be recovered retroactively, so the RSS archiver should start running as early as possible. Injury reports, by contrast, are backfillable to ~2019-12 (see below), so that data is not at risk.
 
@@ -95,6 +100,71 @@ Confirmed behaviour:
 This is a material improvement: roughly six seasons of **genuine**
 point-in-time injury data are available, rather than hindsight
 reconstruction.
+
+## 1.1 Schedule source
+
+**Verified 2026-09-26.** `nba_api`'s `ScheduleLeagueV2` returns a league
+schedule per season, historical and forward, and closes four gaps that were
+previously open:
+
+| Gap | Closed by |
+|---|---|
+| No forward schedule — upcoming games could not be enumerated | 1,274 games returned for 2026-27 |
+| Tip-off times existed only inside injury-report PDFs, whose CDN is frozen after 2025-12-21 | `gameDateTimeUTC`, 100% coverage |
+| No `is_neutral_site` flag | `isNeutral` |
+| No arena locations for travel and altitude | `arenaName`, `arenaCity`, `arenaState` |
+
+Tip-off coverage is complete where the PDFs were not: 1,230 of 1,230 for
+2023-24 and 1,059 of 1,059 for 2019-20, against the harness's 86.9%.
+
+**Cross-validation.** Over all 1,230 games of 2023-24, the schedule's tip-off
+agrees **exactly** with the PDF-derived time on all 1,229 the PDFs resolve,
+with zero disagreements in either direction, and covers the one they miss.
+Two unrelated sources, no conflicts — independent confirmation of the PDF
+parser and of the min-across-vintages rule.
+
+### What may be read from it
+
+- **Tip-off establishes the cutoff.** The same sanctioned `AsOfView` bypass the
+  harness already documents: reading a tip-off through a view keyed on that
+  tip-off would be circular. Never a predictor feature.
+- **Arena and neutral-site are static venue facts**, not outcome-bearing, and
+  are safe to read at any time. They feed the prediction core's travel and
+  altitude terms.
+- **Scores are not ingested.** The endpoint carries `homeTeam_score` and
+  `gameStatus`; the parser drops those columns outright. A field that does not
+  exist cannot leak.
+
+### Point-in-time status
+
+A fetch returns *today's* schedule, so rows for past games are post-hoc, in the
+same class as the reconstructed timestamps already flagged in the games table.
+The schedule is therefore polled and archived **daily from now on**, alongside
+the news poll. Every day forward accumulates genuine schedule vintages, so when
+a game moves, the archive records *when that became knowable*. This is the
+mechanism by which reconstructed timing heals for live operation rather than
+remaining permanently caveated.
+
+Where a game's schedule date disagrees with the games table — chiefly the
+2020-21 COVID postponements — the schedule is ground truth for when the game
+tipped, and the disagreement is logged loudly rather than silently reconciled.
+
+### Effect on the harness
+
+`tipoff.py` takes the schedule as its primary source, keeping its public
+interface unchanged. The min-across-vintages rule carries over to schedule
+vintages, for the same reason: a game moved earlier must be honoured, while one
+moved later can be ignored safely.
+
+The injury-PDF tip-off parser is retained **as a cross-check test**, not as a
+runtime fallback — an archive-wide assertion that the two independent sources
+still agree wherever both exist. This preserves the leak-catching power of a
+second source without making the runtime depend on a frozen CDN, and without a
+second code path producing cutoffs, which is where both previous leaks lived.
+
+Backtest coverage rises from 7,200 to **8,289** scoreable games, and the
+published always-pick-home baseline moves from 54.9% to **55.2%** — the same
+underlying rate over an honest denominator.
 
 ### Raw-first ingestion
 
@@ -149,6 +219,28 @@ Backtest results are also the pre-season launch content: calibration curve, accu
 ---
 
 ## 3. Prediction core
+
+### Scope of the first delivery — decided 2026-09-26
+
+Sub-project 3 ships **Stage 1 plus Stage 3 calibration**, and Stage 1 ships
+**without the injury adjustment**.
+
+Injuries are deferred because the adjustment needs per-player point impact
+derived from box scores, and the archive holds team-level results only.
+Ingesting five seasons of player game logs is a sub-project in its own right,
+and deferring it gets a calibrated, fully explainable, publishable model out
+before opening night. Injuries are the first upgrade afterwards, and the
+component is designed as a scalar from day one precisely so it can be added,
+then later replaced by lineup-level simulation, without touching the rest.
+
+Stage 2 is deferred to a follow-on because it trains on Stage 1's errors —
+which, before the season starts, exist only in backtest — and because it makes
+every explanation partly non-additive, which is the property this approach was
+chosen for.
+
+The first delivery therefore carries these Stage 1 terms: Elo from margin of
+victory, home-court advantage, rest, travel, and altitude. Travel and altitude
+depend on the arena locations that **1.1 Schedule source** supplies.
 
 ### Stage 1 — additive points model
 
