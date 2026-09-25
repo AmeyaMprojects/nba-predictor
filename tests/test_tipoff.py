@@ -65,21 +65,56 @@ def test_unparseable_returns_none():
         assert tipoff.parse_game_time(bad, date(2025, 1, 15)) is None
 
 
-def test_tipoff_index_breaks_a_conflicting_time_by_earliest_observed_at(con):
-    # A rescheduled game: an early report says 8pm, a later one corrects it
-    # to 5:30pm. FIX 4 (final review, part 1): the EARLIEST observed_at must
-    # win, deterministically -- the resolved value must not depend on a
-    # report filed later than the earliest one that states a tip-off.
+def test_tipoff_index_resolves_a_conflicting_time_to_the_minimum_clock_time(con):
+    # A rescheduled game: an early-filed report says 8pm, a later one
+    # corrects it to 5:30pm -- the real tip-off. FIX 14 (final review, part
+    # 3): the MINIMUM clock time across vintages must win, deterministically
+    # -- NOT the earliest-observed filing (that was the CRITICAL regression:
+    # it resolved to 8pm here, an hour after a 5:30-7:30pm-ish real tip-off
+    # would already be under way, putting the cutoff after the game started).
     gd = date(2022, 11, 9)
     early = datetime(2022, 11, 8, 12, 0, tzinfo=UTC)
     late = early + timedelta(hours=6)
     _insert_injury_row(con, gd, "DAL", "08:00 (ET)", early)
     _insert_injury_row(con, gd, "DAL", "05:30 (ET)", late)
 
-    expected = tipoff.parse_game_time("08:00 (ET)", gd)
+    expected = tipoff.parse_game_time("05:30 (ET)", gd)
     for _ in range(5):
         index = tipoff.tipoff_index(con)
         assert index[(gd, "DAL")] == expected
+
+
+def test_flagged_regression_games_resolve_to_the_earlier_real_tipoff(con):
+    """FIX 14 (final review, part 3) -- the two archive games the CRITICAL
+    regression was verified against. Under the buggy earliest-observed
+    rule these resolved to 07:00 (ET) and 08:30 (ET) respectively -- both
+    AFTER the real tip-off -- because the earliest-FILED report happened to
+    carry the later clock time. Both must resolve to the earlier (real)
+    tip-off instead.
+    """
+    # 0022200161  2022-11-09 ORL v DAL
+    gd1 = date(2022, 11, 9)
+    _insert_injury_row(
+        con, gd1, "DAL", "07:00 (ET)", datetime(2022, 11, 8, 22, 30, tzinfo=UTC)
+    )
+    _insert_injury_row(
+        con, gd1, "DAL", "05:30 (ET)", datetime(2022, 11, 9, 22, 30, tzinfo=UTC),
+        player="q",
+    )
+
+    # 0022400521  2025-01-09 DAL v POR
+    gd2 = date(2025, 1, 9)
+    _insert_injury_row(
+        con, gd2, "DAL", "08:30 (ET)", datetime(2025, 1, 8, 22, 30, tzinfo=UTC)
+    )
+    _insert_injury_row(
+        con, gd2, "DAL", "07:30 (ET)", datetime(2025, 1, 9, 22, 30, tzinfo=UTC),
+        player="q",
+    )
+
+    index = tipoff.tipoff_index(con)
+    assert index[(gd1, "DAL")] == tipoff.parse_game_time("05:30 (ET)", gd1)
+    assert index[(gd2, "DAL")] == tipoff.parse_game_time("07:30 (ET)", gd2)
 
 
 def test_a_tipoff_moved_later_in_a_subsequent_vintage_still_resolves_to_the_earlier_time(con):

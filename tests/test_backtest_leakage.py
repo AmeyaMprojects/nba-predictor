@@ -12,6 +12,7 @@ import pytest
 
 from predictor import db
 from predictor.backtest import replay
+from predictor.backtest import tipoff as tipoff_mod
 from predictor.backtest.baselines import always_home
 
 TIP = datetime(2025, 1, 16, 0, 0, tzinfo=UTC)
@@ -168,11 +169,52 @@ def test_injury_rows_published_after_the_cutoff_are_invisible(con):
     assert "LateScratch,Guy" not in players["seen"], "post-cutoff report leaked"
 
 
-def test_every_cutoff_precedes_its_own_tipoff(con):
+def test_every_cutoff_precedes_every_recorded_tipoff_vintage(con):
+    """FIX 14 (final review, part 3): the old version of this test compared
+    the cutoff against the RESOLVED tip-off, so it held trivially no matter
+    what `resolve_tipoff` returned -- exactly the shape of test that let the
+    FIX 14 CRITICAL regression ship undetected. Compare against EVERY
+    vintage actually recorded in the archive instead: the true tip-off is
+    (by construction) the earliest of them, so a cutoff that is only safe
+    against a wrongly-resolved (later) tip-off fails this.
+
+    The fixture below adds a later-FILED report that corrects the game to
+    an EARLIER clock time -- the exact shape of the CRITICAL regression: a
+    predictor relying on "earliest observed_at wins" would resolve to
+    07:00 (ET) and compute a cutoff of 6:30pm ET, which is NOT before the
+    05:00 (ET) vintage below.
+    """
+    i = db.POINT_IN_TIME_TABLES["injury_status"]
+    con.execute(
+        f"INSERT INTO {i} (report_date, game_date, matchup, team, player,"
+        " status, reason, observed_at, game_time)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        [date(2025, 1, 15), date(2025, 1, 15), "NYK@PHI", "PHI", "Late,Correction",
+         "Out", "injury", TIP - timedelta(hours=1), "05:00 (ET)"],
+    )
+
     preds, _ = replay.replay(con, always_home)
     assert preds, "fixture produced no predictions"
+
+    vintages = con.execute(
+        f"SELECT game_date, team, game_time FROM {i} "
+        "WHERE game_time IS NOT NULL AND game_time <> ''"
+    ).fetchall()
+
+    checked = 0
     for p in preds:
-        assert p.cutoff < p.tipoff
+        for game_date, team, raw in vintages:
+            if game_date != p.game_date or team not in (p.home_team, p.away_team):
+                continue
+            recorded = tipoff_mod.parse_game_time(raw, game_date)
+            if recorded is None:
+                continue
+            checked += 1
+            assert p.cutoff < recorded, (
+                f"{p.game_id}: cutoff {p.cutoff.isoformat()} is not before "
+                f"recorded vintage {recorded.isoformat()} ({raw!r})"
+            )
+    assert checked >= 2, "fixture did not actually exercise multiple vintages"
 
 
 def test_a_zero_buffer_still_does_not_include_the_result(con):

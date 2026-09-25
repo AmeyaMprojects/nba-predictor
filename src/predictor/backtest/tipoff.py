@@ -53,36 +53,63 @@ def tipoff_index(con) -> dict[tuple[date, str], datetime]:
     Different report vintages for the same (game_date, team) can disagree
     -- a later report can carry a corrected time (real rescheduled games
     swing by hours between vintages), and in the real archive 8
-    (game_date, team) pairs do disagree across vintages this way. Without a
-    deterministic tie-break, `SELECT DISTINCT` has no defined row order and
-    the Python dict takes whichever row DuckDB happens to emit last, so the
-    same query can silently return a different tip-off across runs.
+    (game_date, team) pairs do disagree across vintages this way.
 
-    FIX 4 (final review, part 1): the `QUALIFY` clause below breaks the tie
-    by keeping the row with the EARLIEST `observed_at` per (game_date,
-    team) -- not the latest, which this used to do. A game's tip-off must
-    be resolvable from what was knowable as of the earliest filing that
-    states it; taking the latest vintage instead made the resolved value
-    (and therefore the cutoff derived from it: `cutoff = tip - buffer`) a
-    post-hoc quantity that could depend on a report filed after this
-    game's own cutoff -- for 2 of 7,200 games in the real archive, the
-    latest-vintage tip-off differed from the latest filing actually
-    available before the cutoff. Taking the earliest vintage instead means
-    the resolved value can never depend on information published later,
-    which is exactly the property this harness requires everywhere else.
+    FIX 14 (final review, part 3) -- CRITICAL regression fix. FIX 4 (final
+    review, part 1) resolved a conflict by taking the tip-off from the
+    EARLIEST-OBSERVED filing, reasoning that "the resolved value can never
+    depend on information published later." That reasoning was backwards
+    and it put the computed cutoff AFTER the game's real tip-off for at
+    least 2 games verified in the real archive (0022200161, 0022400521): a
+    later filing corrected the tip-off to an EARLIER clock time (a
+    placeholder slot replaced by the real broadcast time), and ignoring
+    that correction because it arrived "later" left the harness computing
+    `cutoff = 07:00 ET - buffer` for a game that actually tipped off at
+    05:30 ET -- an hour before the naive cutoff. `AsOfView` for those games
+    could then contain injury/news rows published while the game was
+    already in progress. The leak guard on the FINAL row does not catch
+    this: every FINAL row in the current archive is reconstructed at
+    `game_date + 36h`, always long after any conceivable cutoff, so the
+    guard can never trip on a bad tip-off specifically -- only a genuinely
+    live FINAL timestamp would.
+
+    The fix: resolve a game's tip-off as the MINIMUM parsed clock time
+    across ALL vintages for that (game_date, team), not the
+    earliest-FILED one. This is safe in both directions, which is why it
+    is correct without needing to know which direction a correction runs:
+      - A later filing that moves a game EARLIER must be honoured, because
+        ignoring it (as the earliest-observed rule did) puts the cutoff
+        AFTER the real tip-off -- a leak.
+      - A later filing that moves a game LATER can be safely ignored,
+        because using the earlier time only makes the cutoff MORE
+        conservative (earlier than strictly necessary), never later than
+        the real tip-off.
+    Taking the minimum satisfies both simultaneously. It is deliberately
+    pessimistic: where vintages disagree, the harness predicts from the
+    EARLIEST time the game could plausibly have started, not from
+    whichever filing happened to be seen first or last.
+
+    Consequently the resolved value CAN depend on information published
+    after the earliest filing -- and must, whenever a later filing moves
+    the game earlier. What it can never do is resolve to a time LATER
+    than any recorded vintage, which is the actual property this harness
+    needs: the cutoff derived from it must never land after the true
+    tip-off.
     """
     table = db.POINT_IN_TIME_TABLES["injury_status"]
     rows = con.execute(
         f"SELECT game_date, team, game_time FROM {table} "
-        "WHERE game_date IS NOT NULL AND game_time IS NOT NULL AND game_time <> '' "
-        "QUALIFY row_number() OVER "
-        "(PARTITION BY game_date, team ORDER BY observed_at ASC) = 1"
+        "WHERE game_date IS NOT NULL AND game_time IS NOT NULL AND game_time <> ''"
     ).fetchall()
     index: dict[tuple[date, str], datetime] = {}
     for game_date, team, raw in rows:
         parsed = parse_game_time(raw, game_date)
-        if parsed is not None:
-            index[(game_date, team)] = parsed
+        if parsed is None:
+            continue
+        key = (game_date, team)
+        current = index.get(key)
+        if current is None or parsed < current:
+            index[key] = parsed
     return index
 
 
