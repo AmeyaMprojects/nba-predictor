@@ -61,7 +61,15 @@ def test_the_view_handed_to_a_predictor_cannot_see_the_final_score(con):
     assert all(r[1] is None for r in seen["rows"]), "final score leaked"
 
 
-def test_the_game_object_carries_no_result(con):
+def test_the_game_object_carries_exactly_the_allowed_fields(con):
+    """FIX 13(c): a denylist ("these specific fields must be absent") lets a
+    FUTURE field leak through silently -- someone adds `home_points` back
+    under a different name, or adds an unrelated result-shaped field, and
+    this test keeps passing. An allowlist of the exact expected field set
+    fails loudly the moment `GameToPredict` changes at all, forcing whoever
+    touches it to consciously re-justify the new shape. This is the single
+    contract the model sub-project will extend, so it must fail loudly.
+    """
     captured = {}
 
     def grabby(game, view):
@@ -69,10 +77,12 @@ def test_the_game_object_carries_no_result(con):
         return 0.5
 
     replay.replay(con, grabby)
+
+    assert set(captured["fields"]) == {
+        "game_id", "season", "game_date", "home_team", "away_team",
+    }
     blob = repr(captured["fields"])
     assert "119" not in blob and "110" not in blob
-    for forbidden in ("home_points", "away_points", "home_won", "status"):
-        assert forbidden not in captured["fields"]
 
 
 def test_a_predictor_cannot_reach_the_physical_table_through_the_view(con):
@@ -174,4 +184,9 @@ def test_a_zero_buffer_still_does_not_include_the_result(con):
         return 0.5
 
     replay.replay(con, snooping, buffer_minutes=0)
+    # FIX 13(d): `all(...)` over an empty sequence is vacuously True -- if
+    # the predictor were never even invoked (e.g. every game wrongly
+    # skipped at buffer_minutes=0), this test would still pass despite
+    # proving nothing. Assert the view actually returned rows first.
+    assert seen.get("rows"), "predictor was never invoked -- nothing was actually checked"
     assert all(r[1] is None for r in seen["rows"])
