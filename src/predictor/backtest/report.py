@@ -98,6 +98,13 @@ def format_report(result: BacktestResult) -> str:
         )
 
     lines += ["", "  Coverage and exclusions:"]
+    if s.skipped_conflicting_metadata:
+        lines.append(
+            f"    {s.skipped_conflicting_metadata:,} game(s) skipped -- the archive holds "
+            "contradictory rows for these games (season, date, or home/away team "
+            "disagrees between ingested rows), so re-run 'predictor ingest-season' "
+            "for the affected season(s) to fix them"
+        )
     if s.skipped_no_tipoff:
         lines.append(
             f"    {s.skipped_no_tipoff:,} game(s) skipped -- no tip-off time could be "

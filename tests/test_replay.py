@@ -218,6 +218,7 @@ def test_counters_reconcile_with_limit_set(con):
     assert stats.considered == 2, "a game beyond the limit must not be counted as considered"
     total = (
         stats.predicted
+        + stats.skipped_conflicting_metadata
         + stats.skipped_no_tipoff
         + stats.skipped_no_result
         + stats.skipped_result_visible
@@ -225,6 +226,35 @@ def test_counters_reconcile_with_limit_set(con):
         + stats.failed
     )
     assert total == stats.considered
+
+
+# --- FIX 5 (final review, part 1): conflicting metadata across rows -----
+
+
+def test_conflicting_metadata_across_rows_is_skipped_not_double_predicted(con):
+    """A re-ingest that corrects a game's home/away or game_date leaves the
+    OLD row sitting alongside the NEW one, because the primary key is
+    (game_id, observed_at), not game_id alone. Build exactly that: an extra
+    row for the SAME game_id as the fixture's played game, but with a
+    different home_team. The old bug would predict (and score) this game
+    TWICE, once with the wrong home team. It must instead be routed to
+    `skipped_conflicting_metadata` and not predicted at all.
+    """
+    g = db.POINT_IN_TIME_TABLES["games"]
+    con.execute(
+        f"INSERT INTO {g} (game_id, season, game_date, home_team, away_team,"
+        " home_points, away_points, status, observed_at, reconstructed)"
+        " VALUES (?,?,?,?,?,?,?,?,?,TRUE)",
+        ["0022400561", "2024-25", date(2025, 1, 15), "LAL", "NYK",
+         None, None, "SCHEDULED", TIP - timedelta(days=30)],
+    )
+
+    preds, stats = replay.replay(con, always_home)
+
+    assert stats.skipped_conflicting_metadata == 1
+    assert preds == [], "the conflicting game must not be predicted at all"
+    assert stats.predicted == 0
+    assert stats.considered == 1
 
 
 # --- Finding 5: a negative buffer moves the cutoff past tip-off ---

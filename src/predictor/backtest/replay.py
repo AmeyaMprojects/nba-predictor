@@ -29,6 +29,7 @@ class Prediction:
 class ReplayStats:
     considered: int
     predicted: int
+    skipped_conflicting_metadata: int
     skipped_no_tipoff: int
     skipped_no_result: int
     skipped_result_visible: int
@@ -113,19 +114,49 @@ def replay(
         params.append(season)
     clause = " AND ".join(where)
 
+    # FIX 5 (final review, part 1): the primary key is (game_id,
+    # observed_at), not game_id alone, so a re-ingest that corrects a
+    # game's game_date or home/away assignment leaves the OLD row sitting
+    # alongside the NEW one instead of replacing it -- a plain `SELECT
+    # DISTINCT` over all five columns would then yield two rows for the
+    # same game_id and silently predict (and score) it twice, one copy
+    # with the wrong metadata. Grouping by game_id alone and requiring
+    # every other column to be unambiguous (exactly one DISTINCT value
+    # each) makes that structurally impossible: a game_id whose rows
+    # disagree fails the HAVING-equivalent check below and is routed to
+    # `skipped_conflicting_metadata` instead of being treated as one game.
+    # MIN() is used (not ANY_VALUE/first) purely for determinism; when a
+    # group is unambiguous every row agrees, so MIN() and "the" value are
+    # the same thing.
     rows = con.execute(
-        f"SELECT DISTINCT game_id, season, game_date, home_team, away_team "
-        f"FROM {games_table} WHERE {clause} ORDER BY game_date, game_id",
+        f"SELECT game_id, MIN(season) AS season, MIN(game_date) AS game_date, "
+        f"MIN(home_team) AS home_team, MIN(away_team) AS away_team, "
+        f"count(DISTINCT season) AS n_season, count(DISTINCT game_date) AS n_game_date, "
+        f"count(DISTINCT home_team) AS n_home_team, count(DISTINCT away_team) AS n_away_team "
+        f"FROM {games_table} WHERE {clause} GROUP BY game_id "
+        f"ORDER BY game_date, game_id",
         params,
     ).fetchall()
 
-    considered = predicted = no_tip = no_result = leaked = declined = failed = 0
+    considered = predicted = conflicting = no_tip = no_result = leaked = declined = failed = 0
     out: list[Prediction] = []
 
-    for game_id, game_season, game_date, home_team, away_team in rows:
+    for (
+        game_id, game_season, game_date, home_team, away_team,
+        n_season, n_game_date, n_home_team, n_away_team,
+    ) in rows:
         if limit is not None and predicted >= limit:
             break
         considered += 1
+
+        if not (n_season == 1 and n_game_date == 1 and n_home_team == 1 and n_away_team == 1):
+            conflicting += 1
+            print(
+                f"backtest: SKIPPING {game_id} -- the archive holds contradictory "
+                "rows for this game (season/date/home/away disagree across "
+                "ingested rows), not predicted"
+            )
+            continue
 
         tip = tipoff_mod.resolve_tipoff(index, game_date, home_team, away_team)
         if tip is None:
@@ -214,6 +245,7 @@ def replay(
     stats = ReplayStats(
         considered=considered,
         predicted=predicted,
+        skipped_conflicting_metadata=conflicting,
         skipped_no_tipoff=no_tip,
         skipped_no_result=no_result,
         skipped_result_visible=leaked,

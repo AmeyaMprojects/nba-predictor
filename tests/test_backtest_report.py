@@ -16,9 +16,9 @@ def make(p_home, home_won, gid="g", reconstructed=False):
     )
 
 
-STATS = ReplayStats(considered=120, predicted=100, skipped_no_tipoff=15,
-                    skipped_no_result=5, skipped_result_visible=0, declined=0,
-                    failed=0)
+STATS = ReplayStats(considered=120, predicted=100, skipped_conflicting_metadata=0,
+                    skipped_no_tipoff=15, skipped_no_result=5,
+                    skipped_result_visible=0, declined=0, failed=0)
 
 
 def test_summary_computes_every_headline_metric():
@@ -66,9 +66,9 @@ def test_report_includes_a_readable_calibration_table():
 
 
 def test_summarize_with_no_predictions_raises_rather_than_reporting_zeroes():
-    empty = ReplayStats(considered=10, predicted=0, skipped_no_tipoff=10,
-                        skipped_no_result=0, skipped_result_visible=0,
-                        declined=0, failed=0)
+    empty = ReplayStats(considered=10, predicted=0, skipped_conflicting_metadata=0,
+                        skipped_no_tipoff=10, skipped_no_result=0,
+                        skipped_result_visible=0, declined=0, failed=0)
     with pytest.raises(Exception):
         report.summarize([], empty)
 
@@ -145,3 +145,23 @@ def test_an_all_away_predictor_also_gets_the_not_meaningful_verdict():
     assert not first.startswith(("BEATS", "LOSES TO", "MATCHES"))
     assert "not meaningful" in first.lower()
     assert "away" in first.lower()
+
+
+# --- FIX 5: conflicting-metadata games are surfaced in the coverage section
+
+
+def test_report_states_conflicting_metadata_coverage_honestly():
+    preds = [make(0.7, i < 70, f"g{i}") for i in range(100)]
+    stats = ReplayStats(considered=123, predicted=100, skipped_conflicting_metadata=3,
+                        skipped_no_tipoff=15, skipped_no_result=5,
+                        skipped_result_visible=0, declined=0, failed=0)
+    text = report.format_report(report.summarize(preds, stats))
+    assert "3" in text
+    assert "contradictory" in text.lower()
+    assert "ingest-season" in text.lower()
+
+
+def test_report_omits_conflicting_metadata_line_when_there_are_none():
+    preds = [make(0.7, i < 70, f"g{i}") for i in range(100)]
+    text = report.format_report(report.summarize(preds, STATS))
+    assert "contradictory" not in text.lower()

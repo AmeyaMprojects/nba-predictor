@@ -44,7 +44,7 @@ def test_backtest_reports_nothing_to_score_rather_than_crashing(tmp_path, monkey
     from predictor.backtest import replay as replay_mod
 
     def empty(*args, **kwargs):
-        return [], replay_mod.ReplayStats(0, 0, 0, 0, 0, 0, 0)
+        return [], replay_mod.ReplayStats(0, 0, 0, 0, 0, 0, 0, 0)
 
     monkeypatch.setattr(replay_mod, "replay", empty)
     result = runner.invoke(cli.app, ["backtest", "--season", "1999-00"])
