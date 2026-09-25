@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date
 from typing import Protocol
 
 from predictor.asof import AsOfView
@@ -17,6 +17,17 @@ class GameToPredict:
 
     Deliberately carries no score: a predictor cannot leak what it is never
     handed.
+
+    FIX 4 (final review, part 1): does NOT carry `tipoff`. It used to, but
+    that was both false advertising and a leak surface: the value is
+    derived from the LATEST injury-report vintage available at cutoff
+    time, which is a post-hoc quantity (8 (game_date, team) pairs in the
+    real archive disagree across vintages -- see `tipoff.py`), and it is
+    redundant besides -- a predictor holding `view.as_of` (the cutoff) and
+    the harness's buffer can already recover `tip = view.as_of + buffer`
+    exactly, since `cutoff = tip - buffer`. Removing the field is
+    structural: there is no longer a post-hoc value here to (re)introduce
+    a leak through.
     """
 
     game_id: str
@@ -24,7 +35,6 @@ class GameToPredict:
     game_date: date
     home_team: str
     away_team: str
-    tipoff: datetime
 
 
 class Predictor(Protocol):

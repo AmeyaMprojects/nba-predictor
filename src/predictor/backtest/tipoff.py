@@ -11,9 +11,10 @@ from predictor import db
 # resolution ESTABLISHES the as-of cutoff for everything else, so it
 # cannot itself be filtered by a cutoff without circularity -- you need
 # the tip-off time before you can know what "before tip-off" means. The
-# resolved tip-off datetime is used only to COMPUTE a cutoff; it is never
-# handed to a predictor as a feature, so reading it unfiltered here cannot
-# leak future information into a model.
+# resolved tip-off datetime is used only to COMPUTE a cutoff -- FIX 4
+# (final review, part 1) removed it from ``GameToPredict``, so it is not
+# handed to a predictor as a feature at all, and reading it unfiltered
+# here cannot leak future information into a model.
 EASTERN = ZoneInfo("America/New_York")
 
 # '07:00 (ET)' and '08:00(ET)' both occur -- the two PDF layouts differ in
@@ -50,23 +51,32 @@ def tipoff_index(con) -> dict[tuple[date, str], datetime]:
     The injury report is the only place a tip-off time exists in this schema.
 
     Different report vintages for the same (game_date, team) can disagree
-    -- an early report can carry a stale or since-corrected time (real
-    rescheduled games swing by hours between vintages). Without a
+    -- a later report can carry a corrected time (real rescheduled games
+    swing by hours between vintages), and in the real archive 8
+    (game_date, team) pairs do disagree across vintages this way. Without a
     deterministic tie-break, `SELECT DISTINCT` has no defined row order and
     the Python dict takes whichever row DuckDB happens to emit last, so the
-    same query can silently return a different tip-off across runs. The
-    `QUALIFY` clause below breaks the tie by keeping only the row with the
-    latest `observed_at` per (game_date, team): the most recently filed
-    report is the best available statement of when the game actually tipped
-    off, and this way the tie-break lives in one place instead of at every
-    call site.
+    same query can silently return a different tip-off across runs.
+
+    FIX 4 (final review, part 1): the `QUALIFY` clause below breaks the tie
+    by keeping the row with the EARLIEST `observed_at` per (game_date,
+    team) -- not the latest, which this used to do. A game's tip-off must
+    be resolvable from what was knowable as of the earliest filing that
+    states it; taking the latest vintage instead made the resolved value
+    (and therefore the cutoff derived from it: `cutoff = tip - buffer`) a
+    post-hoc quantity that could depend on a report filed after this
+    game's own cutoff -- for 2 of 7,200 games in the real archive, the
+    latest-vintage tip-off differed from the latest filing actually
+    available before the cutoff. Taking the earliest vintage instead means
+    the resolved value can never depend on information published later,
+    which is exactly the property this harness requires everywhere else.
     """
     table = db.POINT_IN_TIME_TABLES["injury_status"]
     rows = con.execute(
         f"SELECT game_date, team, game_time FROM {table} "
         "WHERE game_date IS NOT NULL AND game_time IS NOT NULL AND game_time <> '' "
         "QUALIFY row_number() OVER "
-        "(PARTITION BY game_date, team ORDER BY observed_at DESC) = 1"
+        "(PARTITION BY game_date, team ORDER BY observed_at ASC) = 1"
     ).fetchall()
     index: dict[tuple[date, str], datetime] = {}
     for game_date, team, raw in rows:

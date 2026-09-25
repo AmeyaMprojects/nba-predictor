@@ -65,19 +65,39 @@ def test_unparseable_returns_none():
         assert tipoff.parse_game_time(bad, date(2025, 1, 15)) is None
 
 
-def test_tipoff_index_breaks_a_conflicting_time_by_latest_observed_at(con):
+def test_tipoff_index_breaks_a_conflicting_time_by_earliest_observed_at(con):
     # A rescheduled game: an early report says 8pm, a later one corrects it
-    # to 5:30pm. The latest observed_at must win, deterministically.
+    # to 5:30pm. FIX 4 (final review, part 1): the EARLIEST observed_at must
+    # win, deterministically -- the resolved value must not depend on a
+    # report filed later than the earliest one that states a tip-off.
     gd = date(2022, 11, 9)
     early = datetime(2022, 11, 8, 12, 0, tzinfo=UTC)
     late = early + timedelta(hours=6)
     _insert_injury_row(con, gd, "DAL", "08:00 (ET)", early)
     _insert_injury_row(con, gd, "DAL", "05:30 (ET)", late)
 
-    expected = tipoff.parse_game_time("05:30 (ET)", gd)
+    expected = tipoff.parse_game_time("08:00 (ET)", gd)
     for _ in range(5):
         index = tipoff.tipoff_index(con)
         assert index[(gd, "DAL")] == expected
+
+
+def test_a_tipoff_moved_later_in_a_subsequent_vintage_still_resolves_to_the_earlier_time(con):
+    """FIX 4(c): the missing test. A game whose tip-off moves LATER in a
+    subsequent vintage (e.g. a broadcast-driven push-back) must still
+    resolve to the EARLIER time -- the later filing was published after the
+    earlier one, and the resolved value must not depend on information
+    published after any particular game's cutoff.
+    """
+    gd = date(2025, 2, 1)
+    early = datetime(2025, 1, 31, 12, 0, tzinfo=UTC)
+    late = early + timedelta(hours=6)
+    _insert_injury_row(con, gd, "BOS", "07:00 (ET)", early)
+    _insert_injury_row(con, gd, "BOS", "09:30 (ET)", late)
+
+    expected = tipoff.parse_game_time("07:00 (ET)", gd)
+    index = tipoff.tipoff_index(con)
+    assert index[(gd, "BOS")] == expected
 
 
 def test_resolve_tipoff_prefers_home_team(con):

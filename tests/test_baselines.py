@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import date
 
 import pytest
 
@@ -14,7 +14,6 @@ GAME = GameToPredict(
     game_date=date(2025, 1, 15),
     home_team="PHI",
     away_team="NYK",
-    tipoff=datetime(2025, 1, 16, 0, 0, tzinfo=UTC),
 )
 
 

@@ -170,7 +170,6 @@ def replay(
             game_date=game_date,
             home_team=home_team,
             away_team=away_team,
-            tipoff=tip,
         )
 
         try:
