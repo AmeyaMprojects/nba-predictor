@@ -40,10 +40,31 @@ def log_loss(preds: Sequence[Prediction]) -> float:
 
 
 def accuracy(preds: Sequence[Prediction], threshold: float = 0.5) -> float:
-    """Fraction of games where the favoured side actually won."""
+    """Fraction of games where the favoured side actually won.
+
+    WARNING: if every prediction falls on the same side of `threshold` (see
+    `home_pick_share`), this collapses to a base rate -- a flat 0.5 predictor
+    (a coin flip) picks home every time and its accuracy becomes exactly the
+    home win rate, making it LOOK identical to always-pick-home even though
+    the two are not the same predictor. Do not compare this number to a
+    baseline without also checking `home_pick_share`; `report.format_report`
+    does this before printing its verdict line.
+    """
     _require(preds)
     hits = sum(1 for p in preds if (p.p_home >= threshold) == p.home_won)
     return hits / len(preds)
+
+
+def home_pick_share(preds: Sequence[Prediction], threshold: float = 0.5) -> float:
+    """Fraction of predictions that count as a home pick (`p_home >= threshold`).
+
+    A value of exactly 0.0 or 1.0 means every single prediction landed on the
+    same side of the line -- accuracy against that threshold then reduces to
+    a base rate and cannot meaningfully be compared to a baseline. See the
+    warning on `accuracy`.
+    """
+    _require(preds)
+    return sum(1 for p in preds if p.p_home >= threshold) / len(preds)
 
 
 def home_rate(preds: Sequence[Prediction]) -> float:

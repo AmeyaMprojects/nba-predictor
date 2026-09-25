@@ -98,3 +98,26 @@ def test_a_probability_of_exactly_one_lands_in_the_top_bin():
 def test_calibration_on_an_empty_list_raises():
     with pytest.raises(metrics.MetricsError):
         metrics.calibration_bins([])
+
+
+# --- FIX 3: home_pick_share ------------------------------------------------
+
+
+def test_home_pick_share_is_one_when_every_prediction_favours_home():
+    preds = [make(0.5, True), make(0.9, False), make(1.0, True)]
+    assert metrics.home_pick_share(preds) == pytest.approx(1.0)
+
+
+def test_home_pick_share_is_zero_when_every_prediction_favours_away():
+    preds = [make(0.49, True), make(0.1, False)]
+    assert metrics.home_pick_share(preds) == pytest.approx(0.0)
+
+
+def test_home_pick_share_is_the_fraction_of_home_picks():
+    preds = [make(0.9, True), make(0.9, False), make(0.1, False), make(0.1, True)]
+    assert metrics.home_pick_share(preds) == pytest.approx(0.5)
+
+
+def test_home_pick_share_on_an_empty_list_raises():
+    with pytest.raises(metrics.MetricsError):
+        metrics.home_pick_share([])

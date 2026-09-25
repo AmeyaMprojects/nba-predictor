@@ -32,7 +32,11 @@ def test_summary_computes_every_headline_metric():
 
 
 def test_report_leads_with_the_verdict_against_the_baseline():
-    preds = [make(0.9, i < 60, f"g{i}") for i in range(100)]
+    # A mix of home- and away-favoured predictions (home_pick_share == 0.5),
+    # so this exercises the ordinary BEATS/LOSES TO/MATCHES verdict path
+    # rather than FIX 3's "accuracy not meaningful" override.
+    preds = [make(0.9, i < 60, f"g{i}") for i in range(50)]
+    preds += [make(0.1, i < 60, f"h{i}") for i in range(50)]
     text = report.format_report(report.summarize(preds, STATS))
     first = text.splitlines()[0]
     assert first.startswith(("BEATS", "LOSES TO", "MATCHES"))
@@ -99,3 +103,45 @@ def test_report_omits_provenance_block_when_nothing_is_reconstructed():
     preds = [make(0.7, i < 70, f"g{i}", reconstructed=False) for i in range(100)]
     text = report.format_report(report.summarize(preds, STATS))
     assert "provenance" not in text.lower()
+
+
+# --- FIX 3: a coin flip must not print "MATCHES always-pick-home" --------
+
+
+def test_a_flat_coin_flip_does_not_claim_to_match_the_baseline():
+    """A flat p_home=0.5 predictor picks home every time (0.5 >= threshold),
+    so accuracy collapses to the home base rate. The old verdict logic read
+    that as "MATCHES always-pick-home" -- a publishable, confidently wrong
+    sentence, since a coin flip is not always-pick-home."""
+    preds = [make(0.5, i < 55, f"g{i}") for i in range(100)]
+    text = report.format_report(report.summarize(preds, STATS))
+    first = text.splitlines()[0]
+    assert not first.startswith(("BEATS", "LOSES TO", "MATCHES"))
+    assert "not meaningful" in first.lower()
+    assert "brier" in text.lower()
+    assert "calibration" in text.lower()
+    # accuracy and baseline lines are still printed -- only the verdict's
+    # claim of a comparison is withheld.
+    assert "accuracy" in text.lower()
+    assert "always-pick-home" in text.lower()
+
+
+def test_always_home_also_gets_the_not_meaningful_verdict_honestly():
+    """always-home has a home_pick_share of 1.0 too. Its accuracy genuinely
+    IS the baseline -- suppressing the BEATS/LOSES/MATCHES claim there is
+    still honest, not incorrect, since accuracy still cannot discriminate
+    it from the baseline it defines."""
+    preds = [make(1.0, i < 55, f"g{i}") for i in range(100)]
+    text = report.format_report(report.summarize(preds, STATS))
+    first = text.splitlines()[0]
+    assert not first.startswith(("BEATS", "LOSES TO", "MATCHES"))
+    assert "not meaningful" in first.lower()
+
+
+def test_an_all_away_predictor_also_gets_the_not_meaningful_verdict():
+    preds = [make(0.1, i < 55, f"g{i}") for i in range(100)]
+    text = report.format_report(report.summarize(preds, STATS))
+    first = text.splitlines()[0]
+    assert not first.startswith(("BEATS", "LOSES TO", "MATCHES"))
+    assert "not meaningful" in first.lower()
+    assert "away" in first.lower()

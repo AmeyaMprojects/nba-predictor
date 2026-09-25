@@ -55,6 +55,27 @@ def format_report(result: BacktestResult) -> str:
     else:
         verdict = "MATCHES always-pick-home"
 
+    # FIX 3: `metrics.accuracy` counts p_home >= threshold as a home pick, so
+    # a predictor that puts EVERY game on the same side of the line (a flat
+    # 0.5 coin flip included) collapses to the home base rate and reads as
+    # if it "MATCHES always-pick-home" -- a publishable, confidently wrong
+    # sentence, since a coin flip does not match always-pick-home. When that
+    # happens, accuracy cannot discriminate this predictor from the
+    # baseline at all, so the verdict must not claim a comparison. This also
+    # fires for always-home itself (home_pick_share == 1.0) -- that is
+    # correct and desirable: its accuracy genuinely IS the baseline, and
+    # saying accuracy isn't a meaningful comparison here is still honest,
+    # not wrong.
+    home_share = metrics.home_pick_share(result.predictions)
+    if home_share in (0.0, 1.0):
+        side = "home" if home_share == 1.0 else "away"
+        verdict = (
+            f"ACCURACY NOT MEANINGFUL -- every prediction favoured the {side} "
+            "side, so accuracy cannot distinguish this predictor from "
+            "always-pick-home. See the Brier score and calibration table "
+            "below instead."
+        )
+
     s = result.stats
     lines = [
         verdict,
