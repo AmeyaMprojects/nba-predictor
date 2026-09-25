@@ -1,9 +1,13 @@
 from datetime import UTC, date, datetime, timedelta
 
+import duckdb
 import pytest
 
 from predictor import db
 from predictor.backtest import tipoff
+from predictor.config import PROJECT_ROOT
+
+_REAL_ARCHIVE = PROJECT_ROOT / "data" / "predictor.duckdb"
 
 
 @pytest.fixture
@@ -135,7 +139,7 @@ def test_a_tipoff_moved_later_in_a_subsequent_vintage_still_resolves_to_the_earl
     assert index[(gd, "BOS")] == expected
 
 
-def test_resolve_tipoff_prefers_home_team(con):
+def test_resolve_tipoff_takes_the_minimum_when_home_is_earlier(con):
     gd = date(2025, 1, 15)
     observed = datetime(2025, 1, 14, 12, 0, tzinfo=UTC)
     _insert_injury_row(con, gd, "PHI", "07:00 (ET)", observed)
@@ -144,6 +148,25 @@ def test_resolve_tipoff_prefers_home_team(con):
     index = tipoff.tipoff_index(con)
     got = tipoff.resolve_tipoff(index, gd, "PHI", "NYK")
     assert got == tipoff.parse_game_time("07:00 (ET)", gd)
+
+
+def test_resolve_tipoff_takes_the_minimum_when_away_is_earlier(con):
+    """FIX 23 (final review, part 4) -- the regression this wave closes. The
+    old rule (`index.get(home) or index.get(away)`) returned the HOME
+    team's entry whenever it existed, even when the AWAY team's entry was
+    earlier -- exactly the shape of 0022400624 (2025-01-23, MIA at MIL) and
+    0021900701 (2020-01-28, BOS at MIA) in the real archive. Both teams
+    have an entry here; the away team's (PHI, this fixture's away side) is
+    earlier and must win.
+    """
+    gd = date(2025, 1, 15)
+    observed = datetime(2025, 1, 14, 12, 0, tzinfo=UTC)
+    _insert_injury_row(con, gd, "NYK", "08:30 (ET)", observed)
+    _insert_injury_row(con, gd, "PHI", "07:30 (ET)", observed, player="q")
+
+    index = tipoff.tipoff_index(con)
+    got = tipoff.resolve_tipoff(index, gd, "NYK", "PHI")
+    assert got == tipoff.parse_game_time("07:30 (ET)", gd)
 
 
 def test_resolve_tipoff_falls_back_to_away_team(con):
@@ -159,3 +182,77 @@ def test_resolve_tipoff_falls_back_to_away_team(con):
 def test_resolve_tipoff_returns_none_when_neither_team_has_an_entry(con):
     index = tipoff.tipoff_index(con)
     assert tipoff.resolve_tipoff(index, date(2025, 1, 15), "PHI", "NYK") is None
+
+
+# --- FIX 23 (final review, part 4): the archive-wide invariant -------------
+#
+# The absence of a check like this one is what let both the CRITICAL
+# regression (FIX 14) and this one (FIX 23) through: a test whose fixture
+# only ever exercises ONE team's entries cannot catch a bug in how the
+# other team's entries are combined with it. This reads the real,
+# read-only archive (never written to -- `duckdb.connect(..., read_only=True)`
+# is used directly, deliberately bypassing `db.connect()`'s test-isolation
+# rail, which exists to stop a test from migrating or writing to the real
+# database, not from reading it) and checks the actual property the
+# harness needs, for every scored game against EVERY recorded vintage for
+# EITHER team -- not just the two games this wave's evidence happened to
+# name.
+@pytest.mark.skipif(
+    not _REAL_ARCHIVE.exists(), reason="real archive not present in this environment"
+)
+@pytest.mark.parametrize("buffer_minutes", [30, 60, 120])
+def test_archive_wide_cutoff_is_strictly_before_every_recorded_tipoff_vintage(
+    buffer_minutes,
+):
+    con = duckdb.connect(str(_REAL_ARCHIVE), read_only=True)
+    try:
+        games_table = db.POINT_IN_TIME_TABLES["games"]
+        inj_table = db.POINT_IN_TIME_TABLES["injury_status"]
+
+        index = tipoff.tipoff_index(con)
+
+        # Every parsed vintage per (game_date, team) -- NOT collapsed to the
+        # minimum, unlike `index` -- so every recorded filing is checked,
+        # not just the one that happened to win.
+        vintage_rows = con.execute(
+            f"SELECT game_date, team, game_time FROM {inj_table} "
+            "WHERE game_date IS NOT NULL AND game_time IS NOT NULL AND game_time <> ''"
+        ).fetchall()
+        vintages: dict[tuple[date, str], list[datetime]] = {}
+        for game_date, team, raw in vintage_rows:
+            parsed = tipoff.parse_game_time(raw, game_date)
+            if parsed is None:
+                continue
+            vintages.setdefault((game_date, team), []).append(parsed)
+
+        games = con.execute(
+            f"SELECT DISTINCT game_id, game_date, home_team, away_team "
+            f"FROM {games_table} WHERE game_id LIKE '002%'"
+        ).fetchall()
+
+        scored = 0
+        comparisons = 0
+        unsafe: list[tuple[str, datetime, datetime]] = []
+        for game_id, game_date, home_team, away_team in games:
+            tip = tipoff.resolve_tipoff(index, game_date, home_team, away_team)
+            if tip is None:
+                continue
+            cutoff = tip - timedelta(minutes=buffer_minutes)
+            scored += 1
+            for v in (
+                vintages.get((game_date, home_team), [])
+                + vintages.get((game_date, away_team), [])
+            ):
+                comparisons += 1
+                if not (cutoff < v):
+                    unsafe.append((game_id, cutoff, v))
+
+        assert scored > 0, "the real archive produced no scorable games -- check the path"
+        assert comparisons > 0
+        assert unsafe == [], (
+            f"{len(unsafe)} cutoff-vs-vintage comparison(s) failed at "
+            f"buffer_minutes={buffer_minutes} out of {comparisons:,} across "
+            f"{scored:,} games: {unsafe[:5]}"
+        )
+    finally:
+        con.close()

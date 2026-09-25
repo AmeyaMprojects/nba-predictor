@@ -92,9 +92,26 @@ def tipoff_index(con) -> dict[tuple[date, str], datetime]:
     Consequently the resolved value CAN depend on information published
     after the earliest filing -- and must, whenever a later filing moves
     the game earlier. What it can never do is resolve to a time LATER
-    than any recorded vintage, which is the actual property this harness
-    needs: the cutoff derived from it must never land after the true
-    tip-off.
+    than any recorded vintage for THAT SAME (game_date, team) key -- the
+    minimum is taken per key, so it is bounded by every vintage filed
+    under that same team.
+
+    FIX 23 (final review, part 4) -- CORRECTION. An earlier version of this
+    docstring claimed that property held for "any recorded vintage",
+    unqualified -- true of a single key's own vintages, but it was being
+    read as a property of the resolved TIP-OFF (which combines TWO keys,
+    home and away). It is not: `resolve_tipoff` used to take the home
+    team's entry when present and fall back to the away team's only when
+    the home team had none, so whenever BOTH teams had entries and the
+    away team's was earlier, that earlier vintage was never consulted at
+    all. Verified in the archive -- 0022400624 (2025-01-23, MIA at MIL:
+    MIA/away reports 07:30 ET, MIL/home reports 08:30 ET only) and
+    0021900701 (2020-01-28, BOS at MIA) both resolved to a time AFTER the
+    away team's recorded vintage under that rule. `resolve_tipoff` now
+    takes the minimum across BOTH teams' entries, which is the property
+    the harness actually needs: the cutoff derived from it must never land
+    after the true tip-off, and must never land after ANY vintage recorded
+    for EITHER team.
     """
     table = db.POINT_IN_TIME_TABLES["injury_status"]
     rows = con.execute(
@@ -119,5 +136,27 @@ def resolve_tipoff(
     home_team: str,
     away_team: str,
 ) -> datetime | None:
-    """Tip-off for a game, from either team's injury-report entry."""
-    return index.get((game_date, home_team)) or index.get((game_date, away_team))
+    """Tip-off for a game: the MINIMUM across both teams' injury-report entries.
+
+    FIX 23 (final review, part 4) -- CRITICAL regression fix. This used to
+    be `index.get(home) or index.get(away)`: when the home team had an
+    entry, the away team's was never consulted, even when it recorded an
+    earlier (and therefore more conservative / correct) tip-off. Verified
+    in the archive: 0022400624 (2025-01-23, MIA at MIL) and 0021900701
+    (2020-01-28, BOS at MIA) both have an away-team vintage earlier than
+    the home team's, and the home-first rule silently discarded it --
+    resolving the tip-off (and therefore the cutoff derived from it) to a
+    time AFTER the away team's own recorded vintage, the exact leak class
+    this harness exists to prevent. Each team's own index entry is already
+    the minimum across that team's vintages (see `tipoff_index`); taking
+    the minimum of the two here extends that same guarantee across both
+    teams, so the resolved value can never land after any vintage recorded
+    for either one. `None` is returned only when NEITHER team has an entry.
+    """
+    home = index.get((game_date, home_team))
+    away = index.get((game_date, away_team))
+    if home is None:
+        return away
+    if away is None:
+        return home
+    return min(home, away)
