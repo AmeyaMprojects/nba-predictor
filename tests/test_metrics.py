@@ -56,3 +56,45 @@ def test_metrics_on_an_empty_list_raise_rather_than_return_nonsense():
     for fn in (metrics.brier_score, metrics.log_loss, metrics.accuracy, metrics.home_rate):
         with pytest.raises(metrics.MetricsError):
             fn([])
+
+
+def test_a_perfectly_calibrated_predictor_has_near_zero_error():
+    # 100 games at p=0.7, exactly 70 won
+    preds = [make(0.7, i < 70, f"g{i}") for i in range(100)]
+    assert metrics.calibration_error(preds) == pytest.approx(0.0, abs=0.01)
+
+
+def test_an_overconfident_predictor_has_large_calibration_error():
+    # claims 95%, actually wins half the time
+    preds = [make(0.95, i < 50, f"g{i}") for i in range(100)]
+    assert metrics.calibration_error(preds) > 0.4
+
+
+def test_bins_report_predicted_against_observed():
+    preds = [make(0.9, i < 60, f"g{i}") for i in range(100)]
+    bins = metrics.calibration_bins(preds, n_bins=10)
+    assert len(bins) == 1
+    b = bins[0]
+    assert b.count == 100
+    assert b.mean_predicted == pytest.approx(0.9)
+    assert b.observed_rate == pytest.approx(0.6)
+
+
+def test_empty_bins_are_omitted_not_reported_as_zero():
+    preds = [make(0.55, True, f"g{i}") for i in range(10)]
+    bins = metrics.calibration_bins(preds, n_bins=10)
+    assert len(bins) == 1
+    assert all(b.count > 0 for b in bins)
+
+
+def test_a_probability_of_exactly_one_lands_in_the_top_bin():
+    preds = [make(1.0, True, f"g{i}") for i in range(5)]
+    bins = metrics.calibration_bins(preds, n_bins=10)
+    assert len(bins) == 1
+    assert bins[0].high == pytest.approx(1.0)
+    assert bins[0].count == 5
+
+
+def test_calibration_on_an_empty_list_raises():
+    with pytest.raises(metrics.MetricsError):
+        metrics.calibration_bins([])

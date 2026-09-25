@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from predictor.backtest.replay import Prediction
 
@@ -49,3 +50,55 @@ def home_rate(preds: Sequence[Prediction]) -> float:
     """Base rate of home wins in the scored set -- the always-pick-home accuracy."""
     _require(preds)
     return sum(1 for p in preds if p.home_won) / len(preds)
+
+
+@dataclass(frozen=True)
+class CalibrationBin:
+    low: float
+    high: float
+    count: int
+    mean_predicted: float
+    observed_rate: float
+
+
+def calibration_bins(
+    preds: Sequence[Prediction], n_bins: int = 10
+) -> list[CalibrationBin]:
+    """Group predictions by stated probability and compare to what happened.
+
+    Empty bins are omitted rather than reported as zero, which would read as
+    'we said 30% and were never right' instead of 'we never said 30%'.
+    """
+    _require(preds)
+    if n_bins < 1:
+        raise MetricsError(f"n_bins must be at least 1, got {n_bins}")
+
+    buckets: list[list[Prediction]] = [[] for _ in range(n_bins)]
+    for p in preds:
+        # p == 1.0 would index past the end; clamp it into the top bin.
+        idx = min(int(p.p_home * n_bins), n_bins - 1)
+        buckets[idx].append(p)
+
+    out: list[CalibrationBin] = []
+    for idx, bucket in enumerate(buckets):
+        if not bucket:
+            continue
+        out.append(
+            CalibrationBin(
+                low=idx / n_bins,
+                high=(idx + 1) / n_bins,
+                count=len(bucket),
+                mean_predicted=sum(b.p_home for b in bucket) / len(bucket),
+                observed_rate=sum(1 for b in bucket if b.home_won) / len(bucket),
+            )
+        )
+    return out
+
+
+def calibration_error(preds: Sequence[Prediction], n_bins: int = 10) -> float:
+    """Count-weighted mean gap between stated probability and observed rate."""
+    bins = calibration_bins(preds, n_bins)
+    total = sum(b.count for b in bins)
+    return sum(
+        b.count * abs(b.mean_predicted - b.observed_rate) for b in bins
+    ) / total
