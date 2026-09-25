@@ -84,6 +84,24 @@ def test_report_says_market_comparison_is_unavailable_rather_than_printing_zero(
     )
 
 
+def test_report_says_something_true_once_odds_rows_exist_rather_than_nothing():
+    """FIX 20 (final review, part 3): the `market_available=True` path had
+    no `else` branch at all, so the first `ingest-odds` row made the whole
+    market section disappear silently -- no comparison, no explanation, no
+    signal that anything had changed. It must instead say plainly that odds
+    data exists, how many rows are in the archive, and that the comparison
+    itself (matching those rows to these scored games) has not been built.
+    """
+    preds = [make(0.7, i < 70, f"g{i}") for i in range(100)]
+    text = report.format_report(
+        summarize(preds, market_available=True, market_reason=None, market_row_count=42)
+    )
+    assert "Market comparison" in text
+    assert "unavailable" not in text
+    assert "42" in text
+    assert "has not been built" in text
+
+
 def test_report_includes_a_readable_calibration_table():
     preds = [make(0.65, i < 65, f"a{i}") for i in range(100)]
     preds += [make(0.35, i < 35, f"b{i}") for i in range(100)]

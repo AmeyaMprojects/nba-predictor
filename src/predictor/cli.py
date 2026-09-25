@@ -372,6 +372,7 @@ def backtest_cmd(
         buffer_minutes=buffer_minutes,
         market_available=market_available,
         market_reason=market_reason,
+        market_row_count=odds_health.row_count,
     )
     typer.echo(report.format_report(result))
 

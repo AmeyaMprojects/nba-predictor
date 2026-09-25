@@ -28,6 +28,13 @@ class BacktestResult:
     bins: list[metrics.CalibrationBin]
     market_available: bool
     market_reason: str | None
+    # FIX 20 (final review, part 3): total odds_snapshots rows currently in
+    # the archive, regardless of whether they cover any of THESE scored
+    # games -- there is no join key yet between the odds table (keyed by
+    # the odds provider's own event id) and the games table (keyed by the
+    # NBA's game_id), so this count is honestly total-archive, not
+    # matched-to-this-run. See the market section of format_report.
+    market_row_count: int
     reconstructed_share: float
 
 
@@ -39,6 +46,7 @@ def summarize(
     buffer_minutes: int,
     market_available: bool,
     market_reason: str | None = None,
+    market_row_count: int = 0,
 ) -> BacktestResult:
     """Compute every headline metric. Raises if there is nothing to score."""
     return BacktestResult(
@@ -67,6 +75,7 @@ def summarize(
         # report keeps printing it.
         market_available=market_available,
         market_reason=market_reason,
+        market_row_count=market_row_count,
         # FIX 2: computed over `preds` (each Prediction already carries its
         # own `reconstructed` flag, read by replay.py through
         # db.POINT_IN_TIME_TABLES -- no physical table name belongs here).
@@ -282,6 +291,24 @@ def format_report(result: BacktestResult) -> str:
             "",
             f"  Market comparison: unavailable -- {result.market_reason}, so there is "
             "nothing to compare against.",
+        ]
+    else:
+        # FIX 20 (final review, part 3): the `market_available` branch had
+        # no `else` at all, so the first `ingest-odds` row made this whole
+        # section disappear silently -- no comparison, no explanation, no
+        # signal to the reader that anything had changed. Print something
+        # true instead: odds rows now exist, but there is no join key yet
+        # between odds_snapshots (keyed by the odds provider's own event
+        # id) and games (keyed by the NBA's game_id), so how many of them
+        # actually cover THESE scored games is not something this report
+        # can honestly claim to know -- building that match is the market
+        # comparison itself, deliberately not built this wave.
+        lines += [
+            "",
+            f"  Market comparison: odds data exists ({result.market_row_count:,} row(s) "
+            "in the archive), but there is no comparison yet -- matching those rows to "
+            "the scored games above (the comparison itself) has not been built, so how "
+            "many of them cover these particular games is not known.",
         ]
 
     # FIX 2: every published number rests on reconstructed timestamps this
