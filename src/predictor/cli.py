@@ -300,7 +300,16 @@ def backtest_cmd(
         # TYPE alone cannot distinguish them -- matched on message text
         # instead, verified against a real cross-process lock conflict
         # (see tests/test_backtest_cli.py).
-        if "lock" in str(exc).lower():
+        #
+        # FIX 25(a) (final review, part 4): the substring "lock" alone is
+        # not specific enough -- a MISSING database whose path happens to
+        # contain "lock" (e.g. a data directory named "unlocked-data")
+        # would match this branch too, telling a user with no database at
+        # all to "wait a moment and re-run" forever. DuckDB's actual lock
+        # conflict message (verified above, cross-process) is "Conflicting
+        # lock is held in <process> ... by user ..."; match that phrase,
+        # not the bare word.
+        if "conflicting lock is held" in str(exc).lower():
             typer.echo(
                 "Could not open the database -- another 'predictor' command "
                 "is using it right now, most likely the scheduled "
@@ -341,9 +350,15 @@ def backtest_cmd(
              "record the score"),
             (stats.skipped_result_visible, "had the result already visible at the "
              "cutoff (leak guard)"),
-            (stats.declined, "the predictor declined to predict"),
-            (stats.failed, "the predictor failed or returned an impossible "
-             "probability for"),
+            # FIX 25(d) (final review, part 4): these two used to read
+            # "18 the predictor declined to predict" and "12 the predictor
+            # failed or returned an impossible probability for" -- neither
+            # is a sentence once joined with its count (no verb follows the
+            # number). Rewritten as predicates, matching every other bucket
+            # above, so each line reads as "<n> <predicate>".
+            (stats.declined, "were declined by the predictor"),
+            (stats.failed, "made the predictor fail or return an impossible "
+             "probability"),
         ]
         detail = "; ".join(f"{n:,} {text}" for n, text in buckets if n)
         message = (

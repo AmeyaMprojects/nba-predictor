@@ -47,6 +47,7 @@ def test_backtest_reports_nothing_to_score_rather_than_crashing(tmp_path, monkey
         return [], replay_mod.ReplayStats(
             considered=0, predicted=0, skipped_conflicting_metadata=0,
             skipped_buffer_too_early=0,
+            skipped_buffer_too_early_reconstructed=0,
             skipped_no_tipoff=0,
             considered_by_season={},
             skipped_no_tipoff_by_season={},
@@ -72,26 +73,32 @@ def test_backtest_nothing_scored_message_reports_every_nonzero_bucket(tmp_path, 
 
     def empty(*args, **kwargs):
         return [], replay_mod.ReplayStats(
-            considered=21, predicted=0, skipped_conflicting_metadata=1,
+            considered=36, predicted=0, skipped_conflicting_metadata=1,
             skipped_buffer_too_early=2,
+            skipped_buffer_too_early_reconstructed=2,
             skipped_no_tipoff=3,
-            considered_by_season={"2023-24": 21},
+            considered_by_season={"2023-24": 36},
             skipped_no_tipoff_by_season={"2023-24": 3},
             skipped_no_result=4, skipped_score_missing=5,
-            skipped_result_visible=6, declined=0, failed=0,
+            skipped_result_visible=6, declined=7, failed=8,
         )
 
     monkeypatch.setattr(replay_mod, "replay", empty)
     result = runner.invoke(cli.app, ["backtest"])
     assert result.exit_code != 0
     out = result.stdout
-    assert "21" in out
+    assert "36" in out
     assert "1 had contradictory metadata" in out
     assert "2 had a buffer reaching back" in out
     assert "3 had no resolvable tip-off time" in out
     assert "4 had no result yet" in out
     assert "5 were played but the archive did not record the score" in out
     assert "6 had the result already visible" in out
+    # FIX 25(d) (final review, part 4): these two used to render as
+    # "18 the predictor declined to predict" -- a number followed by a noun
+    # phrase, not a sentence. Both must now read as "<n> <verb phrase>".
+    assert "7 were declined by the predictor" in out
+    assert "8 made the predictor fail or return an impossible probability" in out
 
 
 def test_backtest_hints_at_known_seasons_when_a_season_filter_matches_nothing(
@@ -179,6 +186,29 @@ def test_backtest_tells_the_user_to_ingest_first_when_no_database_exists(tmp_pat
     assert result.exit_code != 0
     assert "ingest" in result.stdout.lower()
     assert "Traceback" not in result.stdout
+
+
+def test_backtest_does_not_mistake_a_missing_database_for_a_lock_conflict_from_its_path(
+    tmp_path, monkeypatch
+):
+    """FIX 25(a) (final review, part 4): the old check matched the bare
+    substring "lock" against the DuckDB error text, so a MISSING database
+    whose path happens to contain that substring (e.g. a data directory
+    named "unlocked-data") was misreported as a routine lock conflict --
+    telling a user with no database at all to "wait a moment and try
+    again" forever, instead of pointing them at an ingest command that
+    would actually fix it.
+    """
+    data_dir = tmp_path / "unlocked-data"
+    data_dir.mkdir()
+    # No database file created under data_dir -- genuinely missing, not
+    # locked by anything.
+    _point_settings_at_tmp(data_dir, monkeypatch)
+    result = runner.invoke(cli.app, ["backtest"])
+    assert result.exit_code != 0
+    out = result.stdout.lower()
+    assert "wait a moment" not in out, "a missing database was reported as a lock conflict"
+    assert "ingest" in out
 
 
 def test_backtest_reports_a_lock_conflict_in_plain_english_not_a_missing_database(

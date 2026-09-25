@@ -48,7 +48,14 @@ def summarize(
     buffer_minutes: int,
     market_available: bool,
     market_reason: str | None = None,
-    market_row_count: int = 0,
+    # FIX 25(c) (final review, part 4): a default of 0 here made
+    # `"odds data exists (0 row(s) in the archive)"` constructible --
+    # `market_row_count=0` alongside `market_available=True` claims odds
+    # rows exist while also stating there are zero of them. Not reachable
+    # from the CLI today (cli.py always passes the real count through),
+    # but the type itself should not make that sentence possible to
+    # construct by omission -- the caller must state the count.
+    market_row_count: int,
 ) -> BacktestResult:
     """Compute every headline metric. Raises if there is nothing to score."""
     return BacktestResult(
@@ -249,20 +256,43 @@ def format_report(result: BacktestResult) -> str:
     if s.skipped_buffer_too_early:
         # FIX 21 (final review, part 3): this used to say the buffer reached
         # "before the game was even on the schedule" -- but the timestamp it
-        # is compared against is RECONSTRUCTED, not observed: the NBA
-        # archive does not record when a game was actually first announced,
-        # so the harness derived it from game_date (7 days before for the
-        # regular season, 1 day before for the postseason). That made the
-        # old sentence false for every game it fired on (measured: none of
-        # 1,229 games flagged at --buffer-minutes 14400 were genuinely
-        # unscheduled at that cutoff). The guard is still a useful sanity
-        # bound -- only the claim about what it checks is corrected.
+        # is compared against is, for every game in the archive TODAY,
+        # RECONSTRUCTED rather than observed: the NBA archive does not
+        # record when a game was actually first announced, so the harness
+        # derived it from game_date (7 days before for the regular season,
+        # 1 day before for the postseason). That made the old sentence
+        # false for every game it fired on (measured: none of 1,229 games
+        # flagged at --buffer-minutes 14400 were genuinely unscheduled at
+        # that cutoff). The guard is still a useful sanity bound -- only
+        # the claim about what it checks is corrected.
+        #
+        # FIX 25(b) (final review, part 4): "RECONSTRUCTED" used to be
+        # HARDCODED here regardless of what the data actually says -- the
+        # same anti-pattern FIX 10 removed from the market line. Read it
+        # off `skipped_buffer_too_early_reconstructed`, which replay.py
+        # computes from the `reconstructed` flag on the row it actually
+        # selected for each skipped game, so this sentence stays true the
+        # moment a live ingest path starts writing genuinely OBSERVED
+        # SCHEDULED rows instead of derived ones.
+        n_early = s.skipped_buffer_too_early
+        n_reconstructed = s.skipped_buffer_too_early_reconstructed
+        if n_reconstructed == n_early:
+            provenance = (
+                "the harness's own RECONSTRUCTED schedule timestamp for these games, "
+                "derived from game_date rather than observed (the NBA archive does "
+                "not record when a game was actually first announced)"
+            )
+        elif n_reconstructed == 0:
+            provenance = "the harness's own OBSERVED schedule timestamp for these games"
+        else:
+            provenance = (
+                "the harness's own schedule timestamp for these games -- RECONSTRUCTED "
+                f"(derived from game_date, not observed) for {n_reconstructed:,} of "
+                f"them, OBSERVED for the other {n_early - n_reconstructed:,}"
+            )
         lines.append(
-            f"    {s.skipped_buffer_too_early:,} game(s) skipped -- the buffer reaches "
-            "back past the harness's own RECONSTRUCTED schedule timestamp for these "
-            "games, derived from game_date rather than observed (the NBA archive does "
-            "not record when a game was actually first announced), so this run is not "
-            "measuring anything meaningful for them"
+            f"    {n_early:,} game(s) skipped -- the buffer reaches back past "
+            f"{provenance}, so this run is not measuring anything meaningful for them"
         )
     if s.skipped_no_tipoff:
         lines.append(

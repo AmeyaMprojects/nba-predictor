@@ -19,6 +19,7 @@ def make(p_home, home_won, gid="g", reconstructed=False, season="2024-25"):
 STATS = ReplayStats(
     considered=120, predicted=100, skipped_conflicting_metadata=0,
     skipped_buffer_too_early=0,
+    skipped_buffer_too_early_reconstructed=0,
     skipped_no_tipoff=15,
     considered_by_season={"2024-25": 120},
     skipped_no_tipoff_by_season={"2024-25": 15},
@@ -34,6 +35,9 @@ _DEFAULTS = dict(
     buffer_minutes=30,
     market_available=False,
     market_reason="no odds data has been collected yet (0 row(s) in the archive)",
+    # FIX 25(c) (final review, part 4): report.summarize no longer defaults
+    # this -- every caller, including this test helper, must state it.
+    market_row_count=0,
 )
 
 
@@ -115,6 +119,7 @@ def test_summarize_with_no_predictions_raises_rather_than_reporting_zeroes():
     empty = ReplayStats(
         considered=10, predicted=0, skipped_conflicting_metadata=0,
         skipped_buffer_too_early=0,
+        skipped_buffer_too_early_reconstructed=0,
         skipped_no_tipoff=10,
         considered_by_season={"2024-25": 10},
         skipped_no_tipoff_by_season={"2024-25": 10},
@@ -223,6 +228,7 @@ def test_report_states_conflicting_metadata_coverage_honestly():
     stats = ReplayStats(
         considered=123, predicted=100, skipped_conflicting_metadata=3,
         skipped_buffer_too_early=0,
+        skipped_buffer_too_early_reconstructed=0,
         skipped_no_tipoff=15,
         considered_by_season={"2024-25": 123},
         skipped_no_tipoff_by_season={"2024-25": 15},
@@ -292,6 +298,11 @@ def test_report_states_buffer_too_early_coverage_honestly():
     stats = ReplayStats(
         considered=110, predicted=100, skipped_conflicting_metadata=0,
         skipped_buffer_too_early=10,
+        # Every skipped-too-early game's SCHEDULED row is reconstructed --
+        # the archive's current reality -- so the RECONSTRUCTED wording
+        # below is still the true one for this fixture. See FIX 25(b)'s own
+        # tests for the case where it is not.
+        skipped_buffer_too_early_reconstructed=10,
         skipped_no_tipoff=0,
         considered_by_season={"2024-25": 110},
         skipped_no_tipoff_by_season={},
@@ -303,6 +314,52 @@ def test_report_states_buffer_too_early_coverage_honestly():
     assert "RECONSTRUCTED" in text
     assert "even on the schedule" not in text
     assert "not measuring anything meaningful" in text
+
+
+def test_buffer_too_early_line_says_observed_when_the_flag_says_so():
+    """FIX 25(b) (final review, part 4): the RECONSTRUCTED claim used to be
+    hardcoded, regardless of what the `reconstructed` flag on the actual
+    row said. When NONE of the skipped-too-early games' schedule rows are
+    reconstructed, the report must say OBSERVED, not print a false
+    RECONSTRUCTED claim just because that happens to be true of every game
+    in today's archive.
+    """
+    preds = [make(0.7, i < 70, f"g{i}") for i in range(100)]
+    stats = ReplayStats(
+        considered=110, predicted=100, skipped_conflicting_metadata=0,
+        skipped_buffer_too_early=10,
+        skipped_buffer_too_early_reconstructed=0,
+        skipped_no_tipoff=0,
+        considered_by_season={"2024-25": 110},
+        skipped_no_tipoff_by_season={},
+        skipped_no_result=0, skipped_score_missing=0,
+        skipped_result_visible=0, declined=0, failed=0,
+    )
+    text = report.format_report(summarize(preds, stats))
+    assert "10 game(s) skipped -- the buffer reaches back" in text
+    assert "OBSERVED schedule timestamp" in text
+    assert "RECONSTRUCTED" not in text
+
+
+def test_buffer_too_early_line_states_a_true_mixed_split():
+    """A mix of reconstructed and observed schedule rows must be stated as
+    a mix, not rounded to either extreme."""
+    preds = [make(0.7, i < 70, f"g{i}") for i in range(100)]
+    stats = ReplayStats(
+        considered=110, predicted=100, skipped_conflicting_metadata=0,
+        skipped_buffer_too_early=10,
+        skipped_buffer_too_early_reconstructed=3,
+        skipped_no_tipoff=0,
+        considered_by_season={"2024-25": 110},
+        skipped_no_tipoff_by_season={},
+        skipped_no_result=0, skipped_score_missing=0,
+        skipped_result_visible=0, declined=0, failed=0,
+    )
+    text = report.format_report(summarize(preds, stats))
+    assert "RECONSTRUCTED" in text
+    assert "OBSERVED" in text
+    assert "3 of them" in text
+    assert "7" in text
 
 
 # --- FIX 8: the verdict is a paired comparison with a stated margin --------
@@ -484,6 +541,7 @@ def test_report_distinguishes_not_yet_played_from_score_missing():
     stats = ReplayStats(
         considered=108, predicted=100, skipped_conflicting_metadata=0,
         skipped_buffer_too_early=0,
+        skipped_buffer_too_early_reconstructed=0,
         skipped_no_tipoff=0,
         considered_by_season={"2024-25": 108},
         skipped_no_tipoff_by_season={},
@@ -506,6 +564,7 @@ def test_no_tipoff_line_is_broken_down_by_season():
     stats = ReplayStats(
         considered=1_230 + 1_059, predicted=100, skipped_conflicting_metadata=0,
         skipped_buffer_too_early=0,
+        skipped_buffer_too_early_reconstructed=0,
         skipped_no_tipoff=804 + 284,
         considered_by_season={"2025-26": 1_230, "2019-20": 1_059},
         skipped_no_tipoff_by_season={"2025-26": 804, "2019-20": 284},

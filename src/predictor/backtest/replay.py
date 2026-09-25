@@ -39,6 +39,14 @@ class ReplayStats:
     # games where the run is not measuring anything meaningful, not
     # literally games "asked of before they were on the schedule".
     skipped_buffer_too_early: int
+    # FIX 25(b) (final review, part 4): of `skipped_buffer_too_early` above,
+    # how many were skipped against a RECONSTRUCTED (not observed) schedule
+    # timestamp -- read off the `reconstructed` flag on the actual row
+    # selected for each game, not assumed. Lets the report state plainly
+    # whether the sentence above still applies to every one of these games,
+    # some of them, or none -- rather than hardcoding it as true for all of
+    # them regardless of what the data says.
+    skipped_buffer_too_early_reconstructed: int
     skipped_no_tipoff: int
     # FIX 11: per-season breakdown of the two counters above, keyed by
     # `Prediction.season`. `considered_by_season` is the denominator for
@@ -182,7 +190,7 @@ def replay(
     ).fetchall()
 
     considered = predicted = conflicting = no_tip = no_result = leaked = declined = failed = 0
-    buffer_too_early = score_missing = 0
+    buffer_too_early = score_missing = buffer_too_early_reconstructed = 0
     considered_by_season: dict[str, int] = {}
     no_tip_by_season: dict[str, int] = {}
     out: list[Prediction] = []
@@ -219,33 +227,51 @@ def replay(
         # far back the buffer reaches.
         #
         # FIX 21 (final review, part 3): what this bound actually checks.
-        # `earliest_scheduled` here is not an observed publication time --
-        # this table's SCHEDULED row is, for every game in the current
-        # archive, DERIVED at ingest time from `game_date` alone (7 days
-        # before for the regular season, 1 day before for the postseason,
-        # both at 12:00 UTC -- see `nba_stats._derive_observed_at`), because
-        # the NBA archive does not record when a game was actually first
-        # announced. So "the buffer reaches back before the game was even
-        # scheduled" was never a true statement about this data -- it
-        # compared the cutoff to a RECONSTRUCTED timestamp, not an observed
-        # one (measured: at --buffer-minutes 14400, 1,229 games print this,
-        # none of which were genuinely unscheduled at that cutoff). The
-        # guard is still worth keeping as a sanity bound; only the message
-        # is corrected to say what it actually checks.
-        earliest_scheduled = con.execute(
-            f"SELECT min(observed_at) FROM {games_table} "
-            "WHERE game_id = ? AND status = 'SCHEDULED'",
+        # `earliest_scheduled` here is not necessarily an observed
+        # publication time -- for every game in the archive TODAY, this
+        # table's SCHEDULED row is DERIVED at ingest time from `game_date`
+        # alone (7 days before for the regular season, 1 day before for the
+        # postseason, both at 12:00 UTC -- see
+        # `nba_stats._derive_observed_at`), because the NBA archive does not
+        # record when a game was actually first announced. So "the buffer
+        # reaches back before the game was even scheduled" was never a true
+        # statement about this data -- it compared the cutoff to a
+        # RECONSTRUCTED timestamp, not an observed one (measured: at
+        # --buffer-minutes 14400, 1,229 games print this, none of which
+        # were genuinely unscheduled at that cutoff). The guard is still
+        # worth keeping as a sanity bound; only the message is corrected to
+        # say what it actually checks.
+        #
+        # FIX 25(b) (final review, part 4): that correction used to be
+        # HARDCODED into the message regardless of what the row actually
+        # says -- the same anti-pattern FIX 10 removed from the market
+        # line. `reconstructed` is read here off the SAME row already being
+        # selected (the earliest SCHEDULED observation for this game), so
+        # the message stays true the moment a live ingest path writes a
+        # genuinely OBSERVED SCHEDULED row instead of a derived one.
+        earliest_scheduled_row = con.execute(
+            f"SELECT observed_at, reconstructed FROM {games_table} "
+            "WHERE game_id = ? AND status = 'SCHEDULED' "
+            "ORDER BY observed_at ASC LIMIT 1",
             [game_id],
-        ).fetchone()[0]
+        ).fetchone()
+        earliest_scheduled = earliest_scheduled_row[0] if earliest_scheduled_row else None
         if earliest_scheduled is not None and cutoff < earliest_scheduled:
             buffer_too_early += 1
+            schedule_reconstructed = bool(earliest_scheduled_row[1])
+            provenance = (
+                "RECONSTRUCTED schedule timestamp (derived from game_date, "
+                "not observed)"
+                if schedule_reconstructed
+                else "OBSERVED schedule timestamp"
+            )
             print(
                 f"backtest: SKIPPING {game_id} -- buffer reaches cutoff "
-                f"{cutoff.isoformat()}, before this game's RECONSTRUCTED "
-                f"schedule timestamp ({earliest_scheduled.isoformat()}, derived "
-                "from game_date, not observed), so this run is not measuring "
-                "anything meaningful for it, not predicted"
+                f"{cutoff.isoformat()}, before this game's {provenance} "
+                f"({earliest_scheduled.isoformat()}), so this run is not "
+                "measuring anything meaningful for it, not predicted"
             )
+            buffer_too_early_reconstructed += 1 if schedule_reconstructed else 0
             continue
 
         # Finding 1: the central invariant, verified for real against the
@@ -344,6 +370,7 @@ def replay(
         predicted=predicted,
         skipped_conflicting_metadata=conflicting,
         skipped_buffer_too_early=buffer_too_early,
+        skipped_buffer_too_early_reconstructed=buffer_too_early_reconstructed,
         skipped_no_tipoff=no_tip,
         considered_by_season=considered_by_season,
         skipped_no_tipoff_by_season=no_tip_by_season,
