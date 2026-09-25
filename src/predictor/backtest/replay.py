@@ -237,7 +237,8 @@ def replay(
         # reaches back before the game was even scheduled" was never a true
         # statement about this data -- it compared the cutoff to a
         # RECONSTRUCTED timestamp, not an observed one (measured: at
-        # --buffer-minutes 14400, 1,229 games print this, none of which
+        # --buffer-minutes 14400, all 7,200 scored games print this -- the
+        # 1,229 first recorded here were one season alone -- none of which
         # were genuinely unscheduled at that cutoff). The guard is still
         # worth keeping as a sanity bound; only the message is corrected to
         # say what it actually checks.

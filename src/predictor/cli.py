@@ -342,8 +342,16 @@ def backtest_cmd(
         buckets = [
             (stats.skipped_conflicting_metadata, "had contradictory metadata across "
              "ingested rows"),
-            (stats.skipped_buffer_too_early, "had a buffer reaching back past the "
-             "harness's reconstructed schedule timestamp"),
+            # The "reconstructed" half of this claim is only true for the
+            # games whose schedule timestamp actually carries that flag, which
+            # `replay` now counts separately -- so say it only of those, the
+            # same way report.py does, rather than asserting it of all of them.
+            (stats.skipped_buffer_too_early - stats.skipped_buffer_too_early_reconstructed,
+             "had a buffer reaching back past the game's earliest recorded "
+             "schedule timestamp"),
+            (stats.skipped_buffer_too_early_reconstructed,
+             "had a buffer reaching back past the harness's RECONSTRUCTED "
+             "schedule timestamp for the game (derived, not observed)"),
             (stats.skipped_no_tipoff, "had no resolvable tip-off time"),
             (stats.skipped_no_result, "had no result yet (not yet played)"),
             (stats.skipped_score_missing, "were played but the archive did not "

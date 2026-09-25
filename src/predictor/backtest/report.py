@@ -94,6 +94,16 @@ def summarize(
     )
 
 
+def _format_p(p: float) -> str:
+    """Never print `p=0`, which is false for any finite sample.
+
+    `2 * tail / 2**n` underflows to 0.0 for a large, lopsided discordant set
+    -- from about a 70.8% win rate at the full archive's 8,289 disagreements.
+    The true p-value is tiny but never zero, so say that instead.
+    """
+    return "<1e-300" if p <= 0.0 else f"{p:.3g}"
+
+
 def _provenance_header(result: BacktestResult) -> list[str]:
     """FIX 6: what this report is a report OF -- printed above everything else.
 
@@ -204,14 +214,14 @@ def format_report(result: BacktestResult) -> str:
             verdict = (
                 f"{direction} always-pick-home by {abs(edge_pts):.1f} points "
                 f"-- {n_discordant:,} disagreement(s), exact sign-test "
-                f"p={pc.p_value:.3g}"
+                f"p={_format_p(pc.p_value)}"
             )
         else:
             verdict = (
                 f"TOO CLOSE TO CALL -- edge over always-pick-home is "
                 f"{edge_pts:+.1f} points over {n_discordant:,} "
                 f"disagreement(s); an edge this size or larger arises by "
-                f"chance with p={pc.p_value:.3g} (not below the "
+                f"chance with p={_format_p(pc.p_value)} (not below the "
                 f"{_SIGNIFICANCE_LEVEL:g} significance threshold used here)"
             )
 
@@ -261,9 +271,10 @@ def format_report(result: BacktestResult) -> str:
         # record when a game was actually first announced, so the harness
         # derived it from game_date (7 days before for the regular season,
         # 1 day before for the postseason). That made the old sentence
-        # false for every game it fired on (measured: none of 1,229 games
-        # flagged at --buffer-minutes 14400 were genuinely unscheduled at
-        # that cutoff). The guard is still a useful sanity bound -- only
+        # false for every game it fired on (measured: none of the 7,200
+        # scored games flagged at --buffer-minutes 14400 were genuinely
+        # unscheduled at that cutoff; the 1,229 figure first recorded here
+        # was one season alone). The guard is still a useful sanity bound -- only
         # the claim about what it checks is corrected.
         #
         # FIX 25(b) (final review, part 4): "RECONSTRUCTED" used to be

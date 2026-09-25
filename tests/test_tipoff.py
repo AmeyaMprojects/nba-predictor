@@ -204,7 +204,15 @@ def test_resolve_tipoff_returns_none_when_neither_team_has_an_entry(con):
 def test_archive_wide_cutoff_is_strictly_before_every_recorded_tipoff_vintage(
     buffer_minutes,
 ):
-    con = duckdb.connect(str(_REAL_ARCHIVE), read_only=True)
+    # The scheduled `poll-news` job holds a write lock on the real archive at
+    # 09:00/14:00/19:00, and DuckDB allows one writer XOR readers. Without
+    # this, a suite run during one of those windows fails inside a TIP-OFF
+    # test, which reads to a non-coding user as "tip-off resolution is
+    # broken" when nothing is wrong at all.
+    try:
+        con = duckdb.connect(str(_REAL_ARCHIVE), read_only=True)
+    except duckdb.Error as exc:  # pragma: no cover - timing-dependent
+        pytest.skip(f"real archive is locked by another process: {exc}")
     try:
         games_table = db.POINT_IN_TIME_TABLES["games"]
         inj_table = db.POINT_IN_TIME_TABLES["injury_status"]
