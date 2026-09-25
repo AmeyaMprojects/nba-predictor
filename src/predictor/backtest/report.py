@@ -85,7 +85,7 @@ def _provenance_header(result: BacktestResult) -> list[str]:
         f"  Model               : {result.model}",
         f"  Season              : {season_label}",
         f"  Buffer              : {result.buffer_minutes:,} minutes before tip-off",
-        f"  Games scored        : {game_dates[0].isoformat()} to {game_dates[-1].isoformat()}",
+        f"  Date range          : {game_dates[0].isoformat()} to {game_dates[-1].isoformat()}",
         "",
     ]
 

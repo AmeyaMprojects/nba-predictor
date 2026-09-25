@@ -233,7 +233,7 @@ def test_provenance_header_states_model_season_buffer_and_date_range():
     assert "Model               : coin-flip" in text
     assert "Season              : 2023-24" in text
     assert "Buffer              : 45 minutes before tip-off" in text
-    assert "Games scored        : 2024-01-01 to 2024-03-15" in text
+    assert "Date range          : 2024-01-01 to 2024-03-15" in text
     # The header must be ABOVE the verdict.
     header_idx = next(i for i, line in enumerate(lines) if "Model" in line)
     verdict_idx = next(
