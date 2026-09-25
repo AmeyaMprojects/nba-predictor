@@ -22,6 +22,7 @@ class Prediction:
     cutoff: datetime
     p_home: float
     home_won: bool
+    reconstructed: bool
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,26 @@ def replay(
     an assertion that some timing margin holds -- a future change to how
     tip-off (and therefore the cutoff) is derived must trip this check,
     not silently slip past it.
+
+    FIX 2 (final review, part 1): what this guard can and cannot prove on
+    the archive in use today. Every row of the games point-in-time table
+    currently in the database has ``reconstructed = TRUE`` -- these
+    ``observed_at`` timestamps were derived at import time (see
+    ``nba_stats._derive_observed_at``), not observed as results were
+    published -- and every derived FINAL row sits at exactly
+    ``game_date + 1 day, 12:00 UTC``, which is always later than any
+    possible pre-tip-off cutoff. That makes this guard STRUCTURALLY
+    INCAPABLE of ever tripping on this data: ``skipped_result_visible``
+    being 0 for every game replayed so far is a consequence of how these
+    timestamps were derived, not evidence that the timing was verified.
+    The guard itself is correct, and it is not dead code -- it defends a
+    live ingestion path (results captured as they actually arrive, each
+    carrying a true publish timestamp) that does not exist yet, and it
+    will start doing real work the moment that path does. Until then, do
+    not read a clean run of this harness as proof of point-in-time safety
+    for the *timing* of results specifically -- ``report.format_report``'s
+    provenance block says this to the report's reader in plain English;
+    this paragraph says it to the next engineer reading this code.
     """
     if buffer_minutes < 0:
         raise ValueError(f"buffer_minutes must be >= 0, got {buffer_minutes}")
@@ -132,7 +153,7 @@ def replay(
             continue
 
         result = con.execute(
-            f"SELECT home_points, away_points FROM {games_table} "
+            f"SELECT home_points, away_points, reconstructed FROM {games_table} "
             f"WHERE game_id = ? AND status = 'FINAL' "
             "AND home_points IS NOT NULL AND away_points IS NOT NULL "
             "ORDER BY observed_at DESC LIMIT 1",
@@ -186,6 +207,7 @@ def replay(
                 cutoff=cutoff,
                 p_home=p_home,
                 home_won=result[0] > result[1],
+                reconstructed=bool(result[2]),
             )
         )
         predicted += 1

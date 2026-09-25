@@ -12,7 +12,7 @@ def make(p_home: float, home_won: bool, gid: str = "g") -> Prediction:
     return Prediction(
         game_id=gid, season="2024-25", game_date=date(2025, 1, 15),
         home_team="PHI", away_team="NYK", tipoff=TIP, cutoff=TIP,
-        p_home=p_home, home_won=home_won,
+        p_home=p_home, home_won=home_won, reconstructed=False,
     )
 
 

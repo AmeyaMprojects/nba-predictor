@@ -8,11 +8,11 @@ from predictor.backtest.replay import Prediction, ReplayStats
 TIP = datetime(2025, 1, 16, 0, 0, tzinfo=UTC)
 
 
-def make(p_home, home_won, gid="g"):
+def make(p_home, home_won, gid="g", reconstructed=False):
     return Prediction(
         game_id=gid, season="2024-25", game_date=date(2025, 1, 15),
         home_team="PHI", away_team="NYK", tipoff=TIP, cutoff=TIP,
-        p_home=p_home, home_won=home_won,
+        p_home=p_home, home_won=home_won, reconstructed=reconstructed,
     )
 
 
@@ -67,3 +67,35 @@ def test_summarize_with_no_predictions_raises_rather_than_reporting_zeroes():
                         declined=0, failed=0)
     with pytest.raises(Exception):
         report.summarize([], empty)
+
+
+# --- FIX 2: reconstructed-timestamp provenance ----------------------------
+
+
+def test_reconstructed_share_is_computed_over_the_scored_games():
+    preds = [make(0.7, True, f"g{i}", reconstructed=True) for i in range(3)]
+    preds += [make(0.7, True, f"h{i}", reconstructed=False) for i in range(1)]
+    r = report.summarize(preds, STATS)
+    assert r.reconstructed_share == pytest.approx(0.75)
+
+
+def test_reconstructed_share_is_zero_when_no_prediction_is_reconstructed():
+    preds = [make(0.7, i < 70, f"g{i}") for i in range(100)]
+    r = report.summarize(preds, STATS)
+    assert r.reconstructed_share == 0.0
+
+
+def test_report_states_reconstructed_timing_provenance_when_present():
+    preds = [make(0.7, i < 70, f"g{i}", reconstructed=True) for i in range(100)]
+    text = report.format_report(report.summarize(preds, STATS))
+    assert "100%" in text
+    assert "RECONSTRUCTED" in text
+    assert "leak" in text.lower() and "guard" in text.lower()
+    assert "not evidence that this" in text.lower()
+    assert "backtest's timing was verified" in text.lower()
+
+
+def test_report_omits_provenance_block_when_nothing_is_reconstructed():
+    preds = [make(0.7, i < 70, f"g{i}", reconstructed=False) for i in range(100)]
+    text = report.format_report(report.summarize(preds, STATS))
+    assert "provenance" not in text.lower()

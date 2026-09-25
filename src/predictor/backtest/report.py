@@ -18,6 +18,7 @@ class BacktestResult:
     calibration_error: float
     bins: list[metrics.CalibrationBin]
     market_available: bool
+    reconstructed_share: float
 
 
 def summarize(
@@ -35,6 +36,12 @@ def summarize(
         bins=metrics.calibration_bins(preds),
         # No odds data exists yet; the market comparison is built but cannot run.
         market_available=False,
+        # FIX 2: computed over `preds` (each Prediction already carries its
+        # own `reconstructed` flag, read by replay.py through
+        # db.POINT_IN_TIME_TABLES -- no physical table name belongs here).
+        # metrics.brier_score(preds) above already raised MetricsError if
+        # `preds` is empty, so this division is safe.
+        reconstructed_share=sum(1 for p in preds if p.reconstructed) / len(preds),
     )
 
 
@@ -98,6 +105,22 @@ def format_report(result: BacktestResult) -> str:
             "",
             "  Market comparison: unavailable -- no odds data has been collected "
             "(no ODDS_API_KEY set), so there is nothing to compare against.",
+        ]
+
+    # FIX 2: every published number rests on reconstructed timestamps this
+    # report used to never mention. Say so plainly whenever any scored game
+    # used one -- do not let a reader assume the leak guard proved anything
+    # about the timing of THIS run's data.
+    if result.reconstructed_share > 0:
+        pct = result.reconstructed_share * 100
+        lines += [
+            "",
+            f"  Timing provenance: {pct:.0f}% of the scored games use RECONSTRUCTED timestamps --",
+            "  the NBA archive does not record when a result was published, so the harness",
+            "  derived it (results assumed public 36 hours after the game date). The leak",
+            "  guard therefore cannot fire on this data: it is a live check that will",
+            "  matter once results are captured as they arrive, not evidence that this",
+            "  backtest's timing was verified.",
         ]
 
     return "\n".join(lines)
