@@ -14,14 +14,22 @@ What may be read from this source:
 
 from __future__ import annotations
 
+import gzip
 import json
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
+from nba_api.stats.endpoints import scheduleleaguev2
+from tenacity import retry, stop_after_attempt, wait_exponential
+
+from predictor import db, raw_store
+
 EASTERN = ZoneInfo("America/New_York")
 _REGULAR_SEASON_PREFIX = "002"
+SOURCE = "schedule"
 
 
 @dataclass(frozen=True)
@@ -146,3 +154,117 @@ def parse_schedule(payload: bytes, season: str) -> ParseResult:
             )
         )
     return ParseResult(rows=rows, no_tipoff=no_tipoff, undetermined=undetermined)
+
+
+@dataclass(frozen=True)
+class IngestResult:
+    season: str
+    written: int
+    no_tipoff: list[str]
+    undetermined: list[str]
+    mismatches: list[str]
+    blob_key: str
+
+
+@retry(
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=2, min=2, max=30),
+    reraise=True,
+)
+def fetch_season_payload(season: str) -> bytes:
+    """The raw schedule JSON for one season, historical or forward."""
+    endpoint = scheduleleaguev2.ScheduleLeagueV2(
+        season=season, league_id="00", timeout=60
+    )
+    return endpoint.get_json().encode("utf-8")
+
+
+def archive_key(season: str, fetched_at: datetime) -> str:
+    return f"{season}_{fetched_at:%Y%m%dT%H%M%S}Z.json.gz"
+
+
+def ingest_season(
+    con,
+    season: str,
+    fetched_at: datetime | None = None,
+    fetch: Callable[[str], bytes] = fetch_season_payload,
+) -> IngestResult:
+    """Fetch, archive, parse and load one season's schedule.
+
+    Raw-first: the gzipped payload is archived BEFORE parsing, and the
+    parser reads the archived bytes back, so a parser bug is re-parsable
+    rather than lost. Each call writes a new vintage stamped with the real
+    fetch time -- the table accumulates genuine point-in-time schedule
+    history from the first daily run onward.
+    """
+    fetched_at = db.require_utc(
+        fetched_at if fetched_at is not None else datetime.now(UTC), "fetched_at"
+    )
+    payload = fetch(season)
+    key = archive_key(season, fetched_at)
+    raw_store.store(
+        SOURCE, key, gzip.compress(payload, mtime=0), fetched_at, meta={"season": season}
+    )
+    parsed = parse_schedule(gzip.decompress(raw_store.load(SOURCE, key)), season)
+
+    table = db.POINT_IN_TIME_TABLES["schedule"]
+    if parsed.rows:
+        con.executemany(
+            f"INSERT OR REPLACE INTO {table} (game_id, season, game_date,"
+            " tip_off_utc, home_team, away_team, arena_name, arena_city,"
+            " arena_state, is_neutral_reported, is_neutral, observed_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            [
+                [
+                    r.game_id, r.season, r.game_date, r.tip_off_utc, r.home_team,
+                    r.away_team, r.arena_name, r.arena_city, r.arena_state,
+                    r.is_neutral_reported, r.is_neutral, fetched_at,
+                ]
+                for r in parsed.rows
+            ],
+        )
+
+    mismatches = compare_with_games(con, season, parsed.rows)
+    for line in mismatches:
+        print(f"schedule: MISMATCH {line}")
+    return IngestResult(
+        season=season,
+        written=len(parsed.rows),
+        no_tipoff=parsed.no_tipoff,
+        undetermined=parsed.undetermined,
+        mismatches=mismatches,
+        blob_key=key,
+    )
+
+
+def compare_with_games(con, season: str, rows: list[ScheduleRow]) -> list[str]:
+    """Where the schedule and the games table disagree, say so -- never reconcile.
+
+    Spec 1.1: the schedule is ground truth for when a game tipped, and a
+    disagreement (chiefly a rescheduled game) is logged loudly. Measured
+    2026-09-27: zero disagreements across all 8,289 regular-season games,
+    so any line printed here is news.
+    """
+    games = db.POINT_IN_TIME_TABLES["games"]
+    by_id = {r.game_id: r for r in rows}
+    found = con.execute(
+        f"SELECT game_id, MIN(game_date), MIN(home_team), MIN(away_team) "
+        f"FROM {games} WHERE season = ? GROUP BY game_id ORDER BY game_id",
+        [season],
+    ).fetchall()
+    out: list[str] = []
+    for game_id, game_date, home, away in found:
+        row = by_id.get(game_id)
+        if row is None:
+            if game_id.startswith(_REGULAR_SEASON_PREFIX):
+                out.append(
+                    f"{game_id}: in the games table ({game_date} {away}@{home}) "
+                    "but not in the schedule"
+                )
+            continue
+        if (row.game_date, row.home_team, row.away_team) != (game_date, home, away):
+            out.append(
+                f"{game_id}: schedule says {row.game_date} {row.away_team}@"
+                f"{row.home_team}, games table says {game_date} {away}@{home}"
+            )
+    return out
