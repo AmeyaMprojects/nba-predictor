@@ -118,10 +118,22 @@ Tip-off coverage is complete where the PDFs were not: 1,230 of 1,230 for
 2023-24 and 1,059 of 1,059 for 2019-20, against the harness's 86.9%.
 
 **Cross-validation.** Over all 1,230 games of 2023-24, the schedule's tip-off
-agrees **exactly** with the PDF-derived time on all 1,229 the PDFs resolve,
-with zero disagreements in either direction, and covers the one they miss.
-Two unrelated sources, no conflicts — independent confirmation of the PDF
-parser and of the min-across-vintages rule.
+agrees **exactly** with the PDF-derived time on all 1,229 the PDFs resolve.
+Across **all seasons** (measured 2026-09-27, 7,200 games with both sources),
+it equals the old PDF resolver on 7,195. The other five are not conflicts:
+two are opening-night `:01` times the PDFs round, and three are games moved
+*later* whose day-before report showed the old slot while the game-day
+report, filed before either time, showed the schedule's. The invariant that
+holds for every one of the 7,200 — the schedule matches the most recent
+pre-game report (or, for a game moved earlier, the earliest) — is what the
+cross-check test asserts.
+
+**Neutral sites.** The league's `isNeutral` flag is false for every game
+before 2024-25, including Paris, Mexico City and Las Vegas. The stored
+`is_neutral` therefore also marks any game whose arena differs from the home
+team's usual regular-season venue that season: the 2019-20 Orlando bubble,
+international games, NBA Cup Las Vegas games, and San Antonio's Austin games.
+The league's own flag is kept alongside as `is_neutral_reported`.
 
 ### What may be read from it
 
@@ -143,7 +155,7 @@ The schedule is therefore polled and archived **daily from now on**, alongside
 the news poll. Every day forward accumulates genuine schedule vintages, so when
 a game moves, the archive records *when that became knowable*. This is the
 mechanism by which reconstructed timing heals for live operation rather than
-remaining permanently caveated.
+remaining permanently caveated. The fetch runs daily at 10:30 via its own launchd job (com.predictor.schedule), separate from the news job so that neither can block the other.
 
 Where a game's schedule date disagrees with the games table — chiefly the
 2020-21 COVID postponements — the schedule is ground truth for when the game
