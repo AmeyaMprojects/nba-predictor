@@ -6,9 +6,10 @@ What may be read from this source:
   is never a predictor feature.
 - Arena and neutral-site columns are static venue facts, not
   outcome-bearing, safe to read at any time.
-- Scores, game status, team records and points leaders are in the payload
-  but are never read by this parser. A field that is not stored cannot
-  leak.
+- Scores, the numeric game status, team records and points leaders are in
+  the payload but are never read by this parser. `gameStatusText` is read
+  only to recognise the league's "TBD" placeholder, and is never stored. A
+  field that is not stored cannot leak.
 """
 
 from __future__ import annotations
