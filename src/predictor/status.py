@@ -30,7 +30,7 @@ the REAL refresh cadence of each source, not a single generic number:
   feed) -- see `_advice`.
 - news_items: the one source polled continuously (three times a day) and
   the one source that can NEVER be recovered retroactively once a poll is
-  missed -- an outage here is the most urgent of the four, so it gets the
+  missed -- an outage here is the most urgent of the five, so it gets the
   tightest threshold relative to its cadence.
 - schedule: fetched once a day by its own launchd job. A missed day loses
   that day's schedule vintage (when a game moved, and when that became
