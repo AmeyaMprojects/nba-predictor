@@ -239,3 +239,65 @@ def test_injury_status_game_date_is_not_null(con):
             [datetime(2025, 1, 15).date(), "LAL", "someone", "Out",
              datetime(2025, 1, 15, 12, 0, tzinfo=UTC)],
         )
+
+
+def test_schedule_table_is_registered_and_has_no_outcome_columns(con):
+    assert db.POINT_IN_TIME_TABLES["schedule"] == "schedule_raw"
+    cols = {r[0] for r in con.execute("DESCRIBE schedule_raw").fetchall()}
+    assert cols == {
+        "game_id", "season", "game_date", "tip_off_utc", "home_team",
+        "away_team", "arena_name", "arena_city", "arena_state",
+        "is_neutral_reported", "is_neutral", "observed_at",
+    }
+    # Spec 1.1: scores are never ingested -- a column that does not exist
+    # cannot leak.
+    for forbidden in ("home_points", "away_points", "score", "status", "wins", "losses"):
+        assert not any(forbidden in c for c in cols), forbidden
+
+
+def test_connect_with_retry_waits_out_a_lock_then_connects(tmp_path, monkeypatch):
+    import duckdb
+
+    real_connect = db.connect
+    calls = {"n": 0}
+    slept: list[float] = []
+
+    def flaky(path=None, *, read_only=False):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise duckdb.IOException(
+                "IO Error: Could not set lock on file: Conflicting lock is held in "
+                "/x/python3 (PID 1) by user me"
+            )
+        return real_connect(tmp_path / "t.duckdb")
+
+    monkeypatch.setattr(db, "connect", flaky)
+    con = db.connect_with_retry(attempts=5, wait_seconds=7, sleep=slept.append)
+    assert con.execute("SELECT 1").fetchone() == (1,)
+    assert slept == [7, 7]
+
+
+def test_connect_with_retry_does_not_retry_other_errors(monkeypatch):
+    import duckdb
+
+    calls = {"n": 0}
+
+    def broken(path=None, *, read_only=False):
+        calls["n"] += 1
+        raise duckdb.IOException("IO Error: Cannot open file: No such file or directory")
+
+    monkeypatch.setattr(db, "connect", broken)
+    with pytest.raises(duckdb.IOException):
+        db.connect_with_retry(attempts=5, wait_seconds=0, sleep=lambda s: None)
+    assert calls["n"] == 1
+
+
+def test_connect_with_retry_gives_up_after_the_last_attempt(monkeypatch):
+    import duckdb
+
+    def locked(path=None, *, read_only=False):
+        raise duckdb.IOException("Conflicting lock is held in x")
+
+    monkeypatch.setattr(db, "connect", locked)
+    with pytest.raises(duckdb.IOException):
+        db.connect_with_retry(attempts=3, wait_seconds=0, sleep=lambda s: None)

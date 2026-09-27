@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import KeysView
 from datetime import datetime
 from pathlib import Path
@@ -35,6 +36,7 @@ POINT_IN_TIME_TABLES: Mapping[str, str] = MappingProxyType(
         "injury_status": "injury_status_raw",
         "odds_snapshots": "odds_snapshots_raw",
         "news_items": "news_items_raw",
+        "schedule": "schedule_raw",
     }
 )
 
@@ -138,6 +140,35 @@ CREATE TABLE IF NOT EXISTS news_items_raw (
     PRIMARY KEY (item_key)
 );
 
+-- The league schedule (nba_api ScheduleLeagueV2), one row per game per
+-- fetch. observed_at is the real fetch time, so daily fetches accumulate
+-- genuine schedule vintages from 2026-09-27 onward; rows for games already
+-- played at fetch time are post-hoc. game_date is the Eastern calendar
+-- date. tip_off_utc is NULL when the league lists the time as TBD -- a
+-- placeholder must never become a tip-off, because the harness takes the
+-- MINIMUM across vintages and a 00:00 placeholder would win forever.
+-- is_neutral_reported is the league's own flag, which is false for every
+-- game before 2024-25 (Paris, Mexico City and Las Vegas included);
+-- is_neutral also marks a game whose arena differs from the home team's
+-- usual regular-season venue (see sources/schedule.py). Scores, game
+-- status and team records are deliberately NOT columns: the endpoint
+-- carries them, and a field that is not stored cannot leak.
+CREATE TABLE IF NOT EXISTS schedule_raw (
+    game_id             VARCHAR NOT NULL,
+    season              VARCHAR NOT NULL,
+    game_date           DATE NOT NULL,
+    tip_off_utc         TIMESTAMP WITH TIME ZONE,
+    home_team           VARCHAR NOT NULL,
+    away_team           VARCHAR NOT NULL,
+    arena_name          VARCHAR,
+    arena_city          VARCHAR,
+    arena_state         VARCHAR,
+    is_neutral_reported BOOLEAN NOT NULL,
+    is_neutral          BOOLEAN NOT NULL,
+    observed_at         TIMESTAMP WITH TIME ZONE NOT NULL,
+    PRIMARY KEY (game_id, observed_at)
+);
+
 CREATE TABLE IF NOT EXISTS ingest_runs (
     source        VARCHAR NOT NULL,
     started_at    TIMESTAMP WITH TIME ZONE NOT NULL,
@@ -174,6 +205,31 @@ def connect(
     # zone, so identical code yields different-looking results per machine.
     con.execute("SET TimeZone='UTC'")
     return con
+
+
+def connect_with_retry(
+    path: Path | None = None,
+    *,
+    attempts: int = 6,
+    wait_seconds: float = 20.0,
+    sleep=time.sleep,
+) -> duckdb.DuckDBPyConnection:
+    """connect(), waiting out another predictor process's write lock.
+
+    DuckDB allows one writer per file. The news and schedule launchd jobs
+    both fire on wake after a laptop sleeps through their slots, so one of
+    them routinely finds the other holding the lock for a few seconds.
+    Only that specific error is retried (matched on DuckDB's own message,
+    as the backtest command does); anything else raises immediately.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            return connect(path)
+        except duckdb.Error as exc:
+            if "conflicting lock is held" not in str(exc).lower() or attempt == attempts:
+                raise
+            sleep(wait_seconds)
+    raise AssertionError("unreachable")
 
 
 def migrate(con: duckdb.DuckDBPyConnection) -> None:

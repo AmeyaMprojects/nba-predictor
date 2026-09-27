@@ -121,3 +121,23 @@ def test_poll_news_loads_the_real_archive_into_the_database(tmp_path, monkeypatc
     table = db.POINT_IN_TIME_TABLES["news_items"]
     count = con.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
     assert count == 2
+
+
+def test_poll_news_locked_database_is_plain_english(tmp_path, monkeypatch):
+    # Final-review Fix 1: if the lock outlasts connect_with_retry, the
+    # items are already archived on disk; say so instead of a traceback.
+    import duckdb
+
+    _point_settings_at_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(news_rss, "poll_all", lambda: {"espn": _result(True, new=2)})
+
+    def locked(*args, **kwargs):
+        raise duckdb.IOException("Could not set lock on file: Conflicting lock is held")
+
+    monkeypatch.setattr(db, "connect_with_retry", locked)
+    result = runner.invoke(cli.app, ["poll-news"])
+    assert result.exit_code == 1
+    assert "Could not open the database to save news right now" in result.stdout
+    assert "archived on disk and will be loaded by the next run" in result.stdout
+    assert "Traceback" not in result.stdout
+    assert isinstance(result.exception, SystemExit)

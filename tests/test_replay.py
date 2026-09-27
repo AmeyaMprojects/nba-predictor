@@ -5,6 +5,7 @@ import pytest
 from predictor import db
 from predictor.backtest import replay
 from predictor.backtest.baselines import PredictionError, always_home, fixed_probability
+from schedule_rows import insert_schedule_row
 
 TIP = datetime(2025, 1, 16, 0, 0, tzinfo=UTC)  # 7pm ET on 2025-01-15
 
@@ -38,6 +39,8 @@ def con(tmp_path):
         [date(2025, 1, 15), date(2025, 1, 15), "NYK@PHI", "PHI", "Embiid,Joel",
          "Out", "injury", TIP - timedelta(hours=2), "07:00 (ET)"],
     )
+    # the tip-off source (sub-project 2.5)
+    insert_schedule_row(c, "0022400561", date(2025, 1, 15), "PHI", "NYK", TIP)
     return c
 
 
@@ -58,8 +61,8 @@ def test_cutoff_is_before_tipoff(con):
 
 
 def test_game_without_a_resolvable_tipoff_is_skipped_and_counted(con):
-    i = db.POINT_IN_TIME_TABLES["injury_status"]
-    con.execute(f"DELETE FROM {i}")
+    s = db.POINT_IN_TIME_TABLES["schedule"]
+    con.execute(f"DELETE FROM {s}")
     preds, stats = replay.replay(con, always_home)
     assert preds == []
     assert stats.skipped_no_tipoff == 1
@@ -110,6 +113,7 @@ def test_predictions_are_in_chronological_order(con):
             " VALUES (?,?,?,?,?,?,?,?,?)",
             [d, d, "LAL@BOS", "BOS", "P", "Out", "x", tip - timedelta(hours=2), "07:00 (ET)"],
         )
+        insert_schedule_row(con, gid, d, "BOS", "LAL", tip)
     preds, _ = replay.replay(con, fixed_probability(0.5))
     assert [p.game_id for p in preds] == ["0022400561", "0022400999"]
 
@@ -180,6 +184,7 @@ def test_final_row_with_one_null_score_does_not_abort_run(con):
         [date(2025, 1, 19), date(2025, 1, 19), "LAL@BOS", "BOS", "P", "Out", "x",
          later_tip - timedelta(hours=2), "07:00 (ET)"],
     )
+    insert_schedule_row(con, "0022400999", date(2025, 1, 19), "BOS", "LAL", later_tip)
 
     preds, stats = replay.replay(con, always_home)
 
@@ -216,6 +221,7 @@ def test_counters_reconcile_with_limit_set(con):
             [d, d, "LAL@BOS", "BOS", "P", "Out", "x",
              tip - timedelta(hours=2), "07:00 (ET)"],
         )
+        insert_schedule_row(con, gid, d, "BOS", "LAL", tip)
 
     preds, stats = replay.replay(con, always_home, limit=2)
 
@@ -258,6 +264,7 @@ def test_counters_reconcile_with_no_limit_set(con):
             [d, d, "LAL@BOS", "BOS", "P", "Out", "x",
              tip - timedelta(hours=2), "07:00 (ET)"],
         )
+        insert_schedule_row(con, gid, d, "BOS", "LAL", tip)
     # Also add one game with no resolvable tip-off, so more than one
     # counter is nonzero -- a reconciliation bug that only shows up when a
     # skip path fires would otherwise slip past a test with zero skips.
@@ -386,6 +393,9 @@ def test_season_filter_restricts_the_scored_set(con):
         [date(2023, 12, 19), date(2023, 12, 19), "LAL@BOS", "BOS", "P", "Out", "x",
          other_tip - timedelta(hours=2), "07:00 (ET)"],
     )
+    insert_schedule_row(
+        con, "0022300777", date(2023, 12, 19), "BOS", "LAL", other_tip, season="2023-24"
+    )
 
     all_preds, all_stats = replay.replay(con, always_home)
     assert all_stats.considered == 2
@@ -429,8 +439,8 @@ def test_a_normal_buffer_does_not_trip_the_too_early_check(con):
 
 
 def test_no_tipoff_skip_is_tracked_by_season(con):
-    i = db.POINT_IN_TIME_TABLES["injury_status"]
-    con.execute(f"DELETE FROM {i}")
+    s = db.POINT_IN_TIME_TABLES["schedule"]
+    con.execute(f"DELETE FROM {s}")
     _, stats = replay.replay(con, always_home)
     assert stats.skipped_no_tipoff_by_season == {"2024-25": 1}
     assert stats.considered_by_season == {"2024-25": 1}

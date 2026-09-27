@@ -21,6 +21,8 @@ def version() -> None:
 @app.command("poll-news")
 def poll_news() -> None:
     """Fetch all configured NBA news feeds, archive new items, and load them."""
+    import duckdb
+
     from predictor import db
     from predictor.config import settings
     from predictor.sources import news_rss
@@ -43,7 +45,15 @@ def poll_news() -> None:
             line += f" (warning: {result.warning})"
         typer.echo(line)
 
-    con = db.connect()
+    try:
+        con = db.connect_with_retry()
+    except duckdb.Error as exc:
+        typer.echo(
+            f"Could not open the database to save news right now ({exc}). The "
+            "downloaded items are archived on disk and will be loaded by the "
+            "next run."
+        )
+        raise typer.Exit(code=1) from None
     db.migrate(con)
     ingest_stats = news_rss.ingest_archived_news(con)
     line = f"news_items rows: {ingest_stats.written}"
@@ -200,6 +210,152 @@ def ingest_season_cmd(season: str = typer.Argument(..., help="e.g. 2024-25")) ->
             "one. This season's data is INCOMPLETE until those games are "
             "fixed and re-ingested."
         )
+        raise typer.Exit(code=1)
+
+
+@app.command("ingest-schedule")
+def ingest_schedule_cmd(
+    season: str = typer.Option(
+        None, help="Season to fetch, e.g. 2024-25. Defaults to the current season."
+    ),
+) -> None:
+    """Fetch the NBA schedule for one season, archive it, and load it."""
+    from datetime import UTC, datetime
+
+    import duckdb
+    import requests
+
+    from predictor import db, raw_store
+    from predictor.config import previous_season_label, season_label, settings
+    from predictor.sources import schedule
+
+    settings.ensure_dirs()
+
+    def fail(target: str, exc: Exception):
+        """Explain a failed download/archive/parse in plain English, exit 1."""
+        if isinstance(exc, requests.RequestException):
+            typer.echo(
+                f"Could not download the NBA schedule for {target} ({exc}). "
+                "Nothing was saved; the next scheduled run will try again."
+            )
+        elif isinstance(exc, schedule.ScheduleUnavailable):
+            typer.echo(
+                f"The {target} schedule could not be fetched: {exc}. Nothing "
+                "was saved."
+            )
+        elif isinstance(exc, raw_store.RawStoreConflict):
+            typer.echo(
+                f"The {target} schedule download clashes with a copy already "
+                f"archived under the same name ({exc}). Nothing was "
+                "overwritten or loaded; the next scheduled run will try again."
+            )
+        else:
+            typer.echo(
+                f"The {target} schedule was downloaded and archived, but could "
+                f"not be read: {exc}. Nothing was loaded into the database."
+            )
+        raise typer.Exit(code=1)
+
+    expected = (
+        requests.RequestException,
+        schedule.ScheduleUnavailable,
+        raw_store.RawStoreConflict,
+        ValueError,
+    )
+
+    def fetch(target: str):
+        """Download, archive and parse one season; touches no database."""
+        try:
+            return schedule.fetch_and_archive(target)
+        except expected as exc:
+            fail(target, exc)
+
+    # Every download happens BEFORE the database is opened: a slow or
+    # retried download must never hold the DuckDB write lock the unattended
+    # news job needs.
+    fetched = []
+    if season:
+        fetched.append(fetch(season))
+    else:
+        target = season_label(datetime.now(UTC))
+        reason = None
+        try:
+            first = schedule.fetch_and_archive(target)
+        except (schedule.ScheduleUnavailable, requests.RequestException) as exc:
+            reason = str(exc)
+        except expected as exc:
+            fail(target, exc)
+        else:
+            if first.parsed.rows:
+                fetched.append(first)
+            else:
+                reason = "the NBA listed no games for it"
+        if reason is not None:
+            # July-August (or later): next season is not published yet.
+            # Keep refreshing the previous one so `status` does not cry
+            # wolf for weeks.
+            previous = previous_season_label(target)
+            typer.echo(
+                f"The {target} schedule is not available yet ({reason}); "
+                f"refreshing {previous} instead."
+            )
+            fetched.append(fetch(previous))
+
+    try:
+        con = db.connect_with_retry()
+    except duckdb.Error as exc:
+        typer.echo(
+            f"Could not open the database to save the schedule ({exc}). The "
+            "download is archived on disk; the next scheduled run will try again."
+        )
+        raise typer.Exit(code=1) from None
+    try:
+        db.migrate(con)
+    except duckdb.Error as exc:
+        typer.echo(
+            f"Could not save the schedule to the database ({exc}). The download "
+            "is archived on disk; the next scheduled run will try again."
+        )
+        raise typer.Exit(code=1) from None
+
+    results = []
+    for item in fetched:
+        try:
+            results.append(schedule.load(con, item))
+        except duckdb.Error as exc:
+            typer.echo(
+                f"Could not save the {item.season} schedule to the database "
+                f"({exc}). Nothing from this download was loaded; it is "
+                "archived on disk and the next scheduled run will try again."
+            )
+            raise typer.Exit(code=1) from None
+
+    mismatched = False
+    for result in results:
+        typer.echo(f"schedule {result.season}: {result.written:,} games saved")
+        if result.no_tipoff:
+            typer.echo(
+                f"  {len(result.no_tipoff)} game(s) have no tip-off time yet "
+                "(the league lists them as TBD) -- a later run picks the time "
+                "up once it is announced."
+            )
+        if result.undetermined:
+            typer.echo(
+                f"  {len(result.undetermined)} game(s) left out because their "
+                "teams are not decided yet (for example NBA Cup knockout "
+                "games) -- a later run picks them up."
+            )
+        if result.mismatches:
+            mismatched = True
+            typer.echo(
+                f"WARNING: {len(result.mismatches)} game(s) in {result.season} "
+                "disagree between the schedule and the games table (see the "
+                "'schedule: MISMATCH' lines above). The schedule was saved as "
+                "published; nothing was changed to make them agree. Usually a "
+                "rescheduled game -- re-run 'predictor ingest-season "
+                f"{result.season}' and then this command."
+            )
+    if mismatched:
         raise typer.Exit(code=1)
 
 
