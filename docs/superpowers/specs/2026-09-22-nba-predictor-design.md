@@ -254,6 +254,121 @@ The first delivery therefore carries these Stage 1 terms: Elo from margin of
 victory, home-court advantage, rest, travel, and altitude. Travel and altitude
 depend on the arena locations that **1.1 Schedule source** supplies.
 
+### First delivery design — decided 2026-09-27
+
+Market odds are out of scope here: the first delivery is measured against
+the always-pick-home baseline and its own calibration. Odds become their own
+sub-project immediately afterwards (success criterion 2 needs them). Daily
+predictions of real upcoming games are also out of scope: they need
+yesterday's results visible the next morning, while archived FINAL rows
+become visible only at `game_date + 36h` (reconstructed). Live result
+capture is the sub-project after this one.
+
+#### Running inside the harness
+
+The model is a stateful predictor. The harness calls it once per game in
+chronological order (already guaranteed and tested), handing it an
+`AsOfView` cut at tip-off minus the buffer. On each call the model reads
+from the view the FINAL results that became visible since its previous
+call, updates its ratings with them, then predicts. It never learns
+anything the view does not show. Recomputing all ratings per game was
+rejected as too slow (minutes to hours per backtest); a precomputed rating
+table looked up by date was rejected because it reads around the view.
+
+**The model reads only FINAL rows.** It never enumerates SCHEDULED
+fixtures, which closes the harness's open 2020 play-in item (fixture
+*existence* for not-yet-determined postseason games leaked bracket
+outcomes). A test proves the model's output is identical with and without
+future fixtures and not-yet-visible results in the database.
+
+**Venue facts** — arena city, neutral site (`schedule.is_neutral`), a
+built-in table of NBA-city coordinates and time zones, and the altitude
+cities (Denver, Salt Lake City) — are read directly, outside the view, under
+section 1.1's rule that static venue facts are not outcome-bearing. Every
+schedule row carries a 2026 `observed_at`, so reading venues through the view
+would hide them at every historical cutoff.
+
+#### Components (`src/predictor/model/`)
+
+- **Ratings.** One rating per team, in points: a gap of 4 means "4 points
+  better". After each result, each team moves by K × (actual margin −
+  predicted margin), with the margin capped so blowouts do not swing
+  ratings. Between seasons every rating regresses a fraction toward 0.
+  Unknown teams start at 0. Updates use every visible FINAL game, including
+  postseason.
+- **Adjustments, all in points, all from past games only:**
+  - home court — a running league-wide estimate over recent visible
+    non-neutral games, so it tracks changes such as the no-fans 2020-21
+    season; 0 at neutral sites
+  - rest — days off, back-to-back, third game in four nights
+  - travel — distance and time zones crossed since the team's previous game
+  - altitude — visiting Denver or Salt Lake City
+- **Assemble.** The spread for the home team is the sum of the rating
+  difference and the adjustments. The win probability is the normal CDF of
+  the spread over σ, the game-to-game standard deviation (≈13 points,
+  fitted). The explanation sentence lists each term, e.g.
+  `Denver -4.2 rating, +2.4 home, +0.8 rest, +1.1 altitude → -6.5 (68%)`.
+  The terms sum exactly to the stated spread.
+- **Settings file.** Every fitted value (K, margin cap, season regression,
+  home-court window, adjustment coefficients, σ) lives in one file committed
+  to git, so each published number traces to exact settings.
+  `predictor fit-model` writes it and prints its choices in plain English;
+  `predictor backtest --model stage1` scores it.
+
+#### Seasons: fit, calibrate, test
+
+| Role | Seasons | What happens |
+|---|---|---|
+| Warm-up | 2014-15 → 2018-19 | Results ingested; ratings update; nothing scored or fitted |
+| Fit | 2019-20 → 2021-22 | Rating settings and adjustment sizes chosen |
+| Calibrate | 2022-23 | σ only, chosen so stated probabilities hold on unseen games |
+| Test | 2023-24 → 2025-26 | Nothing tuned. The only publishable numbers |
+
+#### What the report adds
+
+For the test seasons, pooled and per season:
+- accuracy against the always-pick-home baseline
+- Brier score and log loss
+- a calibration table by probability bucket (stated versus actual)
+
+Fit and calibrate seasons are shown, labeled as seasons the settings were
+chosen on.
+
+**Bar before anything is published:** the model beats the home baseline in
+*every* test season, not only on average, and its calibration buckets land
+within a few points of their stated probability. If it misses, the report
+says so plainly.
+
+#### Failure handling
+
+- **Arena city missing from the city table:** travel and altitude are 0 for
+  that game, counted and named in the report.
+- **Team with no previous game:** treated as fully rested, travel 0,
+  counted.
+- **Settings file missing or corrupt:** the backtest stops with a plain
+  message naming `predictor fit-model`. There are no silent defaults.
+- **Any failure to produce a probability:** declined through the harness's
+  existing path, counted, never dropped.
+
+#### Testing
+
+1. **Leak safety.** The harness's adversarial tests run with the model
+   plugged in. Output is invariant to future fixtures and not-yet-visible
+   results. A result stamped one second after the cutoff moves no rating.
+2. **Hand-computed arithmetic.** One rating update, season regression, the
+   margin cap, each adjustment, and the spread-to-probability step are each
+   checked against values worked out by hand, never against the code's own
+   output.
+3. **Explanation integrity.** For every scored game in the real archive,
+   the sentence's terms sum exactly to the spread.
+4. **Reproducible fit.** Re-running the fit reproduces the committed
+   settings file exactly.
+5. **Verdict branch.** The BEATS / TOO CLOSE TO CALL output is exercised by
+   a direct test (harness open item 3); the first real run is read to
+   confirm it.
+6. **Real archive, read-only.** Every test-season game gets a prediction,
+   and no result stamped after its cutoff is ever read.
+
 ### Stage 1 — additive points model
 
 Team strength as an Elo rating updated on margin of victory, with between-season regression toward the mean.
