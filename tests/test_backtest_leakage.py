@@ -12,8 +12,8 @@ import pytest
 
 from predictor import db
 from predictor.backtest import replay
-from predictor.backtest import tipoff as tipoff_mod
 from predictor.backtest.baselines import always_home
+from schedule_rows import insert_schedule_row
 
 TIP = datetime(2025, 1, 16, 0, 0, tzinfo=UTC)
 
@@ -45,6 +45,7 @@ def con(tmp_path):
         [date(2025, 1, 15), date(2025, 1, 15), "NYK@PHI", "PHI", "Embiid,Joel",
          "Out", "injury", TIP - timedelta(hours=2), "07:00 (ET)"],
     )
+    insert_schedule_row(c, "0022400561", date(2025, 1, 15), "PHI", "NYK", TIP)
     return c
 
 
@@ -170,49 +171,38 @@ def test_injury_rows_published_after_the_cutoff_are_invisible(con):
 
 
 def test_every_cutoff_precedes_every_recorded_tipoff_vintage(con):
-    """FIX 14 (final review, part 3): the old version of this test compared
-    the cutoff against the RESOLVED tip-off, so it held trivially no matter
-    what `resolve_tipoff` returned -- exactly the shape of test that let the
-    FIX 14 CRITICAL regression ship undetected. Compare against EVERY
-    vintage actually recorded in the archive instead: the true tip-off is
-    (by construction) the earliest of them, so a cutoff that is only safe
-    against a wrongly-resolved (later) tip-off fails this.
+    """FIX 14 (final review, part 3): compare the cutoff with EVERY recorded
+    tip-off vintage, never with the resolved tip-off -- a comparison with
+    the resolved value holds trivially whatever `resolve_tipoff` returns,
+    which is how the FIX 14 CRITICAL regression shipped undetected.
 
-    The fixture below adds a later-FILED report that corrects the game to
-    an EARLIER clock time -- the exact shape of the CRITICAL regression: a
-    predictor relying on "earliest observed_at wins" would resolve to
-    07:00 (ET) and compute a cutoff of 6:30pm ET, which is NOT before the
-    05:00 (ET) vintage below.
+    Since sub-project 2.5 the vintages are schedule vintages. The fixture
+    adds a LATER-observed vintage that moves the game EARLIER -- FIX 14's
+    exact shape. A resolver trusting the first-seen vintage would cut off
+    at 6:30pm ET, after this 5:00pm ET tip-off.
     """
-    i = db.POINT_IN_TIME_TABLES["injury_status"]
-    con.execute(
-        f"INSERT INTO {i} (report_date, game_date, matchup, team, player,"
-        " status, reason, observed_at, game_time)"
-        " VALUES (?,?,?,?,?,?,?,?,?)",
-        [date(2025, 1, 15), date(2025, 1, 15), "NYK@PHI", "PHI", "Late,Correction",
-         "Out", "injury", TIP - timedelta(hours=1), "05:00 (ET)"],
+    insert_schedule_row(
+        con, "0022400561", date(2025, 1, 15), "PHI", "NYK",
+        TIP - timedelta(hours=2), observed_at=TIP - timedelta(hours=3),
     )
 
     preds, _ = replay.replay(con, always_home)
     assert preds, "fixture produced no predictions"
 
+    s = db.POINT_IN_TIME_TABLES["schedule"]
     vintages = con.execute(
-        f"SELECT game_date, team, game_time FROM {i} "
-        "WHERE game_time IS NOT NULL AND game_time <> ''"
+        f"SELECT game_id, tip_off_utc FROM {s} WHERE tip_off_utc IS NOT NULL"
     ).fetchall()
 
     checked = 0
     for p in preds:
-        for game_date, team, raw in vintages:
-            if game_date != p.game_date or team not in (p.home_team, p.away_team):
-                continue
-            recorded = tipoff_mod.parse_game_time(raw, game_date)
-            if recorded is None:
+        for game_id, recorded in vintages:
+            if game_id != p.game_id:
                 continue
             checked += 1
             assert p.cutoff < recorded, (
                 f"{p.game_id}: cutoff {p.cutoff.isoformat()} is not before "
-                f"recorded vintage {recorded.isoformat()} ({raw!r})"
+                f"recorded vintage {recorded.isoformat()}"
             )
     assert checked >= 2, "fixture did not actually exercise multiple vintages"
 

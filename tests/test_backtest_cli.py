@@ -2,6 +2,7 @@ from typer.testing import CliRunner
 
 from predictor import cli, config, db
 from predictor.config import Settings
+from schedule_rows import insert_schedule_row
 
 runner = CliRunner()
 
@@ -159,6 +160,10 @@ def test_backtest_does_not_crash_when_odds_health_is_missing(tmp_path, monkeypat
         " VALUES (?,?,?,?,?,?,?,?,?)",
         [date(2024, 1, 1), date(2024, 1, 1), "NYK@PHI", "PHI", "Embiid,Joel",
          "Out", "injury", datetime(2023, 12, 31, 12, 0, tzinfo=UTC), "07:00 (ET)"],
+    )
+    insert_schedule_row(
+        con, "0022300001", date(2024, 1, 1), "PHI", "NYK",
+        datetime(2024, 1, 2, 0, 0, tzinfo=UTC), season="2023-24",
     )
     con.close()
 
