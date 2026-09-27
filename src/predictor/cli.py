@@ -591,5 +591,39 @@ def backtest_cmd(
     typer.echo(report.format_report(result))
 
 
+@app.command("fit-model")
+def fit_model_cmd() -> None:
+    """Choose the model's settings from past seasons and save them."""
+    import duckdb
+
+    from predictor import db
+    from predictor.model import fit as fit_mod
+    from predictor.model import settings as model_settings
+
+    try:
+        con = db.connect(read_only=True)
+    except duckdb.Error as exc:
+        typer.echo(
+            f"Could not open the database ({exc}). If another 'predictor' "
+            "command is running, wait a moment and try again."
+        )
+        raise typer.Exit(code=1) from None
+    try:
+        chosen = fit_mod.fit(con)
+    except fit_mod.FitError as exc:
+        typer.echo(f"Cannot fit the model: {exc}.")
+        raise typer.Exit(code=1) from None
+    except duckdb.Error as exc:
+        typer.echo(
+            f"The database is missing tables the model needs ({exc}). Run "
+            "'predictor ingest-season <season>' and 'predictor ingest-schedule "
+            "--season <season>' first."
+        )
+        raise typer.Exit(code=1) from None
+    model_settings.save(chosen, model_settings.SETTINGS_PATH)
+    typer.echo(fit_mod.describe(chosen))
+    typer.echo(f"Saved to {model_settings.SETTINGS_PATH}.")
+
+
 if __name__ == "__main__":
     app()

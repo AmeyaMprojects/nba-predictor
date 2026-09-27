@@ -91,3 +91,8 @@ def terms(c: Coefficients, x: tuple[float, ...]) -> AdjustmentTerms:
         travel=c.travel_per_1000km * x[2] + c.tz_per_hour * x[3],
         altitude=c.altitude * x[4],
     )
+
+
+def astuple_terms(c: Coefficients, x: tuple[float, ...]) -> tuple[float, float, float]:
+    t = terms(c, x)
+    return (t.rest, t.travel, t.altitude)
