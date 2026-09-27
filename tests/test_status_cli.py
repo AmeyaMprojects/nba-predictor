@@ -61,6 +61,12 @@ def test_status_exits_zero_when_every_source_is_fresh(tmp_path, monkeypatch):
         "INSERT INTO news_items_raw (item_key, feed, observed_at) VALUES (?,?,?)",
         ["n1", "rss", now],
     )
+    con.execute(
+        "INSERT INTO schedule_raw (game_id, season, game_date, tip_off_utc,"
+        " home_team, away_team, is_neutral_reported, is_neutral, observed_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        ["0022400561", "2024-25", now.date(), None, "PHI", "NYK", False, False, now],
+    )
     con.close()
 
     result = runner.invoke(cli.app, ["status"])

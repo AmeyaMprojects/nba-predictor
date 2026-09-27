@@ -60,13 +60,13 @@ def test_report_leads_with_overall_verdict(con):
 def test_all_four_logical_sources_are_reported(con):
     health = status.check_sources(con, NOW)
     names = {h.name for h in health}
-    assert names == {"games", "injury_status", "odds_snapshots", "news_items"}
+    assert names == {"games", "injury_status", "odds_snapshots", "news_items", "schedule"}
 
 
 def test_report_names_every_source(con):
     _add_injury(con, NOW - timedelta(hours=1))
     text = status.format_report(status.check_sources(con, NOW))
-    for name in ("games", "injury_status", "odds_snapshots", "news_items"):
+    for name in ("games", "injury_status", "odds_snapshots", "news_items", "schedule"):
         assert name in text
 
 
@@ -82,3 +82,22 @@ def test_odds_advice_differs_when_key_is_set_but_still_empty(con, monkeypatch):
     advice = health["odds_snapshots"].advice
     assert advice
     assert "get a free key" not in advice.lower()
+
+
+def test_stale_schedule_advice_names_the_command_and_the_launchd_job(con):
+    health = {h.name: h for h in status.check_sources(con, NOW)}
+    advice = health["schedule"].advice
+    assert "predictor ingest-schedule" in advice
+    assert "com.predictor.schedule" in advice
+
+
+def test_schedule_fresh_within_a_day_is_not_stale(con):
+    con.execute(
+        "INSERT INTO schedule_raw (game_id, season, game_date, tip_off_utc,"
+        " home_team, away_team, is_neutral_reported, is_neutral, observed_at)"
+        " VALUES ('0022400561', '2024-25', DATE '2025-01-15', NULL, 'PHI', 'NYK',"
+        " FALSE, FALSE, ?)",
+        [NOW - timedelta(hours=20)],
+    )
+    health = {h.name: h for h in status.check_sources(con, NOW)}
+    assert health["schedule"].stale is False

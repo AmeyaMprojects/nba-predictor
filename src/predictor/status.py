@@ -32,6 +32,10 @@ the REAL refresh cadence of each source, not a single generic number:
   the one source that can NEVER be recovered retroactively once a poll is
   missed -- an outage here is the most urgent of the four, so it gets the
   tightest threshold relative to its cadence.
+- schedule: fetched once a day by its own launchd job. A missed day loses
+  that day's schedule vintage (when a game moved, and when that became
+  knowable) for good, so it gets the same one-missed-run threshold as
+  injury_status.
 """
 
 from __future__ import annotations
@@ -40,6 +44,7 @@ import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from predictor.config import season_label
 from predictor.db import POINT_IN_TIME_TABLES
 
 # Hours after which each source's newest `observed_at` counts as stale.
@@ -66,6 +71,9 @@ STALENESS_HOURS: dict[str, float] = {
     # the longest normal gap between runs is ~14h (19:00 -> next 09:00).
     # 24h gives ~10h of slack for one delayed/missed run before alarming.
     "news_items": 24,
+    # Fetched once a day at 10:30 local (scripts/com.predictor.schedule.plist).
+    # One missed run of slack before alarming, same as injury_status.
+    "schedule": 36,
 }
 
 
@@ -79,25 +87,10 @@ class SourceHealth:
     advice: str
 
 
-def _next_season_label(now: datetime) -> str:
-    """Best-guess season string (e.g. "2026-27") for the games advice.
-
-    NBA seasons start in October and are labeled by their two years. From
-    July onward, the upcoming season is the one worth ingesting next;
-    before July, the season already in progress (started the previous
-    October) is. This is a heuristic based only on the calendar -- this
-    project deliberately has no schedule/calendar data source of its own
-    (Basketball-Reference scraping is explicitly deferred to a later
-    sub-project), so it cannot know the *actual* season boundaries.
-    """
-    start_year = now.year if now.month >= 7 else now.year - 1
-    return f"{start_year}-{str(start_year + 1)[-2:]}"
-
-
 def _advice(name: str, latest: datetime | None, now: datetime) -> str:
     """Advice shown only when a source is stale. See module docstring."""
     if name == "games":
-        return f"Run: predictor ingest-season {_next_season_label(now)}"
+        return f"Run: predictor ingest-season {season_label(now)}"
 
     if name == "injury_status":
         if latest is None:
@@ -134,6 +127,14 @@ def _advice(name: str, latest: datetime | None, now: datetime) -> str:
             "loaded (launchctl list | grep com.predictor.daily) with an "
             "empty data/logs/daily.err.log -- news cannot be recovered "
             "retroactively once a poll is missed."
+        )
+
+    if name == "schedule":
+        return (
+            "Run: predictor ingest-schedule, and confirm the launchd agent "
+            "is loaded (launchctl list | grep com.predictor.schedule). Each "
+            "missed day is a day of schedule history that cannot be "
+            "recaptured later."
         )
 
     return ""

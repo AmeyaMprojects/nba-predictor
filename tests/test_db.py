@@ -239,3 +239,17 @@ def test_injury_status_game_date_is_not_null(con):
             [datetime(2025, 1, 15).date(), "LAL", "someone", "Out",
              datetime(2025, 1, 15, 12, 0, tzinfo=UTC)],
         )
+
+
+def test_schedule_table_is_registered_and_has_no_outcome_columns(con):
+    assert db.POINT_IN_TIME_TABLES["schedule"] == "schedule_raw"
+    cols = {r[0] for r in con.execute("DESCRIBE schedule_raw").fetchall()}
+    assert cols == {
+        "game_id", "season", "game_date", "tip_off_utc", "home_team",
+        "away_team", "arena_name", "arena_city", "arena_state",
+        "is_neutral_reported", "is_neutral", "observed_at",
+    }
+    # Spec 1.1: scores are never ingested -- a column that does not exist
+    # cannot leak.
+    for forbidden in ("home_points", "away_points", "score", "status", "wins", "losses"):
+        assert not any(forbidden in c for c in cols), forbidden
