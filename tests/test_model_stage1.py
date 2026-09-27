@@ -1,0 +1,210 @@
+from collections import Counter
+from datetime import UTC, date, datetime, time, timedelta
+
+import pytest
+
+from model_fixtures import add_game, fixture_con
+from predictor import db
+from predictor.asof import AsOfView
+from predictor.backtest import replay
+from predictor.backtest.baselines import GameToPredict
+from predictor.model.adjustments import Coefficients
+from predictor.model.ratings import RatingParams, win_probability
+from predictor.model.settings import ModelSettings
+from predictor.model.stage1 import Breakdown, Stage1Predictor
+
+S = ModelSettings(
+    ratings=RatingParams(k=0.1, margin_cap=20.0, season_regression=0.5, hca_window=100),
+    coefficients=Coefficients(back_to_back=-2.0, third_in_four=-1.0,
+                              travel_per_1000km=-0.5, tz_per_hour=-0.25, altitude=1.5),
+    sigma=13.0,
+    fit_games=0,
+    calibrate_games=0,
+)
+
+
+def _cutoff(d):  # 30 minutes before a 7pm ET (00:00 UTC next day) tip-off
+    return datetime.combine(d + timedelta(days=1), time(0), tzinfo=UTC) - timedelta(minutes=30)
+
+
+def _game(gid, d, home, away, season="2024-25"):
+    return GameToPredict(gid, season, d, home, away)
+
+
+@pytest.fixture
+def con(tmp_path):
+    c = fixture_con(tmp_path)
+    add_game(c, "0022400001", "2024-25", date(2025, 1, 10), "PHI", "NYK", 110, 100,
+             city="Philadelphia")
+    add_game(c, "0022400002", "2024-25", date(2025, 1, 12), "NYK", "PHI", 100, 104,
+             city="New York")
+    add_game(c, "0022400003", "2024-25", date(2025, 1, 15), "PHI", "NYK",
+             city="Philadelphia")
+    return c
+
+
+def test_prediction_by_hand(con):
+    # Visible at the 01-15 cutoff: both FINALs (stamped 01-11 and 01-13, 12:00 UTC).
+    # After game 1: PHI +1, NYK -1, home margins [10].
+    # Game 2 (NYK home): predicted = -1 - 1 + 10 = 8; margin -4;
+    #   delta = 0.1 * (-4 - 8) = -1.2 -> NYK -2.2, PHI +2.2; margins [10, -4].
+    # Game 3: rating = 2.2 - (-2.2) = 4.4; home = mean(10, -4) = 3.0.
+    # PHI last played 01-12 (3 days) -> not B2B; NYK same. Travel: PHI
+    # New York -> Philadelphia; NYK New York -> Philadelphia: equal, diff 0.
+    p = Stage1Predictor(con, S)
+    g = _game("0022400003", date(2025, 1, 15), "PHI", "NYK")
+    b = p.explain(g, AsOfView(con, _cutoff(date(2025, 1, 15))))
+    assert b.rating == pytest.approx(4.4)
+    assert b.home == pytest.approx(3.0)
+    assert b.rest == pytest.approx(0.0)
+    assert b.travel == pytest.approx(0.0)
+    assert b.altitude == 0.0
+    assert b.spread == pytest.approx(7.4)
+    assert b.p_home == pytest.approx(win_probability(7.4, 13.0))
+
+
+def test_call_returns_the_breakdown_probability_and_records_it(con):
+    p = Stage1Predictor(con, S)
+    g = _game("0022400003", date(2025, 1, 15), "PHI", "NYK")
+    prob = p(g, AsOfView(con, _cutoff(date(2025, 1, 15))))
+    assert prob == p.breakdowns["0022400003"].p_home
+
+
+def test_terms_sum_to_the_spread(con):
+    p = Stage1Predictor(con, S)
+    b = p.explain(_game("0022400003", date(2025, 1, 15), "PHI", "NYK"),
+                  AsOfView(con, _cutoff(date(2025, 1, 15))))
+    assert sum(v for _, v in b.terms()) == pytest.approx(b.spread, abs=1e-12)
+
+
+def test_sentence_by_hand():
+    b = Breakdown("g", "DEN", "LAL", rating=4.24, home=2.41, rest=0.84,
+                  travel=-0.36, altitude=1.12, spread=8.25, p_home=0.7362)
+    assert b.sentence() == (
+        "LAL at DEN: rating +4.2, home +2.4, rest +0.8, travel -0.4, "
+        "altitude +1.1 -> DEN by 8.1 (DEN 74% to win)"
+    )
+
+
+def test_sentence_for_an_away_favourite():
+    b = Breakdown("g", "DEN", "LAL", rating=-6.0, home=2.0, rest=0.0,
+                  travel=0.0, altitude=0.0, spread=-4.0, p_home=0.38)
+    assert b.sentence().endswith("-> LAL by 4.0 (DEN 38% to win)")
+
+
+def test_a_result_one_second_after_the_cutoff_moves_no_rating(tmp_path):
+    con = fixture_con(tmp_path)
+    cutoff = _cutoff(date(2025, 1, 15))
+    add_game(con, "0022400001", "2024-25", date(2025, 1, 14), "PHI", "NYK", 130, 100,
+             city="Philadelphia", final_observed_at=cutoff + timedelta(seconds=1))
+    add_game(con, "0022400003", "2024-25", date(2025, 1, 15), "PHI", "NYK", city="Philadelphia")
+    b = Stage1Predictor(con, S).explain(
+        _game("0022400003", date(2025, 1, 15), "PHI", "NYK"), AsOfView(con, cutoff))
+    assert b.rating == 0.0 and b.home == 0.0
+
+
+def test_output_ignores_future_fixtures_and_invisible_results(tmp_path):
+    """Closes the harness's 2020 play-in item: fixture EXISTENCE and not-yet-
+    visible results must not change a single prediction."""
+    def build(path, extra):
+        con = fixture_con(path)
+        add_game(con, "0022400001", "2024-25", date(2025, 1, 10), "PHI", "NYK", 110, 100,
+                 city="Philadelphia")
+        add_game(con, "0022400002", "2024-25", date(2025, 1, 12), "NYK", "PHI", 100, 104,
+                 city="New York")
+        add_game(con, "0022400003", "2024-25", date(2025, 1, 15), "PHI", "NYK", 99, 98,
+                 city="Philadelphia")
+        if extra:
+            # a postseason fixture that already "exists" before the season ends
+            add_game(con, "0052400001", "2024-25", date(2025, 4, 15), "PHI", "BOS",
+                     city="Philadelphia")
+            # a result that becomes visible only far in the future
+            add_game(con, "0022400009", "2024-25", date(2025, 1, 11), "BOS", "MIA", 150, 90,
+                     city="Boston",
+                     final_observed_at=datetime(2030, 1, 1, tzinfo=UTC))
+        return con
+
+    plain = build(tmp_path / "a", extra=False)
+    noisy = build(tmp_path / "b", extra=True)
+    got = []
+    for con in (plain, noisy):
+        preds, _ = replay.replay(con, Stage1Predictor(con, S))
+        got.append([(q.game_id, q.p_home) for q in preds if q.game_id != "0022400009"])
+    assert got[0] == got[1]
+
+
+def test_model_never_reads_scheduled_rows(con, monkeypatch):
+    seen = []
+    real_table = AsOfView.table
+
+    def spy(self, name):
+        seen.append(name)
+        return real_table(self, name)
+
+    monkeypatch.setattr(AsOfView, "table", spy)
+    p = Stage1Predictor(con, S)
+    p.explain(_game("0022400003", date(2025, 1, 15), "PHI", "NYK"),
+              AsOfView(con, _cutoff(date(2025, 1, 15))))
+    assert seen == ["games"]
+
+
+def test_going_back_in_time_rebuilds_from_scratch(con):
+    later = _cutoff(date(2025, 1, 15))
+    earlier = _cutoff(date(2025, 1, 11))
+    g = _game("0022400003", date(2025, 1, 15), "PHI", "NYK")
+    reused = Stage1Predictor(con, S)
+    reused.explain(g, AsOfView(con, later))
+    after_rewind = reused.explain(g, AsOfView(con, earlier))
+    fresh = Stage1Predictor(con, S).explain(g, AsOfView(con, earlier))
+    assert after_rewind == fresh
+
+
+def test_preseason_results_never_touch_ratings(tmp_path):
+    con = fixture_con(tmp_path)
+    add_game(con, "0012400001", "2024-25", date(2025, 1, 10), "PHI", "NYK", 150, 90,
+             city="Philadelphia")
+    add_game(con, "0022400003", "2024-25", date(2025, 1, 15), "PHI", "NYK", city="Philadelphia")
+    b = Stage1Predictor(con, S).explain(
+        _game("0022400003", date(2025, 1, 15), "PHI", "NYK"),
+        AsOfView(con, _cutoff(date(2025, 1, 15))))
+    assert b.rating == 0.0
+
+
+def test_neutral_site_gets_no_home_court(tmp_path):
+    con = fixture_con(tmp_path)
+    add_game(con, "0022400001", "2024-25", date(2025, 1, 10), "PHI", "NYK", 110, 100,
+             city="Philadelphia")
+    add_game(con, "0022400003", "2024-25", date(2025, 1, 15), "BOS", "MIA",
+             city="Paris", neutral=True)
+    b = Stage1Predictor(con, S).explain(
+        _game("0022400003", date(2025, 1, 15), "BOS", "MIA"),
+        AsOfView(con, _cutoff(date(2025, 1, 15))))
+    assert b.home == 0.0
+
+
+def test_unknown_city_and_missing_history_are_counted(tmp_path):
+    con = fixture_con(tmp_path)
+    add_game(con, "0022400001", "2024-25", date(2025, 1, 14), "PHI", "NYK", 110, 100,
+             city="Atlantis")
+    add_game(con, "0022400003", "2024-25", date(2025, 1, 15), "PHI", "BOS", city="Philadelphia")
+    p = Stage1Predictor(con, S)
+    p.explain(_game("0022400003", date(2025, 1, 15), "PHI", "BOS"),
+              AsOfView(con, _cutoff(date(2025, 1, 15))))
+    assert p.unknown_cities == Counter({"Atlantis": 1})
+    assert p.no_history == 1  # BOS has no earlier game
+
+
+def test_game_missing_from_schedule_is_counted_not_guessed(tmp_path):
+    con = fixture_con(tmp_path)
+    games = db.POINT_IN_TIME_TABLES["games"]
+    con.execute(
+        f"INSERT INTO {games} (game_id, season, game_date, home_team, away_team,"
+        " status, reconstructed, observed_at) VALUES ('0022400003','2024-25',"
+        " DATE '2025-01-15','PHI','NYK','SCHEDULED',TRUE,?)",
+        [datetime(2025, 1, 8, 12, tzinfo=UTC)],
+    )
+    p = Stage1Predictor(con, S)
+    b = p.explain(_game("0022400003", date(2025, 1, 15), "PHI", "NYK"),
+                  AsOfView(con, _cutoff(date(2025, 1, 15))))
+    assert b.home == 0.0 or b.home == pytest.approx(0.0)
+    assert p.unknown_cities["(game not in the schedule)"] == 1
