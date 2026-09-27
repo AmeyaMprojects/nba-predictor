@@ -1,6 +1,5 @@
 from datetime import date, timedelta
 
-import pytest
 from typer.testing import CliRunner
 
 from model_fixtures import add_game, fixture_con
@@ -8,6 +7,7 @@ from predictor import cli, config, db
 from predictor.config import Settings
 from predictor.model import fit as fit_mod
 from predictor.model import settings as ms
+from predictor.model.venues import VenueIndex
 from real_archive import open_real_archive_or_skip
 
 TEAMS = ["PHI", "NYK", "BOS", "MIA"]
@@ -40,18 +40,45 @@ def test_fit_is_deterministic(tmp_path):
     assert fit_mod.fit(con) == fit_mod.fit(con)
 
 
+def _plant_mislabeled_test_season_game(con, game_id, home_pts, away_pts):
+    """A game LABELLED with a test season but DATED inside the fit window,
+    interleaved with real fit-season games between the same two teams.
+
+    Every game in `_history`'s own test seasons is dated well after the
+    fit/calibrate window, so corrupting one of THOSE can never move the fit
+    -- simulation only ever walks forward in time, so a later-dated game
+    cannot affect the pre-game numbers of any earlier game regardless of
+    whether the season exclusion works at all. Planting a mislabeled game
+    inside the window, between teams that already play there, is the only
+    way to make a broken exclusion actually show up as a different fit.
+    """
+    plant_date = date(2016, 11, 2)  # inside the first fit season's date range
+    add_game(con, game_id, ms.TEST_SEASONS[0], plant_date, "PHI", "NYK", home_pts, away_pts,
+              city="Boston")
+    return plant_date
+
+
 def test_fit_ignores_test_seasons_entirely(tmp_path):
     con = fixture_con(tmp_path)
     _history(con)
+    _plant_mislabeled_test_season_game(con, "00299999901", 100, 90)
     before = fit_mod.fit(con)
+
     games = db.POINT_IN_TIME_TABLES["games"]
-    placeholders = ", ".join("?" for _ in ms.TEST_SEASONS)
     con.execute(
-        f"UPDATE {games} SET home_points = 50, away_points = 150 "
-        f"WHERE status = 'FINAL' AND season IN ({placeholders})",
-        list(ms.TEST_SEASONS),
+        f"UPDATE {games} SET home_points = 200, away_points = 1 WHERE game_id = ?",
+        ["00299999901"],
     )
     assert fit_mod.fit(con) == before
+
+
+def test_load_never_returns_a_row_from_a_test_season(tmp_path):
+    con = fixture_con(tmp_path)
+    _history(con)
+    _plant_mislabeled_test_season_game(con, "00299999902", 100, 90)
+    games = fit_mod._load(con, VenueIndex.from_db(con))
+    assert games  # sanity: history was actually loaded
+    assert all(g.result.season not in ms.TEST_SEASONS for g in games)
 
 
 def test_fit_counts_its_games_and_picks_values_from_the_grids(tmp_path):
@@ -119,6 +146,23 @@ def test_fit_model_with_no_history_is_a_plain_error(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "Traceback" not in result.output
     assert "ingest-season" in result.output
+
+
+def test_fit_model_save_failure_is_a_plain_error(tmp_path, monkeypatch):
+    s = Settings(data_dir=tmp_path)
+    s.ensure_dirs()
+    monkeypatch.setattr(config, "settings", s)
+    monkeypatch.setattr(db, "settings", s)
+    con = db.connect()
+    db.migrate(con)
+    _history(con)
+    con.close()
+    bad_path = tmp_path / "does-not-exist" / "stage1_settings.json"
+    monkeypatch.setattr(ms, "SETTINGS_PATH", bad_path)
+    result = CliRunner().invoke(cli.app, ["fit-model"])
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert not bad_path.exists()
 
 
 def test_committed_settings_reproduce_from_the_real_archive():

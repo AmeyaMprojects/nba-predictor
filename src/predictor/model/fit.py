@@ -3,7 +3,7 @@
 Fit seasons choose the rating settings and adjustment sizes; the calibrate
 season chooses only sigma; test seasons are never read. The fit reads the
 games table directly -- it trains on completed past seasons and is not a
-prediction path -- and asserts that no test season was loaded.
+prediction path -- and raises if a test season is loaded anyway.
 
 Simulation mirrors Stage1Predictor exactly: a date's results are applied
 only after every game on that date has been given its pre-game numbers,
@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import date
 from itertools import groupby, product
 
 import numpy as np
@@ -65,7 +64,11 @@ def _load(con, venues: VenueIndex) -> list[_Game]:
     ).fetchall()
     games: list[_Game] = []
     for gid, season, gd, home, away, hp, ap in rows:
-        assert season not in TEST_SEASONS, "fit must never read a test season"
+        if season in TEST_SEASONS:
+            raise FitError(
+                f"internal error: the fit query returned a test-season game "
+                f"({gid}, season {season}); refusing to train on it"
+            )
         venue = venues.venue(gid)
         city = venue.city if venue else None
         neutral = venue.is_neutral if venue else False
@@ -122,7 +125,7 @@ def fit(con) -> ModelSettings:
         raise FitError(
             "not enough history to fit the model: the fit seasons "
             f"({', '.join(FIT_SEASONS)}) and the calibrate season ({CALIBRATE_SEASON}) "
-            "must have results. Run 'predictor ingest-season <season>' for each."
+            "must have results. Run 'predictor ingest-season <season>' for each"
         )
 
     best = None
@@ -138,7 +141,7 @@ def fit(con) -> ModelSettings:
     coefficients = Coefficients(*(round(float(c), 6) for c in coef))
 
     pre = _simulate(params, games)
-    rows, X, _ = _residuals(games, pre, (CALIBRATE_SEASON,))
+    rows, _, _ = _residuals(games, pre, (CALIBRATE_SEASON,))
     spreads = [
         gap + hc + sum(adj.astuple_terms(coefficients, g.x))
         for (g, gap, hc) in rows

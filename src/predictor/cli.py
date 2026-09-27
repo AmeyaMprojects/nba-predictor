@@ -620,7 +620,15 @@ def fit_model_cmd() -> None:
             "--season <season>' first."
         )
         raise typer.Exit(code=1) from None
-    model_settings.save(chosen, model_settings.SETTINGS_PATH)
+    finally:
+        con.close()
+    try:
+        model_settings.save(chosen, model_settings.SETTINGS_PATH)
+    except OSError as exc:
+        typer.echo(
+            f"Could not save the fitted settings to {model_settings.SETTINGS_PATH} ({exc})."
+        )
+        raise typer.Exit(code=1) from None
     typer.echo(fit_mod.describe(chosen))
     typer.echo(f"Saved to {model_settings.SETTINGS_PATH}.")
 
