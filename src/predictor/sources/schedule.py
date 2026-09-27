@@ -22,8 +22,9 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
+import requests
 from nba_api.stats.endpoints import scheduleleaguev2
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from predictor import db, raw_store
 
@@ -121,6 +122,8 @@ def parse_schedule(payload: bytes, season: str) -> ParseResult:
     # City and Las Vegas included -- so a game away from that venue is
     # neutral too. Measured effect: the 2019-20 Orlando bubble, the
     # Paris/Mexico City/Las Vegas games, and San Antonio's Austin games.
+    # The usual venue is per payload, so a relocated season (Toronto in
+    # Tampa, 2020-21) counts its temporary arena as home.
     venues: dict[str, Counter] = {}
     for game, game_id, _, home, _ in staged:
         if game_id.startswith(_REGULAR_SEASON_PREFIX) and not bool(game.get("isNeutral")):
@@ -166,36 +169,62 @@ class IngestResult:
     blob_key: str
 
 
+class ScheduleUnavailable(Exception):
+    """The NBA has no readable schedule for this season (usually: not published yet)."""
+
+
 @retry(
     stop=stop_after_attempt(4),
     wait=wait_exponential(multiplier=2, min=2, max=30),
+    retry=retry_if_exception_type(requests.RequestException),
     reraise=True,
 )
 def fetch_season_payload(season: str) -> bytes:
-    """The raw schedule JSON for one season, historical or forward."""
-    endpoint = scheduleleaguev2.ScheduleLeagueV2(
-        season=season, league_id="00", timeout=60
-    )
-    return endpoint.get_json().encode("utf-8")
+    """The raw schedule JSON for one season, historical or forward.
+
+    Only network errors are retried. For a season the league has not
+    published, nba_api fails inside its own parsing with IndexError
+    (measured live 2026-09-27 for 2027-28); that is a plain condition, not
+    a transient fault, so it becomes ScheduleUnavailable at once.
+    """
+    try:
+        endpoint = scheduleleaguev2.ScheduleLeagueV2(
+            season=season, league_id="00", timeout=60
+        )
+        payload = endpoint.get_json()
+    except (IndexError, KeyError):
+        raise ScheduleUnavailable(
+            f"the NBA has not published a {season} schedule (or returned one "
+            "this tool cannot read)"
+        ) from None
+    return payload.encode("utf-8")
 
 
 def archive_key(season: str, fetched_at: datetime) -> str:
     return f"{season}_{fetched_at:%Y%m%dT%H%M%S}Z.json.gz"
 
 
-def ingest_season(
-    con,
+@dataclass(frozen=True)
+class Fetched:
+    season: str
+    fetched_at: datetime
+    blob_key: str
+    parsed: ParseResult
+
+
+def fetch_and_archive(
     season: str,
     fetched_at: datetime | None = None,
     fetch: Callable[[str], bytes] = fetch_season_payload,
-) -> IngestResult:
-    """Fetch, archive, parse and load one season's schedule.
+) -> Fetched:
+    """Fetch, archive and parse one season's schedule. Touches no database.
+
+    Kept apart from load() so a slow or retried download never holds the
+    DuckDB write lock that the unattended news job also needs.
 
     Raw-first: the gzipped payload is archived BEFORE parsing, and the
     parser reads the archived bytes back, so a parser bug is re-parsable
-    rather than lost. Each call writes a new vintage stamped with the real
-    fetch time -- the table accumulates genuine point-in-time schedule
-    history from the first daily run onward.
+    rather than lost.
     """
     fetched_at = db.require_utc(
         fetched_at if fetched_at is not None else datetime.now(UTC), "fetched_at"
@@ -206,35 +235,61 @@ def ingest_season(
         SOURCE, key, gzip.compress(payload, mtime=0), fetched_at, meta={"season": season}
     )
     parsed = parse_schedule(gzip.decompress(raw_store.load(SOURCE, key)), season)
+    return Fetched(season=season, fetched_at=fetched_at, blob_key=key, parsed=parsed)
 
+
+def load(con, fetched: Fetched) -> IngestResult:
+    """Load one fetched season as a new vintage, then cross-check it.
+
+    Each call writes a new vintage stamped with the real fetch time -- the
+    table accumulates genuine point-in-time schedule history from the first
+    daily run onward. The rows go in as one transaction: all or nothing.
+    """
     table = db.POINT_IN_TIME_TABLES["schedule"]
-    if parsed.rows:
-        con.executemany(
-            f"INSERT OR REPLACE INTO {table} (game_id, season, game_date,"
-            " tip_off_utc, home_team, away_team, arena_name, arena_city,"
-            " arena_state, is_neutral_reported, is_neutral, observed_at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-            [
+    rows = fetched.parsed.rows
+    if rows:
+        con.execute("BEGIN")
+        try:
+            con.executemany(
+                f"INSERT OR REPLACE INTO {table} (game_id, season, game_date,"
+                " tip_off_utc, home_team, away_team, arena_name, arena_city,"
+                " arena_state, is_neutral_reported, is_neutral, observed_at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 [
-                    r.game_id, r.season, r.game_date, r.tip_off_utc, r.home_team,
-                    r.away_team, r.arena_name, r.arena_city, r.arena_state,
-                    r.is_neutral_reported, r.is_neutral, fetched_at,
-                ]
-                for r in parsed.rows
-            ],
-        )
+                    [
+                        r.game_id, r.season, r.game_date, r.tip_off_utc, r.home_team,
+                        r.away_team, r.arena_name, r.arena_city, r.arena_state,
+                        r.is_neutral_reported, r.is_neutral, fetched.fetched_at,
+                    ]
+                    for r in rows
+                ],
+            )
+            con.execute("COMMIT")
+        except BaseException:
+            con.execute("ROLLBACK")
+            raise
 
-    mismatches = compare_with_games(con, season, parsed.rows)
+    mismatches = compare_with_games(con, fetched.season, rows)
     for line in mismatches:
         print(f"schedule: MISMATCH {line}")
     return IngestResult(
-        season=season,
-        written=len(parsed.rows),
-        no_tipoff=parsed.no_tipoff,
-        undetermined=parsed.undetermined,
+        season=fetched.season,
+        written=len(rows),
+        no_tipoff=fetched.parsed.no_tipoff,
+        undetermined=fetched.parsed.undetermined,
         mismatches=mismatches,
-        blob_key=key,
+        blob_key=fetched.blob_key,
     )
+
+
+def ingest_season(
+    con,
+    season: str,
+    fetched_at: datetime | None = None,
+    fetch: Callable[[str], bytes] = fetch_season_payload,
+) -> IngestResult:
+    """Fetch, archive, parse and load one season: load(fetch_and_archive(...))."""
+    return load(con, fetch_and_archive(season, fetched_at=fetched_at, fetch=fetch))
 
 
 def compare_with_games(con, season: str, rows: list[ScheduleRow]) -> list[str]:
