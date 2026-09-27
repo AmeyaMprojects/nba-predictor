@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from collections.abc import KeysView
 from datetime import datetime
 from pathlib import Path
@@ -204,6 +205,31 @@ def connect(
     # zone, so identical code yields different-looking results per machine.
     con.execute("SET TimeZone='UTC'")
     return con
+
+
+def connect_with_retry(
+    path: Path | None = None,
+    *,
+    attempts: int = 6,
+    wait_seconds: float = 20.0,
+    sleep=time.sleep,
+) -> duckdb.DuckDBPyConnection:
+    """connect(), waiting out another predictor process's write lock.
+
+    DuckDB allows one writer per file. The news and schedule launchd jobs
+    both fire on wake after a laptop sleeps through their slots, so one of
+    them routinely finds the other holding the lock for a few seconds.
+    Only that specific error is retried (matched on DuckDB's own message,
+    as the backtest command does); anything else raises immediately.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            return connect(path)
+        except duckdb.Error as exc:
+            if "conflicting lock is held" not in str(exc).lower() or attempt == attempts:
+                raise
+            sleep(wait_seconds)
+    raise AssertionError("unreachable")
 
 
 def migrate(con: duckdb.DuckDBPyConnection) -> None:
