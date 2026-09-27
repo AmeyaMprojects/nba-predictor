@@ -7,6 +7,7 @@ published number traces to exact settings. `predictor fit-model` writes it.
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -85,7 +86,7 @@ def from_json(text: str) -> ModelSettings:
         raise
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
         raise SettingsError(f"the model settings file is unreadable ({exc!r}). {hint}") from None
-    if s.sigma <= 0 or s.ratings.hca_window < 1:
+    if not math.isfinite(s.sigma) or s.sigma <= 0 or s.ratings.hca_window < 1:
         raise SettingsError(f"the model settings file holds impossible values. {hint}")
     return s
 

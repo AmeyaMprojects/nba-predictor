@@ -103,6 +103,84 @@ def test_a_result_one_second_after_the_cutoff_moves_no_rating(tmp_path):
     assert b.rating == 0.0 and b.home == 0.0
 
 
+def test_a_result_observed_exactly_at_the_cutoff_is_applied(tmp_path):
+    """AsOfView is inclusive (observed_at <= cutoff); a result stamped
+    exactly at the cutoff must already have moved the rating."""
+    con = fixture_con(tmp_path)
+    cutoff = _cutoff(date(2025, 1, 15))
+    add_game(con, "0022400001", "2024-25", date(2025, 1, 14), "PHI", "NYK", 130, 100,
+             city="Philadelphia", final_observed_at=cutoff)
+    add_game(con, "0022400003", "2024-25", date(2025, 1, 15), "PHI", "NYK", city="Philadelphia")
+    b = Stage1Predictor(con, S).explain(
+        _game("0022400003", date(2025, 1, 15), "PHI", "NYK"), AsOfView(con, cutoff))
+    # margin 30, capped to 20 for the rating update: predicted = 0 (no
+    # history), delta = 0.1 * (20 - 0) = 2.0 -> PHI +2.0, NYK -2.0.
+    # home_margins holds the UNCAPPED margin: [30].
+    assert b.rating == pytest.approx(4.0)
+    assert b.home == pytest.approx(30.0)
+
+
+def test_a_correction_replaces_the_original_result(tmp_path):
+    """Two FINAL rows for the same game (an original and a later
+    correction) must collapse to the latest-observed one, not both, and
+    not whichever the query happens to return first."""
+    def with_correction(path):
+        con = fixture_con(path)
+        add_game(con, "0022400001", "2024-25", date(2025, 1, 10), "PHI", "NYK", 110, 100,
+                 city="Philadelphia", final_observed_at=datetime(2025, 1, 11, 12, tzinfo=UTC))
+        games = db.POINT_IN_TIME_TABLES["games"]
+        con.execute(
+            f"INSERT INTO {games} (game_id, season, game_date, home_team, away_team,"
+            " home_points, away_points, status, reconstructed, observed_at)"
+            " VALUES (?,?,?,?,?,?,?,'FINAL',TRUE,?)",
+            ["0022400001", "2024-25", date(2025, 1, 10), "PHI", "NYK", 90, 100,
+             datetime(2025, 1, 12, 12, tzinfo=UTC)],
+        )
+        add_game(con, "0022400003", "2024-25", date(2025, 1, 15), "PHI", "NYK",
+                 city="Philadelphia")
+        return con
+
+    def only_the_correction(path):
+        con = fixture_con(path)
+        add_game(con, "0022400001", "2024-25", date(2025, 1, 10), "PHI", "NYK", 90, 100,
+                 city="Philadelphia", final_observed_at=datetime(2025, 1, 12, 12, tzinfo=UTC))
+        add_game(con, "0022400003", "2024-25", date(2025, 1, 15), "PHI", "NYK",
+                 city="Philadelphia")
+        return con
+
+    g = _game("0022400003", date(2025, 1, 15), "PHI", "NYK")
+    cutoff = _cutoff(date(2025, 1, 15))  # well after both the 01-11 and 01-12 observations
+    corrected = with_correction(tmp_path / "a")
+    plain = only_the_correction(tmp_path / "b")
+    b_corrected = Stage1Predictor(corrected, S).explain(g, AsOfView(corrected, cutoff))
+    b_plain = Stage1Predictor(plain, S).explain(g, AsOfView(plain, cutoff))
+    assert b_corrected == b_plain
+
+
+def test_incremental_calls_equal_a_fresh_predictor_when_a_result_arrives_late(tmp_path):
+    """A late-arriving result for an EARLIER game_date must not be applied
+    after a later game_date already has been -- the same running predictor
+    queried twice must land in the same state a fresh one reaches in one
+    shot at the same final cutoff."""
+    con = fixture_con(tmp_path)
+    add_game(con, "0022400001", "2024-25", date(2025, 1, 10), "PHI", "NYK", 110, 100,
+             city="Philadelphia", final_observed_at=datetime(2025, 1, 14, 12, tzinfo=UTC))
+    add_game(con, "0022400002", "2024-25", date(2025, 1, 12), "NYK", "PHI", 100, 104,
+             city="New York", final_observed_at=datetime(2025, 1, 13, 12, tzinfo=UTC))
+    add_game(con, "0022400003", "2024-25", date(2025, 1, 15), "PHI", "NYK", city="Philadelphia")
+
+    g = _game("0022400003", date(2025, 1, 15), "PHI", "NYK")
+    mid_cutoff = datetime(2025, 1, 13, 20, 0, tzinfo=UTC)  # sees game 2 only
+    late_cutoff = _cutoff(date(2025, 1, 15))  # sees both
+
+    incremental = Stage1Predictor(con, S)
+    incremental.explain(g, AsOfView(con, mid_cutoff))
+    b_incremental = incremental.explain(g, AsOfView(con, late_cutoff))
+
+    fresh = Stage1Predictor(con, S).explain(g, AsOfView(con, late_cutoff))
+    assert b_incremental == fresh
+
+
 def test_output_ignores_future_fixtures_and_invisible_results(tmp_path):
     """Closes the harness's 2020 play-in item: fixture EXISTENCE and not-yet-
     visible results must not change a single prediction."""
@@ -133,7 +211,7 @@ def test_output_ignores_future_fixtures_and_invisible_results(tmp_path):
     assert got[0] == got[1]
 
 
-def test_model_never_reads_scheduled_rows(con, monkeypatch):
+def test_model_reads_only_the_games_table(con, monkeypatch):
     seen = []
     real_table = AsOfView.table
 
@@ -146,6 +224,35 @@ def test_model_never_reads_scheduled_rows(con, monkeypatch):
     p.explain(_game("0022400003", date(2025, 1, 15), "PHI", "NYK"),
               AsOfView(con, _cutoff(date(2025, 1, 15))))
     assert seen == ["games"]
+
+
+def test_non_final_rows_with_scores_are_never_applied(tmp_path):
+    """The `status = 'FINAL'` filter is load-bearing: an IN_PROGRESS row
+    can carry a non-NULL score too, and must still be ignored."""
+    def build(path, extra):
+        con = fixture_con(path)
+        add_game(con, "0022400001", "2024-25", date(2025, 1, 10), "PHI", "NYK",
+                 city="Philadelphia")
+        if extra:
+            games = db.POINT_IN_TIME_TABLES["games"]
+            con.execute(
+                f"INSERT INTO {games} (game_id, season, game_date, home_team,"
+                " away_team, home_points, away_points, status, reconstructed,"
+                " observed_at) VALUES (?,?,?,?,?,?,?,'IN_PROGRESS',TRUE,?)",
+                ["0022400001", "2024-25", date(2025, 1, 10), "PHI", "NYK", 50, 48,
+                 datetime(2025, 1, 10, 20, tzinfo=UTC)],
+            )
+        add_game(con, "0022400003", "2024-25", date(2025, 1, 15), "PHI", "NYK",
+                 city="Philadelphia")
+        return con
+
+    plain = build(tmp_path / "a", extra=False)
+    noisy = build(tmp_path / "b", extra=True)
+    g = _game("0022400003", date(2025, 1, 15), "PHI", "NYK")
+    cutoff = _cutoff(date(2025, 1, 15))
+    b_plain = Stage1Predictor(plain, S).explain(g, AsOfView(plain, cutoff))
+    b_noisy = Stage1Predictor(noisy, S).explain(g, AsOfView(noisy, cutoff))
+    assert b_plain == b_noisy
 
 
 def test_going_back_in_time_rebuilds_from_scratch(con):

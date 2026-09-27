@@ -43,6 +43,16 @@ def test_nonpositive_sigma_is_rejected():
         ms.from_json(text)
 
 
+@pytest.mark.parametrize("bad_sigma", ["NaN", "Infinity", "-Infinity"])
+def test_non_finite_sigma_is_rejected(bad_sigma):
+    # Python's json module accepts NaN/Infinity/-Infinity as an extension,
+    # so a corrupt file holding one of these must not slip past the
+    # sigma <= 0 check (NaN and +inf both fail that comparison).
+    text = ms.to_json(S).replace('"sigma": 13.2', f'"sigma": {bad_sigma}')
+    with pytest.raises(ms.SettingsError):
+        ms.from_json(text)
+
+
 @pytest.mark.parametrize(
     "season, role",
     [("2014-15", "warm-up"), ("2018-19", "warm-up"), ("2019-20", "fit"),

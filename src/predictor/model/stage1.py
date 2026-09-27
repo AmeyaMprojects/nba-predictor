@@ -80,6 +80,7 @@ class Stage1Predictor:
     def _reset(self) -> None:
         self._ratings = Ratings(self.settings.ratings)
         self._applied: set[str] = set()
+        self._latest_applied_date = None
         self._as_of = None
 
     def __call__(self, game: GameToPredict, view) -> float:
@@ -123,28 +124,80 @@ class Stage1Predictor:
         self.breakdowns[game.game_id] = breakdown
         return breakdown
 
-    def _catch_up(self, view) -> None:
-        if self._as_of is not None and view.as_of < self._as_of:
-            self._reset()
+    def _fetch_finals(self, view, since=None):
+        """Every visible FINAL competitive result, deduplicated to the
+        latest-observed row per game_id (so a correction always supersedes
+        the row it corrects, however the two arrive), sorted by
+        (game_date, game_id).
+
+        `since`, when given, restricts to rows newly OBSERVED since the
+        previous catch-up -- but such a row can still describe an OLDER
+        game (a slow first report, or a correction to a game already
+        applied). That is exactly what `_needs_rebuild` below inspects.
+        """
         rel = view.table("games").filter(
             "status = 'FINAL' AND home_points IS NOT NULL AND away_points IS NOT NULL "
             f"AND substr(game_id, 1, 3) IN ({_COMPETITIVE_SQL})"
         )
-        if self._as_of is not None:
-            rel = rel.filter(f"observed_at > TIMESTAMPTZ '{self._as_of.isoformat()}'")
-        rows = (
-            rel.project(
-                "game_id, season, game_date, home_team, away_team, home_points, away_points"
-            )
-            .order("game_date, game_id")
-            .fetchall()
-        )
-        for gid, season, gd, home, away, hp, ap in rows:
-            if gid in self._applied:
-                continue
+        if since is not None:
+            rel = rel.filter(f"observed_at > TIMESTAMPTZ '{since.isoformat()}'")
+        rows = rel.project(
+            "game_id, season, game_date, home_team, away_team, home_points, "
+            "away_points, observed_at"
+        ).fetchall()
+        latest: dict[str, tuple] = {}
+        for row in rows:
+            gid, observed_at = row[0], row[7]
+            current = latest.get(gid)
+            if current is None or observed_at > current[7]:
+                latest[gid] = row
+        return sorted(latest.values(), key=lambda r: (r[2], r[0]))
+
+    def _needs_rebuild(self, new_rows) -> bool:
+        """True when applying `new_rows` incrementally, on top of what is
+        already applied, would apply results out of chronological order.
+
+        That happens when a newly-visible row either corrects a game
+        already applied (gid in self._applied), or belongs to a game
+        DATE strictly earlier than the latest date already applied --
+        games sharing the latest applied date are fine, since a fresh
+        rebuild would apply all of them together in the same batch too.
+        """
+        if self._latest_applied_date is None:
+            return False
+        for gid, _season, gd, *_rest in new_rows:
+            if gid in self._applied or gd < self._latest_applied_date:
+                return True
+        return False
+
+    def _apply_rows(self, rows) -> None:
+        for gid, season, gd, home, away, hp, ap, _observed_at in rows:
             self._applied.add(gid)
             venue = self.venues.venue(gid)
             self._ratings.apply(
                 Result(gid, season, gd, home, away, hp, ap, venue.is_neutral if venue else False)
             )
+            if self._latest_applied_date is None or gd > self._latest_applied_date:
+                self._latest_applied_date = gd
+
+    def _catch_up(self, view) -> None:
+        if self._as_of is not None and view.as_of < self._as_of:
+            self._reset()
+
+        if self._as_of is None:
+            self._apply_rows(self._fetch_finals(view))
+        else:
+            new_rows = self._fetch_finals(view, since=self._as_of)
+            if self._needs_rebuild(new_rows):
+                # Results arrived out of chronological order (a correction,
+                # or a late first report for an earlier game): the
+                # incremental ratings state built so far cannot be trusted
+                # to match what a fresh rebuild in strict (game_date,
+                # game_id) order would produce -- see task-5 fix round 1,
+                # items 2 and 3. Rebuild from everything visible at this
+                # cutoff instead of trying to patch the running state.
+                self._reset()
+                self._apply_rows(self._fetch_finals(view))
+            else:
+                self._apply_rows(new_rows)
         self._as_of = view.as_of
