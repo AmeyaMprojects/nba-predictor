@@ -80,7 +80,7 @@ class Stage1Predictor:
     def _reset(self) -> None:
         self._ratings = Ratings(self.settings.ratings)
         self._applied: set[str] = set()
-        self._latest_applied_date = None
+        self._last_applied_key = None
         self._as_of = None
 
     def __call__(self, game: GameToPredict, view) -> float:
@@ -155,18 +155,29 @@ class Stage1Predictor:
 
     def _needs_rebuild(self, new_rows) -> bool:
         """True when applying `new_rows` incrementally, on top of what is
-        already applied, would apply results out of chronological order.
+        already applied, could apply results out of the order a fresh
+        rebuild would use.
 
-        That happens when a newly-visible row either corrects a game
-        already applied (gid in self._applied), or belongs to a game
-        DATE strictly earlier than the latest date already applied --
-        games sharing the latest applied date are fine, since a fresh
-        rebuild would apply all of them together in the same batch too.
+        A fresh rebuild always applies every visible row in strict
+        (game_date, game_id) order, and that order matters WITHIN a date
+        too: each apply's predicted margin uses home_court(), the rolling
+        mean of margins from every earlier apply, so two games on the same
+        date applied in a different relative order move ratings
+        differently (task-5 fix round 2 -- the round-1 ruling that only
+        compared game_date, letting same-date rows through unconditionally,
+        was wrong). So this must rebuild not just when a newly-visible
+        row's game_date is strictly earlier than what is already applied,
+        but whenever its (game_date, game_id) key sorts AT OR BEFORE the
+        LAST (highest) (game_date, game_id) key already applied --
+        including equal, which is exactly a correction to a game already
+        applied. A row whose key sorts strictly AFTER the last applied key
+        is safe to apply incrementally: a fresh rebuild would place it
+        after everything already applied too, in the same relative order.
         """
-        if self._latest_applied_date is None:
+        if self._last_applied_key is None:
             return False
         for gid, _season, gd, *_rest in new_rows:
-            if gid in self._applied or gd < self._latest_applied_date:
+            if gid in self._applied or (gd, gid) <= self._last_applied_key:
                 return True
         return False
 
@@ -177,8 +188,9 @@ class Stage1Predictor:
             self._ratings.apply(
                 Result(gid, season, gd, home, away, hp, ap, venue.is_neutral if venue else False)
             )
-            if self._latest_applied_date is None or gd > self._latest_applied_date:
-                self._latest_applied_date = gd
+            key = (gd, gid)
+            if self._last_applied_key is None or key > self._last_applied_key:
+                self._last_applied_key = key
 
     def _catch_up(self, view) -> None:
         if self._as_of is not None and view.as_of < self._as_of:
@@ -189,13 +201,15 @@ class Stage1Predictor:
         else:
             new_rows = self._fetch_finals(view, since=self._as_of)
             if self._needs_rebuild(new_rows):
-                # Results arrived out of chronological order (a correction,
-                # or a late first report for an earlier game): the
-                # incremental ratings state built so far cannot be trusted
-                # to match what a fresh rebuild in strict (game_date,
-                # game_id) order would produce -- see task-5 fix round 1,
-                # items 2 and 3. Rebuild from everything visible at this
-                # cutoff instead of trying to patch the running state.
+                # Results arrived out of the order a fresh rebuild would
+                # apply them in (a correction, a late first report for an
+                # earlier game, or a same-date game whose id sorts before
+                # one already applied): the incremental ratings state
+                # built so far cannot be trusted to match what a fresh
+                # rebuild in strict (game_date, game_id) order would
+                # produce -- see task-5 fix rounds 1 and 2. Rebuild from
+                # everything visible at this cutoff instead of trying to
+                # patch the running state.
                 self._reset()
                 self._apply_rows(self._fetch_finals(view))
             else:

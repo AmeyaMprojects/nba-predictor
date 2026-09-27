@@ -181,6 +181,75 @@ def test_incremental_calls_equal_a_fresh_predictor_when_a_result_arrives_late(tm
     assert b_incremental == fresh
 
 
+def test_same_date_lower_game_id_arriving_later_equals_fresh(tmp_path):
+    """Order matters WITHIN a date too: home_court() is a rolling mean of
+    every earlier apply's margin, so two games on the same date applied in
+    a different relative order move ratings differently. A naive
+    incremental catch-up that only compares game_date (not game_id) would
+    apply the higher game_id first here (it was visible first) and the
+    lower one second, instead of matching a fresh rebuild's ascending
+    (game_date, game_id) order.
+
+    Hand check (K=0.1, cap=20): fresh applies 0022400001 (PHI/NYK, margin
+    30 capped to 20) before 0022400002 (BOS/MIA, margin -20) --
+    predicted=0 both times since home_court starts empty; PHI/NYK apply
+    first (delta 0.1*(20-0)=2.0 -> PHI +2.0), then BOS/MIA sees
+    home_court=mean([30])=30 (predicted=30, delta=0.1*(-20-30)=-5.0 ->
+    BOS -5.0). Applying the higher id FIRST instead flips which apply sees
+    the empty vs. the populated home_court, giving BOS -2.0 and PHI +4.0
+    -- a different PHI-BOS rating gap (7.0 vs 6.0) for game 3."""
+    con = fixture_con(tmp_path)
+    add_game(con, "0022400002", "2024-25", date(2025, 1, 10), "BOS", "MIA", 80, 100,
+             city="Boston", final_observed_at=datetime(2025, 1, 10, 18, tzinfo=UTC))
+    add_game(con, "0022400001", "2024-25", date(2025, 1, 10), "PHI", "NYK", 130, 100,
+             city="Philadelphia", final_observed_at=datetime(2025, 1, 11, 12, tzinfo=UTC))
+    add_game(con, "0022400003", "2024-25", date(2025, 1, 15), "PHI", "BOS", city="Philadelphia")
+
+    g = _game("0022400003", date(2025, 1, 15), "PHI", "BOS")
+    mid_cutoff = datetime(2025, 1, 10, 20, 0, tzinfo=UTC)  # sees only 0022400002
+    late_cutoff = _cutoff(date(2025, 1, 15))  # sees both
+
+    incremental = Stage1Predictor(con, S)
+    incremental.explain(g, AsOfView(con, mid_cutoff))
+    b_incremental = incremental.explain(g, AsOfView(con, late_cutoff))
+
+    fresh = Stage1Predictor(con, S).explain(g, AsOfView(con, late_cutoff))
+    assert b_incremental == fresh
+    assert fresh.rating == pytest.approx(7.0)
+
+
+def test_incremental_correction_to_an_already_applied_game_equals_fresh(tmp_path):
+    """A correction observed in a LATER call, for a game already applied
+    in an EARLIER call, must trigger a rebuild too -- not just a
+    correction bundled into the very first catch-up ever made (already
+    covered by test_a_correction_replaces_the_original_result)."""
+    con = fixture_con(tmp_path)
+    add_game(con, "0022400001", "2024-25", date(2025, 1, 10), "PHI", "NYK", 110, 100,
+             city="Philadelphia", final_observed_at=datetime(2025, 1, 11, 12, tzinfo=UTC))
+    add_game(con, "0022400003", "2024-25", date(2025, 1, 15), "PHI", "NYK", city="Philadelphia")
+
+    g = _game("0022400003", date(2025, 1, 15), "PHI", "NYK")
+    first_cutoff = datetime(2025, 1, 12, 0, 0, tzinfo=UTC)  # sees only the original 110-100
+    late_cutoff = _cutoff(date(2025, 1, 15))  # sees the correction too
+
+    incremental = Stage1Predictor(con, S)
+    incremental.explain(g, AsOfView(con, first_cutoff))
+
+    # a correction to the game already applied above, observed AFTER that call
+    games = db.POINT_IN_TIME_TABLES["games"]
+    con.execute(
+        f"INSERT INTO {games} (game_id, season, game_date, home_team, away_team,"
+        " home_points, away_points, status, reconstructed, observed_at)"
+        " VALUES (?,?,?,?,?,?,?,'FINAL',TRUE,?)",
+        ["0022400001", "2024-25", date(2025, 1, 10), "PHI", "NYK", 90, 100,
+         datetime(2025, 1, 13, 12, tzinfo=UTC)],
+    )
+
+    b_incremental = incremental.explain(g, AsOfView(con, late_cutoff))
+    fresh = Stage1Predictor(con, S).explain(g, AsOfView(con, late_cutoff))
+    assert b_incremental == fresh
+
+
 def test_output_ignores_future_fixtures_and_invisible_results(tmp_path):
     """Closes the harness's 2020 play-in item: fixture EXISTENCE and not-yet-
     visible results must not change a single prediction."""
