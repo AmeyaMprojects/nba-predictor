@@ -180,6 +180,13 @@ def test_every_cutoff_precedes_every_recorded_tipoff_vintage(con):
     adds a LATER-observed vintage that moves the game EARLIER -- FIX 14's
     exact shape. A resolver trusting the first-seen vintage would cut off
     at 6:30pm ET, after this 5:00pm ET tip-off.
+
+    FIX 23's shape is restored here too: a vintage is matched to a
+    prediction by (game_date, team) -- either team, home or away -- not by
+    game_id alone. Matching by game_id only would miss the case FIX 23 was
+    about, where an away team's own vintage disagrees with the home team's;
+    keying by team the same way `tipoff_index` does is what makes this test
+    exercise that path rather than a narrower one.
     """
     insert_schedule_row(
         con, "0022400561", date(2025, 1, 15), "PHI", "NYK",
@@ -190,15 +197,20 @@ def test_every_cutoff_precedes_every_recorded_tipoff_vintage(con):
     assert preds, "fixture produced no predictions"
 
     s = db.POINT_IN_TIME_TABLES["schedule"]
-    vintages = con.execute(
-        f"SELECT game_id, tip_off_utc FROM {s} WHERE tip_off_utc IS NOT NULL"
-    ).fetchall()
+    vintages: dict[tuple[date, str], list[datetime]] = {}
+    for game_date, home_team, away_team, tip in con.execute(
+        f"SELECT game_date, home_team, away_team, tip_off_utc FROM {s} "
+        "WHERE tip_off_utc IS NOT NULL"
+    ).fetchall():
+        vintages.setdefault((game_date, home_team), []).append(tip)
+        vintages.setdefault((game_date, away_team), []).append(tip)
 
     checked = 0
     for p in preds:
-        for game_id, recorded in vintages:
-            if game_id != p.game_id:
-                continue
+        for recorded in (
+            vintages.get((p.game_date, p.home_team), [])
+            + vintages.get((p.game_date, p.away_team), [])
+        ):
             checked += 1
             assert p.cutoff < recorded, (
                 f"{p.game_id}: cutoff {p.cutoff.isoformat()} is not before "

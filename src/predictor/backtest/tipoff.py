@@ -67,6 +67,18 @@ def tipoff_index(con) -> dict[tuple[date, str], datetime]:
 
     Both teams of a game are keyed to it, so ``resolve_tipoff``'s
     minimum-across-both-teams rule (FIX 23) is preserved unchanged.
+
+    This "take the minimum, to be safe" pessimism is deliberately NOT
+    extended across sources -- only across schedule vintages. The
+    injury-report PDFs (``parse_game_time``) are never mixed into this
+    index, even though they too carry a tip-off-shaped value. For 3 games
+    moved LATER (0021900701, 0022000206, 0022400624) a stale day-before PDF
+    slot is EARLIER than the schedule's time; feeding that PDF value in
+    here the way a second schedule vintage is handled would move the
+    cutoff earlier than necessary using a value the game-day PDF itself
+    goes on to contradict (it confirms the schedule's time). The PDFs stay
+    a read-only cross-check (tests/test_tipoff_crosscheck.py), never a
+    second input to this function.
     """
     table = db.POINT_IN_TIME_TABLES["schedule"]
     rows = con.execute(

@@ -96,6 +96,22 @@ def test_tbd_rows_never_enter_the_index(con):
     assert tipoff.tipoff_index(con) == {}
 
 
+def test_a_tbd_vintage_alongside_a_timed_vintage_still_resolves(con):
+    # A game can be listed TBD in an early fetch and get its real time in a
+    # later one. The NULL row must be skipped, not treated as "no data" for
+    # the whole game and not allowed to blank out the timed row that exists
+    # alongside it.
+    gd = date(2026, 12, 4)
+    tip = datetime(2026, 12, 5, 0, 0, tzinfo=UTC)
+    insert_schedule_row(con, "0022601201", gd, "PHI", "NYK", None,
+                        observed_at=datetime(2026, 9, 20, tzinfo=UTC))
+    insert_schedule_row(con, "0022601201", gd, "PHI", "NYK", tip,
+                        observed_at=datetime(2026, 9, 27, tzinfo=UTC))
+    index = tipoff.tipoff_index(con)
+    assert index[(gd, "PHI")] == tip
+    assert index[(gd, "NYK")] == tip
+
+
 def test_injury_report_game_time_is_no_longer_a_tipoff_source(con):
     i = db.POINT_IN_TIME_TABLES["injury_status"]
     con.execute(
@@ -166,8 +182,22 @@ def test_archive_wide_cutoff_is_strictly_before_every_recorded_schedule_vintage(
 
     Compares every scored game's cutoff with EVERY tip-off recorded for
     either team on that date -- not with the resolved value, which is the
-    test shape that let two tip-off leaks ship green. It becomes stricter
-    every day the schedule job adds a vintage.
+    test shape that let two tip-off leaks ship green.
+
+    Read plainly: on today's archive this holds TRIVIALLY. `schedule_raw`
+    currently holds exactly one vintage per already-played game -- the
+    schedule job only started archiving daily fetches on 2026-09-27, so no
+    played game has had the chance to accumulate a SECOND vintage yet --
+    and `tipoff_index` is built from that same single row. So for every
+    already-played game this check reduces to `tip - buffer < tip`, which
+    is true by construction regardless of whether the (game_date, team)
+    keying that built `tip` is even correct. (`test_resolved_tipoff_matches_
+    the_schedules_own_rows_for_each_game`, below, is the independent check
+    for that.) This test gains REAL power only once a game accumulates
+    multiple schedule vintages before tip-off, which starts happening for
+    games played from 2026-09-27 onward as the daily job records successive
+    fetches; from then on it becomes stricter every day the schedule job
+    adds a vintage to a not-yet-played game.
     """
     con = open_real_archive_or_skip()
     try:
@@ -198,5 +228,56 @@ def test_archive_wide_cutoff_is_strictly_before_every_recorded_schedule_vintage(
                     unsafe.append((gid, cutoff, v))
         assert comparisons > 0
         assert unsafe == [], f"{len(unsafe)} unsafe cutoff(s): {unsafe[:5]}"
+    finally:
+        con.close()
+
+
+def test_resolved_tipoff_matches_the_schedules_own_rows_for_each_game():
+    """Independent of (game_date, team) keying -- the check the test above
+    cannot perform.
+
+    `tipoff_index` is keyed by (game_date, team), and `resolve_tipoff`
+    reads it back out by the SAME key -- so a bug that mis-keys a row (a
+    wrong game_date, a home/away swap, a team code typo) could still leave
+    `test_archive_wide_cutoff_is_strictly_before_every_recorded_schedule_
+    vintage` passing: that test re-derives its own expectation through the
+    identical (game_date, team) lookup, so it cannot see a keying bug at
+    all, and it is trivially true besides (see that test's docstring).
+
+    This test re-derives the expected tip-off a completely different way:
+    directly from the schedule rows filed under the game's OWN game_id, with
+    no (game_date, team) lookup involved. If `resolve_tipoff`'s answer for a
+    game (built via the date/team index) disagrees with the MINIMUM
+    tip_off_utc recorded under that game's own game_id, the index is keyed
+    wrong for that game. This is the only cross-check available for the
+    1,089 games ingested after the injury-report PDF CDN froze on
+    2025-12-21 (8,289 - 7,200): they have no PDF vintage at all for
+    tests/test_tipoff_crosscheck.py to compare against.
+    """
+    con = open_real_archive_or_skip()
+    try:
+        games = db.POINT_IN_TIME_TABLES["games"]
+        sched = db.POINT_IN_TIME_TABLES["schedule"]
+        index = tipoff.tipoff_index(con)
+        rows = con.execute(
+            f"SELECT game_id, MIN(game_date), MIN(home_team), MIN(away_team) "
+            f"FROM {games} WHERE game_id LIKE '002%' GROUP BY game_id"
+        ).fetchall()
+        compared = 0
+        mismatches = []
+        for gid, gd, h, a in rows:
+            resolved = tipoff.resolve_tipoff(index, gd, h, a)
+            own_min = con.execute(
+                f"SELECT MIN(tip_off_utc) FROM {sched} "
+                "WHERE game_id = ? AND tip_off_utc IS NOT NULL",
+                [gid],
+            ).fetchone()[0]
+            if own_min is None:
+                continue
+            compared += 1
+            if resolved != own_min:
+                mismatches.append((gid, resolved, own_min))
+        assert compared > 0
+        assert mismatches == [], f"{len(mismatches)} mismatch(es): {mismatches[:5]}"
     finally:
         con.close()
