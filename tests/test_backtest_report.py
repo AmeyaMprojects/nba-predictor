@@ -539,6 +539,45 @@ def test_paired_comparison_counts_only_disagreement_games():
     assert pc.losses == 48
 
 
+# --- t7-fix2 item B: the verdict's BEATS/LOSES TO direction must come from
+# the UNROUNDED paired result (wins vs losses), never from the rounded
+# DISPLAY figures -- a real, significant, but tiny edge can round to 0.0 on
+# screen while still being genuinely positive or negative. -------------------
+
+
+def test_verdict_direction_prefers_the_unrounded_wins_and_losses():
+    """Direct unit test of the direction decision, independent of any
+    rounding or display formatting."""
+    beats = metrics.PairedComparison(
+        wins=6, losses=0, edge=0.0006, standard_error=0.0002, p_value=0.03125
+    )
+    loses = metrics.PairedComparison(
+        wins=0, losses=6, edge=-0.0006, standard_error=0.0002, p_value=0.03125
+    )
+    assert report._verdict_direction(beats) == "BEATS"
+    assert report._verdict_direction(loses) == "LOSES TO"
+
+
+def test_verdict_direction_is_correct_even_when_the_displayed_edge_rounds_to_zero():
+    """A concrete report-level reproduction of the bug: 6 wins / 0 losses
+    diluted by 12,994 agreeing (home-favoured, home-won) games gives
+    accuracy == 100.0% exactly and baseline == 99.9538...%, which ALSO
+    rounds to 100.0% -- so the two DISPLAYED figures are identical
+    (edge_pts == 0.0) even though the real, unrounded edge is a genuine
+    +0.046 percentage points and the exact sign-test p-value (0.03125) is
+    significant. Deciding direction from `edge_pts > 0` would print
+    "LOSES TO ... by 0.0"; deciding it from wins vs losses must print
+    "BEATS ... by 0.0" instead -- same displayed number, correct word.
+    """
+    preds = _paired_preds(wins=6, losses=0, agreeing=12_994)
+    r = summarize(preds)
+    assert round(r.accuracy * 100, 1) == round(r.home_baseline * 100, 1) == 100.0
+    text = report.format_report(r)
+    first = verdict_line(text)
+    assert first.startswith("BEATS always-pick-home by 0.0 percentage points")
+    assert "p=0.0312" in first
+
+
 # --- FIX 9: "not yet played" vs "played but the score is missing" ---------
 
 

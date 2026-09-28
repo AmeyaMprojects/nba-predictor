@@ -16,6 +16,27 @@ from predictor.backtest.replay import Prediction, ReplayStats
 _SIGNIFICANCE_LEVEL = 0.05
 
 
+def _verdict_direction(pc: metrics.PairedComparison) -> str:
+    """BEATS vs LOSES TO, decided from the UNROUNDED paired result.
+
+    t7-fix2 item B: the direction used to be decided from `edge_pts`, the
+    difference of the two DISPLAYED (rounded-to-one-decimal) accuracy
+    figures -- a real, significant, but tiny positive edge (e.g. 0.04
+    percentage points) can round to 0.0 and then fail `edge_pts > 0`,
+    printing "LOSES TO ... by 0.0" for a predictor that, in fact, beats the
+    baseline. `pc.wins`/`pc.losses` (and therefore `pc.edge`, which is
+    `(wins - losses) / N`) are exact counts, never rounded, so comparing
+    them directly can never disagree with the true sign of the edge. This
+    function only ever runs once `n_discordant > 0` has already been
+    checked by the caller, so `wins == losses` (an exact tie) is the only
+    remaining edge case -- it cannot occur on the branch that calls this
+    (a perfect tie has the maximum possible sign-test p-value, 1.0, so it
+    never reaches the `pc.p_value < _SIGNIFICANCE_LEVEL` branch), but is
+    resolved to "LOSES TO" rather than raising, so this helper is total.
+    """
+    return "BEATS" if pc.wins > pc.losses else "LOSES TO"
+
+
 @dataclass(frozen=True)
 class BacktestResult:
     predictions: Sequence[Prediction]
@@ -225,7 +246,11 @@ def format_report(result: BacktestResult) -> str:
                 "nothing to compare"
             )
         elif pc.p_value < _SIGNIFICANCE_LEVEL:
-            direction = "BEATS" if edge_pts > 0 else "LOSES TO"
+            # t7-fix2 item B: direction comes from the unrounded paired
+            # result (wins vs losses), never from `edge_pts` (the rounded
+            # DISPLAY figure) -- see `_verdict_direction`. `edge_pts` is
+            # still what gets printed as the size of the edge.
+            direction = _verdict_direction(pc)
             verdict = (
                 f"{direction} always-pick-home by {abs(edge_pts):.1f} "
                 f"percentage points -- {n_discordant:,} disagreement(s), "
@@ -248,12 +273,24 @@ def format_report(result: BacktestResult) -> str:
     # be a lie by omission (a real run: "14,439 of 14,439 considered" under
     # a header that says "test seasons ... only"). State the headline's own
     # scored count and the pooled total separately instead.
-    if result.scope is not None:
+    #
+    # t7-fix2 item A: the "(N replayed in total, including warm-up, fit and
+    # calibrate seasons)" clause is only true when the pooled total actually
+    # EXCEEDS the headline's own count -- e.g. under `--season <test
+    # season>`, replay.replay only ever walks that one season, so
+    # `s.predicted == len(result.predictions)` exactly and nothing besides
+    # the headline's own games was replayed. Printing the "including..."
+    # clause there would falsely claim warm-up/fit/calibrate seasons were
+    # replayed when none were.
+    n_test = len(result.predictions)
+    if result.scope is not None and s.predicted > n_test:
         games_scored_line = (
-            f"  games scored        : {len(result.predictions):,} test-season games "
+            f"  games scored        : {n_test:,} test-season games "
             f"({s.predicted:,} replayed in total, including warm-up, fit and "
             "calibrate seasons)"
         )
+    elif result.scope is not None:
+        games_scored_line = f"  games scored        : {n_test:,} test-season games"
     else:
         games_scored_line = f"  games scored        : {s.predicted:,} of {s.considered:,} considered"
     lines = header + [

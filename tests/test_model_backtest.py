@@ -60,6 +60,14 @@ def test_stage1_headline_is_test_seasons_only(tmp_path, monkeypatch):
     # count on its own, separately from the pooled total across every
     # replayed season (this fixture: 1 warm-up game + 40 test games).
     assert "40 test-season games" in out.output
+    # t7-fix2 item A: the default run (no --season) replays the warm-up
+    # season too, so the pooled total (41) genuinely exceeds the
+    # test-season count (40) -- the "including warm-up, fit and calibrate
+    # seasons" clause is TRUE here and must still be printed.
+    assert (
+        "40 test-season games (41 replayed in total, including warm-up, "
+        "fit and calibrate seasons)" in out.output
+    )
     assert "By season" in out.output
     assert "2018-19  warm-up" in out.output
     assert "Example explanations" in out.output
@@ -114,6 +122,16 @@ def test_season_filter_narrows_the_header_to_just_that_test_season(tmp_path, mon
         "settings were never tuned on it"
     )
     assert "2024-25" not in out.output
+    # t7-fix2 item A: `--season 2023-24` makes `replay.replay` walk ONLY
+    # that season, so the pooled total equals the test-season count exactly
+    # -- nothing besides the headline's own games was replayed, so the
+    # "including warm-up, fit and calibrate seasons" clause would be false
+    # here and must not be printed.
+    games_scored_line = next(
+        line for line in lines if line.strip().startswith("games scored")
+    )
+    assert games_scored_line.strip() == "games scored        : 10 test-season games"
+    assert "including" not in out.output
 
 
 def test_progress_prints_to_stderr_never_stdout(tmp_path, monkeypatch):
