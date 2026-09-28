@@ -165,6 +165,21 @@ def fit(con) -> ModelSettings:
     )
 
 
+def _fmt_coef(v: float) -> str:
+    """2 decimals, sign always shown, never "-0.00".
+
+    Final review (minor): at 1 decimal, `travel_per_1000km` (committed value
+    -0.022147) rounded to "-0.0" -- a term a reader sees as zero with a
+    minus sign in front of it, which is exactly the "-0.0" bug t7-fix1
+    finding 4 already fixed once for `stage1.Breakdown.sentence()`. 2
+    decimals shows that coefficient as a real, nonzero -0.02, but any
+    coefficient small enough could still round to -0.00 at 2 decimals, so
+    apply the same IEEE-754 fix here: adding +0.0 to a rounded -0.0 gives
+    +0.0.
+    """
+    return f"{round(v, 2) + 0.0:+.2f}"
+
+
 def describe(s: ModelSettings) -> str:
     r, c = s.ratings, s.coefficients
     return "\n".join([
@@ -173,11 +188,11 @@ def describe(s: ModelSettings) -> str:
         f"Each new season, ratings fall back {r.season_regression * 100:.0f}% toward average.",
         f"Home court is the average home margin over the last {r.hca_window} games.",
         "Adjustments, in points for the home team:",
-        f"  back-to-back (home minus away)       {c.back_to_back:+.1f}",
-        f"  third game in four nights            {c.third_in_four:+.1f}",
-        f"  per 1,000 km travelled               {c.travel_per_1000km:+.1f}",
-        f"  per time zone crossed                {c.tz_per_hour:+.1f}",
-        f"  playing at altitude (Denver, Utah)   {c.altitude:+.1f}",
+        f"  back-to-back (home minus away)       {_fmt_coef(c.back_to_back)}",
+        f"  third game in four nights            {_fmt_coef(c.third_in_four)}",
+        f"  per 1,000 km travelled               {_fmt_coef(c.travel_per_1000km)}",
+        f"  per time zone crossed                {_fmt_coef(c.tz_per_hour)}",
+        f"  playing at altitude (Denver, Utah)   {_fmt_coef(c.altitude)}",
         f"Typical game-to-game spread (sigma): {s.sigma:.2f} points.",
         f"Chosen on {s.fit_games:,} fit-season games; sigma set on "
         f"{s.calibrate_games:,} calibrate-season games.",

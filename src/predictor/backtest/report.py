@@ -15,6 +15,136 @@ from predictor.backtest.replay import Prediction, ReplayStats
 # removes) has an exact p-value of 1.19e-07.
 _SIGNIFICANCE_LEVEL = 0.05
 
+# Final review ruling (2026-09-27): spec 3 ("First delivery design") sets a
+# bar before the calibration claim may be published -- calibration must land
+# "within a few points" of the stated probability. "A few points" = 5
+# percentage points, measured only over calibration buckets with at least 50
+# games (a smaller bucket is noise, not evidence either way). These are the
+# only two numbers this bar depends on; the owner can change them here.
+CALIBRATION_BAR_POINTS = 5.0
+CALIBRATION_BAR_MIN_GAMES = 50
+
+
+@dataclass(frozen=True)
+class SeasonBeat:
+    """One test season's displayed accuracy vs the displayed home baseline.
+
+    Both figures are the DISPLAYED (rounded-to-one-decimal) accuracy
+    figures, matching what a reader actually sees in the per-season table --
+    not the unrounded metric -- so `beats` can never disagree with the two
+    numbers printed next to it.
+    """
+
+    season: str
+    model_accuracy: float
+    home_accuracy: float
+    beats: bool
+
+
+@dataclass(frozen=True)
+class PublishingBar:
+    """Spec 3's publishing bar: beats always-pick-home in every test season,
+    AND calibration is within CALIBRATION_BAR_POINTS points in every bucket
+    with at least CALIBRATION_BAR_MIN_GAMES games. Pure data -- no I/O, no
+    formatting -- so it is trivially testable by hand."""
+
+    season_beats: tuple[SeasonBeat, ...]
+    all_seasons_beat: bool
+    worst_bucket: metrics.CalibrationBin | None
+    worst_bucket_gap: float | None  # percentage points; None iff worst_bucket is None
+    calibration_met: bool
+
+    @property
+    def met(self) -> bool:
+        return self.all_seasons_beat and self.calibration_met
+
+
+def publishing_bar(preds: Sequence[Prediction]) -> PublishingBar:
+    """Compute spec 3's publishing bar over the scored (headline) predictions.
+
+    Per-season "beats" uses the DISPLAYED (rounded to one decimal) model
+    accuracy and home rate for that season's own predictions -- the same
+    figures `format_season_table` prints -- so this can never call a season
+    a win or a loss that disagrees with what the reader sees in that table.
+    Calibration uses the existing 10-bin `metrics.calibration_bins`; only
+    buckets with >= CALIBRATION_BAR_MIN_GAMES games count, and the worst
+    (largest-gap) qualifying bucket is always reported, whether or not it
+    breaches the bar, so a reader can see the bar was actually checked.
+    """
+    by_season: dict[str, list[Prediction]] = {}
+    for p in preds:
+        by_season.setdefault(p.season, []).append(p)
+    season_beats = tuple(
+        SeasonBeat(
+            season=season,
+            model_accuracy=round(metrics.accuracy(by_season[season]) * 100, 1),
+            home_accuracy=round(metrics.home_rate(by_season[season]) * 100, 1),
+            beats=round(metrics.accuracy(by_season[season]) * 100, 1)
+            > round(metrics.home_rate(by_season[season]) * 100, 1),
+        )
+        for season in sorted(by_season)
+    )
+    all_seasons_beat = bool(season_beats) and all(sb.beats for sb in season_beats)
+
+    qualifying = [
+        b for b in metrics.calibration_bins(preds, 10) if b.count >= CALIBRATION_BAR_MIN_GAMES
+    ]
+    worst_bucket = None
+    worst_gap = None
+    calibration_met = True
+    if qualifying:
+        worst_bucket = max(qualifying, key=lambda b: abs(b.mean_predicted - b.observed_rate))
+        worst_gap = abs(worst_bucket.mean_predicted - worst_bucket.observed_rate) * 100
+        calibration_met = worst_gap <= CALIBRATION_BAR_POINTS
+
+    return PublishingBar(
+        season_beats=season_beats,
+        all_seasons_beat=all_seasons_beat,
+        worst_bucket=worst_bucket,
+        worst_bucket_gap=worst_gap,
+        calibration_met=calibration_met,
+    )
+
+
+def format_publishing_bar(bar: PublishingBar) -> str:
+    """Render `publishing_bar`'s verdict plainly -- "If it misses, the
+    report says so plainly" (spec 3)."""
+    lines = ["  Publishing bar (set before any result was seen):"]
+    lines.append(
+        "    Beats always-pick-home in every test season:  "
+        + ("YES" if bar.all_seasons_beat else "NO")
+    )
+    for sb in bar.season_beats:
+        lines.append(
+            f"        {sb.season}  {sb.model_accuracy:.1f}% vs {sb.home_accuracy:.1f}%   "
+            + ("yes" if sb.beats else "no")
+        )
+    lines.append(
+        f"    Calibration within {CALIBRATION_BAR_POINTS:g} percentage points in every "
+        f"bucket of {CALIBRATION_BAR_MIN_GAMES:g}+ games:  "
+        + ("YES" if bar.calibration_met else "NO")
+    )
+    if bar.worst_bucket is not None:
+        b = bar.worst_bucket
+        lines.append(
+            f"        worst: said {b.mean_predicted * 100:.1f}%, actual "
+            f"{b.observed_rate * 100:.1f}% ({b.count:,} games) -- off by "
+            f"{bar.worst_bucket_gap:.1f} points"
+        )
+    if bar.met:
+        lines.append("    Verdict: MET -- both halves of the bar hold.")
+    else:
+        failed = []
+        if not bar.all_seasons_beat:
+            failed.append("beats-every-test-season")
+        if not bar.calibration_met:
+            failed.append("calibration")
+        lines.append(
+            f"    Verdict: NOT MET ({' and '.join(failed)}) -- do not publish the "
+            "calibration claim yet."
+        )
+    return "\n".join(lines)
+
 
 def _verdict_direction(pc: metrics.PairedComparison) -> str:
     """BEATS vs LOSES TO, decided from the UNROUNDED paired result.
@@ -60,6 +190,12 @@ class BacktestResult:
     market_row_count: int
     reconstructed_share: float
     scope: str | None = None
+    # Final review (minor): a stage1 run's report never named the settings
+    # it used -- a reader could not tell two runs with different settings
+    # apart without opening the JSON file by hand. Plain text, built by the
+    # caller (cli.py, which already has the loaded ModelSettings and its
+    # source path); None for always-home/coin-flip, which have no settings.
+    settings_summary: str | None = None
 
 
 def summarize(
@@ -79,6 +215,7 @@ def summarize(
     # construct by omission -- the caller must state the count.
     market_row_count: int,
     scope: str | None = None,
+    settings_summary: str | None = None,
 ) -> BacktestResult:
     """Compute every headline metric. Raises if there is nothing to score."""
     return BacktestResult(
@@ -115,6 +252,7 @@ def summarize(
         # `preds` is empty, so this division is safe.
         reconstructed_share=sum(1 for p in preds if p.reconstructed) / len(preds),
         scope=scope,
+        settings_summary=settings_summary,
     )
 
 
@@ -141,13 +279,18 @@ def _provenance_header(result: BacktestResult) -> list[str]:
     if result.scope is not None:
         season_label = result.scope
     game_dates = sorted(p.game_date for p in result.predictions)
-    return [
+    lines = [
         f"  Model               : {result.model}",
         f"  Season              : {season_label}",
         f"  Buffer              : {result.buffer_minutes:,} minutes before tip-off",
         f"  Date range          : {game_dates[0].isoformat()} to {game_dates[-1].isoformat()}",
-        "",
     ]
+    # Final review (minor): name the settings a stage1 run actually used, so
+    # a reader can tell two runs apart without opening the JSON file by hand.
+    if result.settings_summary is not None:
+        lines.append(f"  Settings            : {result.settings_summary}")
+    lines.append("")
+    return lines
 
 
 def format_report(result: BacktestResult) -> str:
@@ -314,6 +457,12 @@ def format_report(result: BacktestResult) -> str:
             f"actual {b.observed_rate * 100:5.1f}%  "
             f"({b.count:,} games)"
         )
+
+    # Final review: only a scoped (stage1 test-season headline) run has a
+    # publishing claim to check -- always-home/coin-flip output is
+    # unchanged.
+    if result.scope is not None:
+        lines += ["", format_publishing_bar(publishing_bar(result.predictions))]
 
     lines += ["", "  Coverage and exclusions:"]
     # Finding 1 (t7-fix1): every count below comes from the POOLED

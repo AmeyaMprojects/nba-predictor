@@ -762,3 +762,155 @@ def test_season_table_by_hand():
     # (0.2 away, home won) -> 50.0%; home won both -> 100.0%;
     # Brier ((0.1)^2 + (0.8)^2) / 2 = 0.3250
     assert "2023-24  test           2 games   model  50.0%   home 100.0%   Brier 0.3250" in text
+
+
+# --- Final review fix: the publishing bar (spec 3) -------------------------
+# publishing_bar/format_publishing_bar are pure functions of a list of
+# Predictions; every expectation below is worked out by hand in the comment
+# above the fixture that produces it, not read off the code's own output.
+
+
+def _homefav(n, p_home, home_won, prefix, season):
+    return [make(p_home, home_won, f"{prefix}{i}", season=season) for i in range(n)]
+
+
+def test_publishing_bar_met_case():
+    """MET: both seasons beat always-pick-home, and the only qualifying
+    (>=50 game) calibration bucket is within the 5-point bar.
+
+    2023-24 (60 games): 50 games at p_home=0.65 (bucket 60-70%), 32 of them
+    home_won=True (18 False) -- said 65.0%, actual 32/50=64.0% (gap 1.0, so
+    this bucket is the worst -- and only -- qualifying one). Plus 10 games
+    at p_home=0.1, home_won=False (away won, model right), which fall in
+    the 10-20% bucket (only 10 games there, never qualifies).
+      accuracy = (32 correct from the home group + 10 correct from the away
+                  group) / 60 = 42/60 = 70.0%
+      home_rate = 32/60 = 53.33...% -> displayed 53.3%
+      70.0 > 53.3 -> beats.
+    2024-25 (10 games): 5 at p_home=0.9/home_won=True (correct), 5 at
+    p_home=0.1/home_won=False (correct) -> accuracy 100.0%, home_rate 50.0%
+    -> beats.
+    """
+    preds = (
+        _homefav(32, 0.65, True, "a", "2023-24")
+        + _homefav(18, 0.65, False, "b", "2023-24")
+        + _homefav(10, 0.1, False, "c", "2023-24")
+        + _homefav(5, 0.9, True, "d", "2024-25")
+        + _homefav(5, 0.1, False, "e", "2024-25")
+    )
+    bar = report.publishing_bar(preds)
+    assert bar.season_beats == (
+        report.SeasonBeat("2023-24", 70.0, 53.3, True),
+        report.SeasonBeat("2024-25", 100.0, 50.0, True),
+    )
+    assert bar.all_seasons_beat is True
+    assert bar.worst_bucket is not None
+    assert bar.worst_bucket.count == 50
+    assert bar.worst_bucket.mean_predicted == pytest.approx(0.65)
+    assert bar.worst_bucket.observed_rate == pytest.approx(0.64)
+    assert bar.worst_bucket_gap == pytest.approx(1.0)
+    assert bar.calibration_met is True
+    assert bar.met is True
+
+    text = report.format_publishing_bar(bar)
+    assert "  Publishing bar (set before any result was seen):" in text
+    assert "Beats always-pick-home in every test season:  YES" in text
+    assert "2023-24  70.0% vs 53.3%   yes" in text
+    assert "2024-25  100.0% vs 50.0%   yes" in text
+    assert "Calibration within 5 percentage points in every bucket of 50+ games:  YES" in text
+    assert "worst: said 65.0%, actual 64.0% (50 games) -- off by 1.0 points" in text
+    assert "Verdict: MET -- both halves of the bar hold." in text
+
+
+def test_publishing_bar_not_met_when_one_season_loses():
+    """2023-24: 5 home-favoured correct + 5 away-favoured correct ->
+    accuracy 100.0%, home_rate 50.0% -> beats.
+    2024-25: 5 home-favoured WRONG (p_home=0.9, home_won=False) + 5
+    away-favoured WRONG (p_home=0.1, home_won=True) -> accuracy 0.0%,
+    home_rate 5/10=50.0% -> 0.0 > 50.0 is False -> loses.
+    No bucket reaches 50 games, so calibration is vacuously met; the bar
+    still fails because of the lost season.
+    """
+    preds = (
+        _homefav(5, 0.9, True, "a", "2023-24")
+        + _homefav(5, 0.1, False, "b", "2023-24")
+        + _homefav(5, 0.9, False, "c", "2024-25")
+        + _homefav(5, 0.1, True, "d", "2024-25")
+    )
+    bar = report.publishing_bar(preds)
+    assert bar.season_beats == (
+        report.SeasonBeat("2023-24", 100.0, 50.0, True),
+        report.SeasonBeat("2024-25", 0.0, 50.0, False),
+    )
+    assert bar.all_seasons_beat is False
+    assert bar.worst_bucket is None
+    assert bar.calibration_met is True
+    assert bar.met is False
+
+    text = report.format_publishing_bar(bar)
+    assert "Beats always-pick-home in every test season:  NO" in text
+    assert "2023-24  100.0% vs 50.0%   yes" in text
+    assert "2024-25  0.0% vs 50.0%   no" in text
+    assert "Verdict: NOT MET (beats-every-test-season) -- do not publish the " in text
+
+
+def test_publishing_bar_not_met_when_a_50plus_bucket_is_off_by_6():
+    """One test season, 50 games, all p_home=0.30 (bucket 30-40%, mean
+    predicted 30.0%): 12 home_won=True, 38 False.
+      accuracy: prediction is away (p_home<0.5); correct when home_won is
+        False -> 38/50 = 76.0%
+      home_rate = 12/50 = 24.0%  (76.0 > 24.0 -> beats)
+      bucket: said 30.0%, actual 12/50 = 24.0% -> gap 6.0, over the 5.0 bar.
+    """
+    preds = _homefav(12, 0.30, True, "a", "2023-24") + _homefav(38, 0.30, False, "b", "2023-24")
+    bar = report.publishing_bar(preds)
+    assert bar.season_beats == (report.SeasonBeat("2023-24", 76.0, 24.0, True),)
+    assert bar.all_seasons_beat is True
+    assert bar.worst_bucket is not None
+    assert bar.worst_bucket.count == 50
+    assert bar.worst_bucket_gap == pytest.approx(6.0)
+    assert bar.calibration_met is False
+    assert bar.met is False
+
+    text = report.format_publishing_bar(bar)
+    assert "Calibration within 5 percentage points in every bucket of 50+ games:  NO" in text
+    assert "worst: said 30.0%, actual 24.0% (50 games) -- off by 6.0 points" in text
+    assert "Verdict: NOT MET (calibration) -- do not publish the calibration claim yet." in text
+
+
+def test_publishing_bar_ignores_a_huge_gap_under_50_games():
+    """Same shape as the 6-point-gap test but only 49 games, and a much
+    bigger gap: all p_home=0.30, 5 home_won=True (44 False).
+      accuracy = 44/49 = 89.79...% -> displayed 89.8%
+      home_rate = 5/49 = 10.20...% -> displayed 10.2%  (beats)
+      bucket: said 30.0%, actual 5/49 = 10.204...% -> a ~19.8 point gap,
+      comfortably over the 5.0 bar -- but the bucket has only 49 games, one
+      short of CALIBRATION_BAR_MIN_GAMES, so it must not qualify and the bar
+      must still read MET.
+    """
+    preds = _homefav(5, 0.30, True, "a", "2023-24") + _homefav(44, 0.30, False, "b", "2023-24")
+    bar = report.publishing_bar(preds)
+    assert bar.all_seasons_beat is True
+    assert bar.worst_bucket is None
+    assert bar.calibration_met is True
+    assert bar.met is True
+
+    text = report.format_publishing_bar(bar)
+    assert "Calibration within 5 percentage points in every bucket of 50+ games:  YES" in text
+    assert "worst:" not in text
+    assert "Verdict: MET -- both halves of the bar hold." in text
+
+
+def test_format_report_prints_the_publishing_bar_only_for_scoped_runs():
+    preds = _homefav(5, 0.9, True, "a", "2023-24") + _homefav(5, 0.1, False, "b", "2023-24")
+    stats = _stats(10)
+    scoped = report.summarize(
+        preds, stats, model="stage1", buffer_minutes=30, market_available=False,
+        market_row_count=0, scope="test season 2023-24 only",
+    )
+    text = report.format_report(scoped)
+    assert "Publishing bar (set before any result was seen):" in text
+
+    unscoped = summarize(preds, stats)
+    text2 = report.format_report(unscoped)
+    assert "Publishing bar" not in text2

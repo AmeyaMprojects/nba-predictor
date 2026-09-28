@@ -419,21 +419,26 @@ class _SeasonProgress:
     with no output at all otherwise -- easy to mistake for a hang. Printed
     to STDERR, never STDOUT, since STDOUT is this command's publishable
     report and must not carry progress chatter.
+
+    Final review (minor): this used to also print "(n of N seasons)", with
+    N taken from `replay.known_seasons` -- a count of seasons IN THE
+    ARCHIVE, not of seasons `replay.replay` will actually walk (which also
+    depends on the buffer, the leak guard, and whether a season has any
+    game this predictor is ever asked about). A season with zero predicted
+    games never increments `n`, so that total could sit at, say, "12 of 13"
+    forever once replay finished -- read by a human as a stuck run. Simplest
+    fix that cannot lie: drop the total; a plain running count needs no
+    denominator to prove the run is still moving.
     """
 
-    def __init__(self, inner, total_seasons: int) -> None:
+    def __init__(self, inner) -> None:
         self._inner = inner
-        self._total = total_seasons
         self._seen: set[str] = set()
 
     def __call__(self, game, view):
         if game.season not in self._seen:
             self._seen.add(game.season)
-            typer.echo(
-                f"scoring {game.season} ({len(self._seen)} of {self._total} "
-                "seasons)...",
-                err=True,
-            )
+            typer.echo(f"scoring {game.season} ({len(self._seen)} so far)...", err=True)
         return self._inner(game, view)
 
 
@@ -453,7 +458,7 @@ def backtest_cmd(
     from predictor import db
     from predictor import status as status_mod
     from predictor.backtest import baselines, replay, report
-    from predictor.config import settings
+    from predictor.config import PROJECT_ROOT, settings
 
     names = ("always-home", "coin-flip", "stage1")
     if model not in names:
@@ -502,6 +507,7 @@ def backtest_cmd(
         raise typer.Exit(code=1) from None
 
     stage1_predictor = None
+    settings_summary = None
     if model == "stage1":
         from predictor.model import settings as model_settings
         from predictor.model import stage1
@@ -512,11 +518,19 @@ def backtest_cmd(
             typer.echo(f"Cannot run the stage1 model: {exc}")
             raise typer.Exit(code=1) from None
         stage1_predictor = stage1.Stage1Predictor(con, loaded)
+        # Final review (minor): name the settings this run actually used
+        # (and where they came from) right in the header -- a reader could
+        # not otherwise tell two runs with different settings apart.
+        r = loaded.ratings
+        settings_summary = (
+            f"k {r.k:g}, cap {r.margin_cap:g}, regression {r.season_regression:g}, "
+            f"window {r.hca_window}, sigma {loaded.sigma:.2f} "
+            f"({model_settings.SETTINGS_PATH.relative_to(PROJECT_ROOT)})"
+        )
         # Finding 5 (t7-fix1): tell the user which season is being scored,
-        # and how far through the run that is, without printing anything
-        # to STDOUT that would pollute the publishable report below.
-        total_seasons = 1 if season is not None else len(replay.known_seasons(con))
-        chosen = _SeasonProgress(stage1_predictor, total_seasons)
+        # without printing anything to STDOUT that would pollute the
+        # publishable report below.
+        chosen = _SeasonProgress(stage1_predictor)
     elif model == "always-home":
         chosen = baselines.always_home
     else:
@@ -663,6 +677,7 @@ def backtest_cmd(
         market_reason=market_reason,
         market_row_count=market_row_count,
         scope=scope,
+        settings_summary=settings_summary,
     )
     typer.echo(report.format_report(result))
 
@@ -672,9 +687,18 @@ def backtest_cmd(
         # Finding 6 (t7-fix1): the table's "test" role is easy to misread as
         # the only rows that count -- say plainly that the rest are not
         # excluded, they are the seasons the model trained/tuned on.
+        #
+        # Final review (minor): the old wording ("earlier rows are seasons
+        # the model learned from or was tuned on") is false the moment a row
+        # labelled 'unassigned' by `model_settings.season_role` appears (a
+        # season outside warm-up/fit/calibrate/test) -- it is neither
+        # "earlier" nor something the model learned from or was tuned on.
+        # Naming all four non-test roles explicitly stays true regardless of
+        # which roles actually appear in this run's table.
         typer.echo(
-            "  Only the 'test' rows are held out; earlier rows are seasons the "
-            "model learned from or was tuned on."
+            "  Only 'test' rows are the published held-out test; 'warm-up', "
+            "'fit' and 'calibrate' rows are seasons the model learned from or "
+            "was tuned on; 'unassigned' rows are outside the published test."
         )
         if stage1_predictor.unknown_cities or stage1_predictor.no_history:
             typer.echo("")

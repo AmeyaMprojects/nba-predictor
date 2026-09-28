@@ -72,6 +72,24 @@ def test_stage1_headline_is_test_seasons_only(tmp_path, monkeypatch):
     assert "2018-19  warm-up" in out.output
     assert "Example explanations" in out.output
     assert " at " in out.output and "% to win)" in out.output
+    # Final review (minor): the header names the settings this run actually
+    # used -- SETTINGS above is RatingParams(k=0.1, margin_cap=20.0,
+    # season_regression=0.5, hca_window=100), sigma=13.0.
+    assert (
+        "Settings            : k 0.1, cap 20, regression 0.5, window 100, "
+        "sigma 13.00 (src/predictor/model/stage1_settings.json)" in out.output
+    )
+    # Final review (minor): the season-table note names all four non-test
+    # roles explicitly (not just "earlier rows"), so it stays true even when
+    # an 'unassigned' season appears in the table.
+    assert (
+        "Only 'test' rows are the published held-out test; 'warm-up', "
+        "'fit' and 'calibrate' rows are seasons the model learned from or "
+        "was tuned on; 'unassigned' rows are outside the published test."
+    ) in out.output
+    # Final review: the publishing bar block prints for a scoped (stage1)
+    # run.
+    assert "Publishing bar (set before any result was seen):" in out.output
 
 
 def _multi_test_season_archive(tmp_path, monkeypatch):
@@ -142,8 +160,14 @@ def test_progress_prints_to_stderr_never_stdout(tmp_path, monkeypatch):
     monkeypatch.setattr(ms, "load", lambda path=None: SETTINGS)
     out = runner.invoke(cli.app, ["backtest", "--model", "stage1"])
     assert out.exit_code == 0, out.output
-    assert "scoring 2018-19 (1 of 2 seasons)..." in out.stderr
-    assert "scoring 2023-24 (2 of 2 seasons)..." in out.stderr
+    # Final review (minor): the "(n of N seasons)" total is gone -- N used
+    # to come from `replay.known_seasons`, a count of seasons IN THE
+    # ARCHIVE, which can differ from the seasons `replay.replay` actually
+    # walks and predicts at least one game in, so the total could get stuck
+    # below N forever (e.g. "12 of 13") even after the run finished.
+    assert "scoring 2018-19 (1 so far)..." in out.stderr
+    assert "scoring 2023-24 (2 so far)..." in out.stderr
+    assert "seasons)" not in out.stderr
     assert "scoring" not in out.stdout
 
 

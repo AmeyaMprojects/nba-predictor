@@ -1,12 +1,15 @@
 from datetime import date, timedelta
 
+import pytest
 from typer.testing import CliRunner
 
 from model_fixtures import add_game, fixture_con
 from predictor import cli, config, db
+from predictor.backtest import replay
 from predictor.config import Settings
 from predictor.model import fit as fit_mod
 from predictor.model import settings as ms
+from predictor.model.stage1 import Stage1Predictor
 from predictor.model.venues import VenueIndex
 from real_archive import open_real_archive_or_skip
 
@@ -81,6 +84,47 @@ def test_load_never_returns_a_row_from_a_test_season(tmp_path):
     assert all(g.result.season not in ms.TEST_SEASONS for g in games)
 
 
+def test_simulate_matches_stage1predictor_rating_gap_and_home_court(tmp_path):
+    """`fit._simulate` is a from-scratch replay of the SAME `Ratings` update
+    rule `Stage1Predictor.explain` uses live -- if the two ever diverged,
+    the settings `fit()` chooses would not describe what the predictor
+    actually does. Fixture: 5 games over 4 dates, a season change
+    (2014-15 -> 2019-20, exercising `enter_season`'s regression), and one
+    neutral-site game (home_court must read 0.0 there and that game's
+    margin must not enter the rolling home-margin window afterwards).
+    """
+    con = fixture_con(tmp_path)
+    games = [
+        ("00214150001", "2014-15", date(2015, 11, 1), "PHI", "NYK", 100, 90, False),
+        ("00214150002", "2014-15", date(2015, 11, 1), "BOS", "MIA", 95, 92, False),
+        ("00214150003", "2014-15", date(2015, 11, 3), "NYK", "BOS", 88, 93, True),  # neutral
+        ("00219200001", "2019-20", date(2019, 11, 1), "PHI", "MIA", 101, 99, False),
+        ("00219200002", "2019-20", date(2019, 11, 3), "NYK", "PHI", 90, 105, False),
+    ]
+    for gid, season, d, home, away, hp, ap, neutral in games:
+        add_game(con, gid, season, d, home, away, hp, ap, city="Boston", neutral=neutral)
+
+    params = fit_mod.RatingParams(k=0.1, margin_cap=20.0, season_regression=0.5, hca_window=10)
+    venues = VenueIndex.from_db(con)
+    loaded_games = fit_mod._load(con, venues)
+    assert [g.result.game_id for g in loaded_games] == [gid for gid, *_ in games]
+    simulated = fit_mod._simulate(params, loaded_games)
+
+    settings = ms.ModelSettings(
+        ratings=params,
+        coefficients=fit_mod.Coefficients(0.0, 0.0, 0.0, 0.0, 0.0),
+        sigma=13.0, fit_games=1, calibrate_games=1,
+    )
+    predictor = Stage1Predictor(con, settings, venues)
+    preds, stats = replay.replay(con, predictor)
+    assert stats.predicted == len(games)
+
+    for (gid, *_), (gap, hc) in zip(games, simulated):
+        b = predictor.breakdowns[gid]
+        assert b.rating == pytest.approx(gap)
+        assert b.home == pytest.approx(hc)
+
+
 def test_fit_counts_its_games_and_picks_values_from_the_grids(tmp_path):
     con = fixture_con(tmp_path)
     _history(con)
@@ -112,8 +156,27 @@ def test_describe_is_plain_english():
     assert "20 points" in text
     assert "33%" in text
     assert "800" in text
-    assert "back-to-back" in text and "-1.1" in text
+    # Final review (minor): coefficients now print with 2 decimals, not 1.
+    assert "back-to-back" in text and "-1.10" in text
     assert "13.2" in text
+
+
+def test_describe_never_prints_negative_zero():
+    """Final review (minor): the committed settings' travel_per_1000km
+    (-0.022147) rounds to "-0.0" at 1 decimal -- a term a reader sees as
+    zero with a minus sign in front of it. Coefficients.back_to_back here
+    is -0.001, which still rounds to -0.00 even at 2 decimals, so the fix
+    must normalise that too, not just add a digit."""
+    s = ms.ModelSettings(
+        ratings=fit_mod.RatingParams(0.08, 20.0, 0.33, 800),
+        coefficients=fit_mod.Coefficients(-0.001, -0.3, -0.022147, 0.001, 1.4),
+        sigma=13.2, fit_games=3369, calibrate_games=1230,
+    )
+    text = fit_mod.describe(s)
+    assert "-0.00" not in text
+    assert "back-to-back (home minus away)       +0.00" in text
+    assert "per 1,000 km travelled               -0.02" in text
+    assert "per time zone crossed                +0.00" in text
 
 
 def test_fit_model_command_writes_the_settings_file(tmp_path, monkeypatch):
