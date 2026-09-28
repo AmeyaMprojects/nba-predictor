@@ -382,7 +382,13 @@ def test_verdict_is_too_close_to_call_when_the_exact_p_value_is_not_significant(
     text = report.format_report(summarize(preds))
     first = verdict_line(text)
     assert first.startswith("TOO CLOSE TO CALL")
-    assert "+3.6" in first
+    # t7-fix1 finding 3: the displayed edge is the difference of the
+    # DISPLAYED (rounded to one decimal) accuracy and baseline figures --
+    # accuracy 62/110 = 56.4% (rounded), baseline 58/110 = 52.7% (rounded),
+    # 56.4 - 52.7 = 3.7 -- not the unrounded (52-48)/110 = 3.6363...,
+    # which used to print "+3.6" and visibly disagree with the accuracy
+    # lines printed just below it.
+    assert "+3.7 percentage points" in first
     assert "100 disagreement" in first
     assert "p=0.764" in first
 
@@ -394,7 +400,7 @@ def test_verdict_beats_states_the_exact_p_value():
     text = report.format_report(summarize(preds))
     first = verdict_line(text)
     assert first == (
-        "BEATS always-pick-home by 54.5 points -- 100 disagreement(s), "
+        "BEATS always-pick-home by 54.5 percentage points -- 100 disagreement(s), "
         "exact sign-test p=1.12e-09"
     )
     assert "accuracy            :" in text
@@ -419,7 +425,7 @@ def test_verdict_loses_to_states_the_exact_p_value():
     text = report.format_report(summarize(preds))
     first = verdict_line(text)
     assert first == (
-        "LOSES TO always-pick-home by 54.5 points -- 100 disagreement(s), "
+        "LOSES TO always-pick-home by 54.5 percentage points -- 100 disagreement(s), "
         "exact sign-test p=1.12e-09"
     )
 
@@ -627,6 +633,78 @@ def test_scope_replaces_the_season_label_in_the_header():
     )
     text = report.format_report(result)
     assert "Season              : test seasons 2023-24, 2024-25, 2025-26 only" in text
+
+
+# --- t7-fix1 finding 1: the games-scored line and the pooled skip lines
+# under "Coverage and exclusions" must not let a pooled (all-seasons) count
+# be mistaken for a count over just the scoped headline. ------------------
+
+
+def test_games_scored_line_states_the_test_season_count_separately_from_the_pooled_total():
+    """`result.stats` is the POOLED ReplayStats across every replayed
+    season even when `scope` narrows the header to a subset of seasons --
+    printing it as "N of M considered" would silently claim the pooled
+    total is the headline's own total. State them separately instead."""
+    preds = [_pred(season="2023-24") for _ in range(3)]
+    stats = _stats(30)  # pooled: 30 games considered/predicted across all seasons
+    result = report.summarize(
+        preds, stats, model="stage1", buffer_minutes=30,
+        market_available=False, market_row_count=0,
+        scope="test season 2023-24 only -- the model's settings were never tuned on it",
+    )
+    text = report.format_report(result)
+    assert (
+        "games scored        : 3 test-season games (30 replayed in total, "
+        "including warm-up, fit and calibrate seasons)" in text
+    )
+
+
+def test_pooled_skip_lines_say_across_all_replayed_seasons_when_scope_is_set():
+    preds = [_pred(season="2023-24") for _ in range(3)]
+    stats = ReplayStats(
+        considered=33, predicted=30, skipped_conflicting_metadata=3,
+        skipped_buffer_too_early=0,
+        skipped_buffer_too_early_reconstructed=0,
+        skipped_no_tipoff=0,
+        considered_by_season={"2023-24": 33},
+        skipped_no_tipoff_by_season={},
+        skipped_no_result=0, skipped_score_missing=0,
+        skipped_result_visible=0, declined=0, failed=0,
+    )
+    result = report.summarize(
+        preds, stats, model="stage1", buffer_minutes=30,
+        market_available=False, market_row_count=0,
+        scope="test season 2023-24 only -- the model's settings were never tuned on it",
+    )
+    text = report.format_report(result)
+    assert "3 game(s) skipped -- the archive holds contradictory rows" in text
+    assert "(across all replayed seasons)" in text
+
+
+def test_pooled_skip_lines_omit_the_note_when_scope_is_not_set():
+    preds = [make(0.7, i < 70, f"g{i}") for i in range(100)]
+    stats = ReplayStats(
+        considered=103, predicted=100, skipped_conflicting_metadata=3,
+        skipped_buffer_too_early=0,
+        skipped_buffer_too_early_reconstructed=0,
+        skipped_no_tipoff=0,
+        considered_by_season={"2024-25": 103},
+        skipped_no_tipoff_by_season={},
+        skipped_no_result=0, skipped_score_missing=0,
+        skipped_result_visible=0, declined=0, failed=0,
+    )
+    text = report.format_report(summarize(preds, stats))
+    assert "(across all replayed seasons)" not in text
+
+
+# --- t7-fix1 finding 3: calibration error is a percentage-point gap, not a
+# game-score-points gap. ----------------------------------------------------
+
+
+def test_calibration_error_line_says_percentage_points():
+    preds = [make(0.7, i < 70, f"g{i}") for i in range(100)]
+    text = report.format_report(summarize(preds))
+    assert "percentage points average gap" in text
 
 
 def test_season_table_by_hand():

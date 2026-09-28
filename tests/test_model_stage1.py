@@ -92,6 +92,17 @@ def test_sentence_for_an_away_favourite():
     assert b.sentence().endswith("-> LAL by 4.0 (DEN 38% to win)")
 
 
+def test_sentence_normalises_negative_zero():
+    """t7-fix1 finding 4: round(-0.03, 1) is -0.0, which f"{...:+.1f}" would
+    print as "-0.0" -- a term that reads as zero but carries a minus sign
+    nobody can explain. Every shown term (and the total) must normalise
+    -0.0 to +0.0 instead."""
+    b = Breakdown("g", "DEN", "LAL", rating=-0.03, home=0.0, rest=0.0,
+                  travel=0.0, altitude=0.0, spread=-0.03, p_home=0.5)
+    assert "rating +0.0" in b.sentence()
+    assert "-0.0" not in b.sentence()
+
+
 def test_a_result_one_second_after_the_cutoff_moves_no_rating(tmp_path):
     con = fixture_con(tmp_path)
     cutoff = _cutoff(date(2025, 1, 15))

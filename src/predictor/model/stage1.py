@@ -52,9 +52,19 @@ class Breakdown:
     def sentence(self) -> str:
         """One publishable line. The shown total is the sum of the shown
         (rounded) terms, so the sentence always adds up on its face; the
-        probability uses the exact spread."""
-        shown = [(name, round(value, 1)) for name, value in self.terms()]
-        total = round(sum(v for _, v in shown), 1)
+        probability uses the exact spread.
+
+        t7-fix1 finding 4: `round(-0.03, 1)` is `-0.0`, and `f"{-0.0:+.1f}"`
+        prints "-0.0" -- a term that is, to a reader, plainly zero shown
+        with a minus sign in front of it, and no legend anywhere explains
+        what a sign even means. Adding 0.0 turns -0.0 into +0.0 (IEEE 754:
+        adding +0.0 to -0.0 rounds to +0.0), fixing the display without
+        changing which branch below fires -- `-0.0 == 0.0` in Python, so
+        the total>0 / total<0 / pick'em branching below was never affected
+        by the sign bit either way.
+        """
+        shown = [(name, round(value, 1) + 0.0) for name, value in self.terms()]
+        total = round(sum(v for _, v in shown), 1) + 0.0
         parts = ", ".join(f"{name} {v:+.1f}" for name, v in shown)
         if total > 0:
             outcome = f"{self.home_team} by {total:.1f}"

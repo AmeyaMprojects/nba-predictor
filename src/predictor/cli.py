@@ -411,6 +411,32 @@ def setup() -> None:
     typer.echo(f"ready. data dir: {settings.data_dir}")
 
 
+class _SeasonProgress:
+    """Wraps a predictor to print one STDERR line each time `replay.replay`
+    crosses into a new season (t7-fix1 finding 5).
+
+    The stage1 backtest against the real archive takes about 7.5 minutes
+    with no output at all otherwise -- easy to mistake for a hang. Printed
+    to STDERR, never STDOUT, since STDOUT is this command's publishable
+    report and must not carry progress chatter.
+    """
+
+    def __init__(self, inner, total_seasons: int) -> None:
+        self._inner = inner
+        self._total = total_seasons
+        self._seen: set[str] = set()
+
+    def __call__(self, game, view):
+        if game.season not in self._seen:
+            self._seen.add(game.season)
+            typer.echo(
+                f"scoring {game.season} ({len(self._seen)} of {self._total} "
+                "seasons)...",
+                err=True,
+            )
+        return self._inner(game, view)
+
+
 @app.command("backtest")
 def backtest_cmd(
     model: str = typer.Option(
@@ -486,7 +512,11 @@ def backtest_cmd(
             typer.echo(f"Cannot run the stage1 model: {exc}")
             raise typer.Exit(code=1) from None
         stage1_predictor = stage1.Stage1Predictor(con, loaded)
-        chosen = stage1_predictor
+        # Finding 5 (t7-fix1): tell the user which season is being scored,
+        # and how far through the run that is, without printing anything
+        # to STDOUT that would pollute the publishable report below.
+        total_seasons = 1 if season is not None else len(replay.known_seasons(con))
+        chosen = _SeasonProgress(stage1_predictor, total_seasons)
     elif model == "always-home":
         chosen = baselines.always_home
     else:
@@ -596,15 +626,32 @@ def backtest_cmd(
     if stage1_predictor is not None:
         headline = [p for p in preds if model_settings.season_role(p.season) == "test"]
         if not headline:
-            typer.echo(
-                "No test-season games were scored "
-                f"({', '.join(model_settings.TEST_SEASONS)}), so there is no honest "
-                "headline to report. Ingest those seasons and try again."
-            )
+            # Finding 2 (t7-fix1): a non-test --season (the test seasons ARE
+            # ingested) must name --season as the cause, not tell the user
+            # to ingest data that is already there.
+            if season is not None and season not in model_settings.TEST_SEASONS:
+                typer.echo(
+                    f"No test-season games were scored because --season {season} "
+                    "filtered them out. The test seasons are "
+                    f"{', '.join(model_settings.TEST_SEASONS)} -- drop --season, or "
+                    "pass one of those, to see the stage1 headline."
+                )
+            else:
+                typer.echo(
+                    "No test-season games were scored "
+                    f"({', '.join(model_settings.TEST_SEASONS)}), so there is no honest "
+                    "headline to report. Ingest those seasons and try again."
+                )
             raise typer.Exit(code=1)
+        # Finding 2 (t7-fix1): built from the seasons actually present in the
+        # headline, sorted -- not hard-coded to all three test seasons,
+        # which is wrong under --season <one test season> or if a test
+        # season is missing from the archive.
+        headline_seasons = sorted({p.season for p in headline})
+        plural = len(headline_seasons) != 1
         scope = (
-            f"test seasons {', '.join(model_settings.TEST_SEASONS)} only -- "
-            "the model's settings were never tuned on them"
+            f"test season{'s' if plural else ''} {', '.join(headline_seasons)} only -- "
+            f"the model's settings were never tuned on {'them' if plural else 'it'}"
         )
 
     result = report.summarize(
@@ -622,9 +669,23 @@ def backtest_cmd(
     if stage1_predictor is not None:
         typer.echo("")
         typer.echo(report.format_season_table(preds, model_settings.season_role))
+        # Finding 6 (t7-fix1): the table's "test" role is easy to misread as
+        # the only rows that count -- say plainly that the rest are not
+        # excluded, they are the seasons the model trained/tuned on.
+        typer.echo(
+            "  Only the 'test' rows are held out; earlier rows are seasons the "
+            "model learned from or was tuned on."
+        )
         if stage1_predictor.unknown_cities or stage1_predictor.no_history:
             typer.echo("")
-            typer.echo("  Games where travel could not be measured (counted as 0):")
+            # Finding 7 (t7-fix1): "Games" undercounted -- each row here is
+            # one TEAM's game (home or away), not one game, and the count
+            # spans every replayed season, not just the headline's test
+            # seasons -- said plainly rather than left ambiguous.
+            typer.echo(
+                "  Team-games where travel could not be measured (across all "
+                "replayed seasons, counted as 0):"
+            )
             for city, n in sorted(stage1_predictor.unknown_cities.items()):
                 typer.echo(f"    {n:,} team-game(s): {city}")
             typer.echo(
@@ -638,6 +699,12 @@ def backtest_cmd(
         ]
         if examples:
             typer.echo("")
+            # Finding 4 (t7-fix1): no legend anywhere explained what the
+            # signed terms below mean or what unit they are in.
+            typer.echo(
+                "  Each term is in points of expected margin; positive numbers "
+                "favour the home team."
+            )
             typer.echo("  Example explanations (most recent test-season games):")
             for b in examples:
                 typer.echo(f"    {b.sentence()}")

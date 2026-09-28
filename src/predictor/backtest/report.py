@@ -202,7 +202,17 @@ def format_report(result: BacktestResult) -> str:
         # each other because none is derived from a different statistic
         # than the one that decided the verdict.
         pc = metrics.paired_comparison(result.predictions)
-        edge_pts = pc.edge * 100
+        # Finding 3 (t7-fix1): print the edge as the difference of the
+        # DISPLAYED (already-rounded-to-one-decimal) accuracy and baseline
+        # figures, not the unrounded pc.edge*100 -- otherwise the two
+        # numbers on screen can visibly disagree (67.3 - 54.7 = 12.6, but
+        # the old unrounded edge rounded to 12.5). pc.edge*100 and
+        # (accuracy - home_baseline)*100 are the same real number before
+        # rounding (see metrics.paired_comparison's docstring), so this is
+        # only ever a display fix, never a different verdict.
+        acc_disp = round(result.accuracy * 100, 1)
+        base_disp = round(result.home_baseline * 100, 1)
+        edge_pts = acc_disp - base_disp
         # FIX 22(a) (final review, part 3): guard wins == losses == 0
         # explicitly rather than relying on it being unreachable by an
         # implicit coupling to the home_share == 0/1 branch above -- with
@@ -217,30 +227,46 @@ def format_report(result: BacktestResult) -> str:
         elif pc.p_value < _SIGNIFICANCE_LEVEL:
             direction = "BEATS" if edge_pts > 0 else "LOSES TO"
             verdict = (
-                f"{direction} always-pick-home by {abs(edge_pts):.1f} points "
-                f"-- {n_discordant:,} disagreement(s), exact sign-test "
-                f"p={_format_p(pc.p_value)}"
+                f"{direction} always-pick-home by {abs(edge_pts):.1f} "
+                f"percentage points -- {n_discordant:,} disagreement(s), "
+                f"exact sign-test p={_format_p(pc.p_value)}"
             )
         else:
             verdict = (
                 f"TOO CLOSE TO CALL -- edge over always-pick-home is "
-                f"{edge_pts:+.1f} points over {n_discordant:,} "
+                f"{edge_pts:+.1f} percentage points over {n_discordant:,} "
                 f"disagreement(s); an edge this size or larger arises by "
                 f"chance with p={_format_p(pc.p_value)} (not below the "
                 f"{_SIGNIFICANCE_LEVEL:g} significance threshold used here)"
             )
 
     s = result.stats
+    # Finding 1 (t7-fix1): when `scope` narrows the headline to a subset of
+    # seasons (today, the test seasons), `s` here is still the POOLED
+    # ReplayStats over every replayed season -- printing it under
+    # "of ... considered" as if it counted only the headline's games would
+    # be a lie by omission (a real run: "14,439 of 14,439 considered" under
+    # a header that says "test seasons ... only"). State the headline's own
+    # scored count and the pooled total separately instead.
+    if result.scope is not None:
+        games_scored_line = (
+            f"  games scored        : {len(result.predictions):,} test-season games "
+            f"({s.predicted:,} replayed in total, including warm-up, fit and "
+            "calibrate seasons)"
+        )
+    else:
+        games_scored_line = f"  games scored        : {s.predicted:,} of {s.considered:,} considered"
     lines = header + [
         verdict,
         "",
-        f"  games scored        : {s.predicted:,} of {s.considered:,} considered",
+        games_scored_line,
         f"  accuracy            : {result.accuracy * 100:.1f}%",
         f"  always-pick-home    : {result.home_baseline * 100:.1f}%  (the baseline)",
         f"  Brier score         : {result.brier:.4f}  (lower is better; 0.25 is a coin flip)",
         f"  log loss            : {result.log_loss:.4f}  (lower is better; 0.6931 is a "
         "coin flip; punishes confident wrong answers far harder than Brier does)",
-        f"  calibration error   : {result.calibration_error * 100:.1f} points average gap",
+        f"  calibration error   : {result.calibration_error * 100:.1f} percentage points "
+        "average gap",
         "",
         "  Calibration -- when it said X%, how often did that happen?",
     ]
@@ -253,6 +279,13 @@ def format_report(result: BacktestResult) -> str:
         )
 
     lines += ["", "  Coverage and exclusions:"]
+    # Finding 1 (t7-fix1): every count below comes from the POOLED
+    # ReplayStats (every replayed season), even when `scope` narrows the
+    # headline above to a subset of seasons -- say so on each pooled line
+    # so a reader cannot mistake, say, "3 games skipped" for "3 of the
+    # headline's test-season games", when it may really be 3 warm-up-season
+    # games that never touch the headline at all.
+    pooled_note = " (across all replayed seasons)" if result.scope is not None else ""
     # FIX 12(c): the harness only ever scores REGULAR-SEASON games (the
     # replay's own game_id filter is 'LIKE 002%') -- playoffs, play-in, and
     # preseason games are excluded entirely and never appear in the
@@ -266,7 +299,7 @@ def format_report(result: BacktestResult) -> str:
             f"    {s.skipped_conflicting_metadata:,} game(s) skipped -- the archive holds "
             "contradictory rows for these games (season, date, or home/away team "
             "disagrees between ingested rows), so re-run 'predictor ingest-season' "
-            "for the affected season(s) to fix them"
+            f"for the affected season(s) to fix them{pooled_note}"
         )
     if s.skipped_buffer_too_early:
         # FIX 21 (final review, part 3): this used to say the buffer reached
@@ -308,12 +341,13 @@ def format_report(result: BacktestResult) -> str:
             )
         lines.append(
             f"    {n_early:,} game(s) skipped -- the buffer reaches back past "
-            f"{provenance}, so this run is not measuring anything meaningful for them"
+            f"{provenance}, so this run is not measuring anything meaningful "
+            f"for them{pooled_note}"
         )
     if s.skipped_no_tipoff:
         lines.append(
             f"    {s.skipped_no_tipoff:,} game(s) skipped -- no tip-off time could be "
-            "resolved, so no honest pre-game cutoff exists for them"
+            f"resolved, so no honest pre-game cutoff exists for them{pooled_note}"
         )
         # FIX 11: a pooled count reads as scattered noise; broken down by
         # season it can reveal that the exclusion is concentrated in one or
@@ -325,27 +359,29 @@ def format_report(result: BacktestResult) -> str:
                 total = s.considered_by_season.get(season, n)
                 lines.append(f"        {season}: {n:,} of {total:,}")
     if s.skipped_no_result:
-        lines.append(f"    {s.skipped_no_result:,} game(s) skipped -- not yet played")
+        lines.append(
+            f"    {s.skipped_no_result:,} game(s) skipped -- not yet played{pooled_note}"
+        )
     if s.skipped_score_missing:
         lines.append(
             f"    {s.skipped_score_missing:,} game(s) skipped -- played, but the archive "
             "did not record the score, so re-run 'predictor ingest-season' for the "
-            "affected season(s) to fix them"
+            f"affected season(s) to fix them{pooled_note}"
         )
     if s.skipped_result_visible:
         lines.append(
             f"    {s.skipped_result_visible:,} game(s) skipped -- result already visible at "
-            "cutoff (leak guard), so the predictor would have seen the outcome"
+            f"cutoff (leak guard), so the predictor would have seen the outcome{pooled_note}"
         )
     if s.declined:
         lines.append(
             f"    {s.declined:,} game(s) DECLINED -- predictor deliberately declined to make "
-            "a prediction"
+            f"a prediction{pooled_note}"
         )
     if s.failed:
         lines.append(
             f"    {s.failed:,} game(s) NOT scored -- the predictor failed or returned "
-            "an impossible probability. See the lines above."
+            f"an impossible probability{pooled_note}. See the lines above."
         )
 
     if not result.market_available:
