@@ -594,3 +594,54 @@ def test_report_always_states_regular_season_scope():
     text = report.format_report(summarize(preds))
     assert "regular-season games only" in text
     assert "playoffs, play-in, and preseason" in text
+
+
+# --- Task 7: `scope` overrides the header's season label, and a per-season
+# table lets a reader see that one lucky season did not carry a pooled
+# headline unseen. -----------------------------------------------------
+
+
+def _pred(season="2024-25", p_home=0.7, home_won=True, gid="g"):
+    return make(p_home, home_won, gid=gid, season=season)
+
+
+def _stats(n):
+    return ReplayStats(
+        considered=n, predicted=n, skipped_conflicting_metadata=0,
+        skipped_buffer_too_early=0,
+        skipped_buffer_too_early_reconstructed=0,
+        skipped_no_tipoff=0,
+        considered_by_season={"2024-25": n},
+        skipped_no_tipoff_by_season={},
+        skipped_no_result=0, skipped_score_missing=0,
+        skipped_result_visible=0, declined=0, failed=0,
+    )
+
+
+def test_scope_replaces_the_season_label_in_the_header():
+    preds = [_pred(season="2023-24"), _pred(season="2024-25")]
+    result = report.summarize(
+        preds, _stats(len(preds)), model="stage1", buffer_minutes=30,
+        market_available=False, market_row_count=0,
+        scope="test seasons 2023-24, 2024-25, 2025-26 only",
+    )
+    text = report.format_report(result)
+    assert "Season              : test seasons 2023-24, 2024-25, 2025-26 only" in text
+
+
+def test_season_table_by_hand():
+    preds = [
+        _pred(season="2023-24", p_home=0.9, home_won=True),
+        _pred(season="2023-24", p_home=0.2, home_won=True),
+        _pred(season="2014-15", p_home=0.6, home_won=False),
+    ]
+    text = report.format_season_table(preds, lambda s: "test" if s == "2023-24" else "warm-up")
+    lines = text.splitlines()
+    assert lines[0].startswith("  By season")
+    # 2014-15: 1 game, model picked home and lost -> 0.0%; home won 0% ;
+    # Brier (0.6-0)^2 = 0.36
+    assert "2014-15  warm-up        1 games   model   0.0%   home   0.0%   Brier 0.3600" in text
+    # 2023-24: 2 games, model right once (0.9 home, won) and wrong once
+    # (0.2 away, home won) -> 50.0%; home won both -> 100.0%;
+    # Brier ((0.1)^2 + (0.8)^2) / 2 = 0.3250
+    assert "2023-24  test           2 games   model  50.0%   home 100.0%   Brier 0.3250" in text

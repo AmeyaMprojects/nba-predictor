@@ -414,7 +414,7 @@ def setup() -> None:
 @app.command("backtest")
 def backtest_cmd(
     model: str = typer.Option(
-        "always-home", help="Which predictor to score: always-home or coin-flip."
+        "always-home", help="Which predictor to score: always-home, coin-flip, or stage1."
     ),
     season: str = typer.Option(None, help="Limit to one season, e.g. 2024-25."),
     buffer_minutes: int = typer.Option(
@@ -429,14 +429,9 @@ def backtest_cmd(
     from predictor.backtest import baselines, replay, report
     from predictor.config import settings
 
-    known = {
-        "always-home": baselines.always_home,
-        "coin-flip": baselines.fixed_probability(0.5),
-    }
-    if model not in known:
-        typer.echo(
-            f"Unknown model '{model}'. Available: {', '.join(sorted(known))}."
-        )
+    names = ("always-home", "coin-flip", "stage1")
+    if model not in names:
+        typer.echo(f"Unknown model '{model}'. Available: {', '.join(names)}.")
         raise typer.Exit(code=1)
 
     # FIX 1(c): backtest only ever READS the archive -- it must not migrate
@@ -480,9 +475,26 @@ def backtest_cmd(
             )
         raise typer.Exit(code=1) from None
 
+    stage1_predictor = None
+    if model == "stage1":
+        from predictor.model import settings as model_settings
+        from predictor.model import stage1
+
+        try:
+            loaded = model_settings.load()
+        except model_settings.SettingsError as exc:
+            typer.echo(f"Cannot run the stage1 model: {exc}")
+            raise typer.Exit(code=1) from None
+        stage1_predictor = stage1.Stage1Predictor(con, loaded)
+        chosen = stage1_predictor
+    elif model == "always-home":
+        chosen = baselines.always_home
+    else:
+        chosen = baselines.fixed_probability(0.5)
+
     try:
         preds, stats = replay.replay(
-            con, known[model], season=season, buffer_minutes=buffer_minutes
+            con, chosen, season=season, buffer_minutes=buffer_minutes
         )
     except ValueError as exc:
         typer.echo(f"Cannot run the backtest: {exc}.")
@@ -579,16 +591,56 @@ def backtest_cmd(
             )
         )
 
+    headline = preds
+    scope = None
+    if stage1_predictor is not None:
+        headline = [p for p in preds if model_settings.season_role(p.season) == "test"]
+        if not headline:
+            typer.echo(
+                "No test-season games were scored "
+                f"({', '.join(model_settings.TEST_SEASONS)}), so there is no honest "
+                "headline to report. Ingest those seasons and try again."
+            )
+            raise typer.Exit(code=1)
+        scope = (
+            f"test seasons {', '.join(model_settings.TEST_SEASONS)} only -- "
+            "the model's settings were never tuned on them"
+        )
+
     result = report.summarize(
-        preds,
+        headline,
         stats,
         model=model,
         buffer_minutes=buffer_minutes,
         market_available=market_available,
         market_reason=market_reason,
         market_row_count=market_row_count,
+        scope=scope,
     )
     typer.echo(report.format_report(result))
+
+    if stage1_predictor is not None:
+        typer.echo("")
+        typer.echo(report.format_season_table(preds, model_settings.season_role))
+        if stage1_predictor.unknown_cities or stage1_predictor.no_history:
+            typer.echo("")
+            typer.echo("  Games where travel could not be measured (counted as 0):")
+            for city, n in sorted(stage1_predictor.unknown_cities.items()):
+                typer.echo(f"    {n:,} team-game(s): {city}")
+            typer.echo(
+                f"    {stage1_predictor.no_history:,} team-game(s) with no earlier game "
+                "(treated as fully rested, no travel)"
+            )
+        examples = [
+            stage1_predictor.breakdowns[p.game_id]
+            for p in headline[-3:]
+            if p.game_id in stage1_predictor.breakdowns
+        ]
+        if examples:
+            typer.echo("")
+            typer.echo("  Example explanations (most recent test-season games):")
+            for b in examples:
+                typer.echo(f"    {b.sentence()}")
 
 
 @app.command("fit-model")

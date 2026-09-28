@@ -38,6 +38,7 @@ class BacktestResult:
     # matched-to-this-run. See the market section of format_report.
     market_row_count: int
     reconstructed_share: float
+    scope: str | None = None
 
 
 def summarize(
@@ -56,6 +57,7 @@ def summarize(
     # but the type itself should not make that sentence possible to
     # construct by omission -- the caller must state the count.
     market_row_count: int,
+    scope: str | None = None,
 ) -> BacktestResult:
     """Compute every headline metric. Raises if there is nothing to score."""
     return BacktestResult(
@@ -91,6 +93,7 @@ def summarize(
         # metrics.brier_score(preds) above already raised MetricsError if
         # `preds` is empty, so this division is safe.
         reconstructed_share=sum(1 for p in preds if p.reconstructed) / len(preds),
+        scope=scope,
     )
 
 
@@ -114,6 +117,8 @@ def _provenance_header(result: BacktestResult) -> list[str]:
     """
     seasons = sorted({p.season for p in result.predictions})
     season_label = seasons[0] if len(seasons) == 1 else "all seasons"
+    if result.scope is not None:
+        season_label = result.scope
     game_dates = sorted(p.game_date for p in result.predictions)
     return [
         f"  Model               : {result.model}",
@@ -384,4 +389,22 @@ def format_report(result: BacktestResult) -> str:
             "  backtest's timing was verified.",
         ]
 
+    return "\n".join(lines)
+
+
+def format_season_table(preds, role_of) -> str:
+    """Accuracy, home rate and Brier for every season, labeled by role, so
+    one lucky season cannot carry a pooled headline unseen."""
+    lines = ["  By season (model accuracy / always-pick-home / Brier):"]
+    by_season: dict[str, list] = {}
+    for p in preds:
+        by_season.setdefault(p.season, []).append(p)
+    for season in sorted(by_season):
+        group = by_season[season]
+        lines.append(
+            f"    {season}  {role_of(season):<9}  {len(group):>5,} games   "
+            f"model {metrics.accuracy(group) * 100:5.1f}%   "
+            f"home {metrics.home_rate(group) * 100:5.1f}%   "
+            f"Brier {metrics.brier_score(group):.4f}"
+        )
     return "\n".join(lines)
