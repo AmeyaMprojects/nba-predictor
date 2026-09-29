@@ -813,13 +813,20 @@ def test_publishing_bar_met_case():
     assert bar.met is True
 
     text = report.format_publishing_bar(bar)
-    assert "  Publishing bar (set before any result was seen):" in text
+    assert (
+        "  Publishing bar (from the design spec; 'a few points' read as 5 "
+        "percentage points, in buckets of 50+ games -- a reading fixed after "
+        "the first test run):"
+    ) in text
     assert "Beats always-pick-home in every test season:  YES" in text
     assert "2023-24  70.0% vs 53.3%   yes" in text
     assert "2024-25  100.0% vs 50.0%   yes" in text
     assert "Calibration within 5 percentage points in every bucket of 50+ games:  YES" in text
     assert "worst: said 65.0%, actual 64.0% (50 games) -- off by 1.0 points" in text
-    assert "Verdict: MET -- both halves of the bar hold." in text
+    assert (
+        "Verdict: MET -- it beats always-pick-home in every test season and its "
+        "probabilities are within 5 points in every bucket of 50+ games."
+    ) in text
 
 
 def test_publishing_bar_not_met_when_one_season_loses():
@@ -851,7 +858,10 @@ def test_publishing_bar_not_met_when_one_season_loses():
     assert "Beats always-pick-home in every test season:  NO" in text
     assert "2023-24  100.0% vs 50.0%   yes" in text
     assert "2024-25  0.0% vs 50.0%   no" in text
-    assert "Verdict: NOT MET (beats-every-test-season) -- do not publish the " in text
+    assert (
+        "Verdict: NOT MET -- it did not beat always-pick-home in 2024-25. "
+        "Do not publish yet."
+    ) in text
 
 
 def test_publishing_bar_not_met_when_a_50plus_bucket_is_off_by_6():
@@ -875,7 +885,11 @@ def test_publishing_bar_not_met_when_a_50plus_bucket_is_off_by_6():
     text = report.format_publishing_bar(bar)
     assert "Calibration within 5 percentage points in every bucket of 50+ games:  NO" in text
     assert "worst: said 30.0%, actual 24.0% (50 games) -- off by 6.0 points" in text
-    assert "Verdict: NOT MET (calibration) -- do not publish the calibration claim yet." in text
+    assert (
+        "Verdict: NOT MET -- the accuracy result holds, but its stated probabilities "
+        "are off by more than 5 points in at least one bucket. Publish the accuracy "
+        "result; do not claim the probabilities are calibrated yet."
+    ) in text
 
 
 def test_publishing_bar_ignores_a_huge_gap_under_50_games():
@@ -898,7 +912,73 @@ def test_publishing_bar_ignores_a_huge_gap_under_50_games():
     text = report.format_publishing_bar(bar)
     assert "Calibration within 5 percentage points in every bucket of 50+ games:  YES" in text
     assert "worst:" not in text
-    assert "Verdict: MET -- both halves of the bar hold." in text
+    assert (
+        "Verdict: MET -- it beats always-pick-home in every test season and its "
+        "probabilities are within 5 points in every bucket of 50+ games."
+    ) in text
+
+
+def test_publishing_bar_met_when_bucket_gap_is_exactly_5():
+    """The displayed gap counts as "within" the bar AT the boundary: gap ==
+    CALIBRATION_BAR_POINTS (5.0) must read YES, not NO.
+
+    50 games at p_home=0.65 (bucket 60-70%, mean predicted 65.0%), 30 of
+    them home_won=True -> observed 30/50 = 60.0%. Displayed gap
+    |65.0 - 60.0| = 5.0 -- exactly the bar, so within.
+    Plus 10 games at p_home=0.1, home_won=False (correct away pick, and too
+    few to qualify as their own bucket) so the season's accuracy clears its
+    own home rate:
+      accuracy = (30 correct home picks + 10 correct away picks) / 60
+               = 40/60 = 66.7%
+      home_rate = 30/60 = 50.0%  (66.7 > 50.0 -> beats)
+    """
+    preds = _homefav(30, 0.65, True, "a", "2023-24") + _homefav(
+        20, 0.65, False, "b", "2023-24"
+    ) + _homefav(10, 0.1, False, "c", "2023-24")
+    bar = report.publishing_bar(preds)
+    assert bar.all_seasons_beat is True
+    assert bar.worst_bucket is not None
+    assert bar.worst_bucket.count == 50
+    assert bar.worst_bucket_gap == pytest.approx(5.0)
+    assert bar.calibration_met is True
+    assert bar.met is True
+
+    text = report.format_publishing_bar(bar)
+    assert "Calibration within 5 percentage points in every bucket of 50+ games:  YES" in text
+    assert "worst: said 65.0%, actual 60.0% (50 games) -- off by 5.0 points" in text
+    assert (
+        "Verdict: MET -- it beats always-pick-home in every test season and its "
+        "probabilities are within 5 points in every bucket of 50+ games."
+    ) in text
+
+
+def test_publishing_bar_not_met_when_bucket_gap_is_5point1():
+    """One tenth of a point past the bar (5.1, not 5.0) must read NO.
+
+    Same shape as the exactly-5.0 case, except the 50-game group is at
+    p_home=0.651 (still bucket 60-70%, but mean predicted displays as
+    65.1%, not 65.0%) with the same 30 home wins -> observed 60.0%.
+    Displayed gap |65.1 - 60.0| = 5.1 -- one tenth of a point over the bar.
+    """
+    preds = _homefav(30, 0.651, True, "a", "2023-24") + _homefav(
+        20, 0.651, False, "b", "2023-24"
+    ) + _homefav(10, 0.1, False, "c", "2023-24")
+    bar = report.publishing_bar(preds)
+    assert bar.all_seasons_beat is True
+    assert bar.worst_bucket is not None
+    assert bar.worst_bucket.count == 50
+    assert bar.worst_bucket_gap == pytest.approx(5.1)
+    assert bar.calibration_met is False
+    assert bar.met is False
+
+    text = report.format_publishing_bar(bar)
+    assert "Calibration within 5 percentage points in every bucket of 50+ games:  NO" in text
+    assert "worst: said 65.1%, actual 60.0% (50 games) -- off by 5.1 points" in text
+    assert (
+        "Verdict: NOT MET -- the accuracy result holds, but its stated probabilities "
+        "are off by more than 5 points in at least one bucket. Publish the accuracy "
+        "result; do not claim the probabilities are calibrated yet."
+    ) in text
 
 
 def test_format_report_prints_the_publishing_bar_only_for_scoped_runs():
@@ -909,7 +989,11 @@ def test_format_report_prints_the_publishing_bar_only_for_scoped_runs():
         market_row_count=0, scope="test season 2023-24 only",
     )
     text = report.format_report(scoped)
-    assert "Publishing bar (set before any result was seen):" in text
+    assert (
+        "Publishing bar (from the design spec; 'a few points' read as 5 "
+        "percentage points, in buckets of 50+ games -- a reading fixed after "
+        "the first test run):"
+    ) in text
 
     unscoped = summarize(preds, stats)
     text2 = report.format_report(unscoped)

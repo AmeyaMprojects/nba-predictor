@@ -89,7 +89,11 @@ def test_stage1_headline_is_test_seasons_only(tmp_path, monkeypatch):
     ) in out.output
     # Final review: the publishing bar block prints for a scoped (stage1)
     # run.
-    assert "Publishing bar (set before any result was seen):" in out.output
+    assert (
+        "Publishing bar (from the design spec; 'a few points' read as 5 "
+        "percentage points, in buckets of 50+ games -- a reading fixed after "
+        "the first test run):"
+    ) in out.output
 
 
 def _multi_test_season_archive(tmp_path, monkeypatch):

@@ -59,6 +59,30 @@ class PublishingBar:
         return self.all_seasons_beat and self.calibration_met
 
 
+def _displayed_calibration_gap(b: metrics.CalibrationBin) -> float:
+    """The gap between the two DISPLAYED (rounded-to-one-decimal) percentages
+    printed side by side in the calibration table -- "said X%, actual Y%" --
+    not the gap of the underlying unrounded rates.
+
+    Wording-fix (2026-09-27, post-launch-content review): the bar used to be
+    decided from `abs(mean_predicted - observed_rate)`, the UNROUNDED gap.
+    For the real stage1 output that gap rounds to 10.4 while the two
+    printed figures (16.8% and 6.3%) actually differ by 10.5 -- a reader
+    doing the subtraction themselves gets a different number than the
+    report prints. Deciding and printing the bar from this same displayed
+    gap means the printed sentence can never disagree with the two
+    percentages next to it.
+
+    The final `round(..., 1)` only clears float noise from subtracting two
+    already-rounded numbers (e.g. 16.8 - 6.3 landing on 10.499999999999998
+    instead of 10.5); it never changes which side of the bar a bucket
+    lands on.
+    """
+    said = round(b.mean_predicted * 100, 1)
+    actual = round(b.observed_rate * 100, 1)
+    return round(abs(said - actual), 1)
+
+
 def publishing_bar(preds: Sequence[Prediction]) -> PublishingBar:
     """Compute spec 3's publishing bar over the scored (headline) predictions.
 
@@ -93,8 +117,8 @@ def publishing_bar(preds: Sequence[Prediction]) -> PublishingBar:
     worst_gap = None
     calibration_met = True
     if qualifying:
-        worst_bucket = max(qualifying, key=lambda b: abs(b.mean_predicted - b.observed_rate))
-        worst_gap = abs(worst_bucket.mean_predicted - worst_bucket.observed_rate) * 100
+        worst_bucket = max(qualifying, key=_displayed_calibration_gap)
+        worst_gap = _displayed_calibration_gap(worst_bucket)
         calibration_met = worst_gap <= CALIBRATION_BAR_POINTS
 
     return PublishingBar(
@@ -106,10 +130,22 @@ def publishing_bar(preds: Sequence[Prediction]) -> PublishingBar:
     )
 
 
+def _english_list(items: Sequence[str]) -> str:
+    """Join season names the way a person would say them out loud."""
+    items = list(items)
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
 def format_publishing_bar(bar: PublishingBar) -> str:
     """Render `publishing_bar`'s verdict plainly -- "If it misses, the
     report says so plainly" (spec 3)."""
-    lines = ["  Publishing bar (set before any result was seen):"]
+    lines = [
+        "  Publishing bar (from the design spec; 'a few points' read as 5 "
+        "percentage points, in buckets of 50+ games -- a reading fixed after "
+        "the first test run):"
+    ]
     lines.append(
         "    Beats always-pick-home in every test season:  "
         + ("YES" if bar.all_seasons_beat else "NO")
@@ -132,17 +168,28 @@ def format_publishing_bar(bar: PublishingBar) -> str:
             f"{bar.worst_bucket_gap:.1f} points"
         )
     if bar.met:
-        lines.append("    Verdict: MET -- both halves of the bar hold.")
-    else:
-        failed = []
-        if not bar.all_seasons_beat:
-            failed.append("beats-every-test-season")
-        if not bar.calibration_met:
-            failed.append("calibration")
         lines.append(
-            f"    Verdict: NOT MET ({' and '.join(failed)}) -- do not publish the "
-            "calibration claim yet."
+            "    Verdict: MET -- it beats always-pick-home in every test season and "
+            "its probabilities are within 5 points in every bucket of 50+ games."
         )
+    elif bar.all_seasons_beat:
+        # Seasons hold; only calibration fails.
+        lines.append(
+            "    Verdict: NOT MET -- the accuracy result holds, but its stated "
+            "probabilities are off by more than 5 points in at least one bucket. "
+            "Publish the accuracy result; do not claim the probabilities are "
+            "calibrated yet."
+        )
+    else:
+        lost_seasons = _english_list([sb.season for sb in bar.season_beats if not sb.beats])
+        verdict = f"    Verdict: NOT MET -- it did not beat always-pick-home in {lost_seasons}."
+        if not bar.calibration_met:
+            verdict += (
+                " Its stated probabilities are also off by more than 5 points in at "
+                "least one bucket."
+            )
+        verdict += " Do not publish yet."
+        lines.append(verdict)
     return "\n".join(lines)
 
 
