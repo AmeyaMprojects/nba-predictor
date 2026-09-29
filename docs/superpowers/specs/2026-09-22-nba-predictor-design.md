@@ -369,6 +369,31 @@ says so plainly.
 6. **Real archive, read-only.** Every test-season game gets a prediction,
    and no result stamped after its cutoff is ever read.
 
+#### Result — 2026-09-29
+
+`predictor backtest --model stage1`, settings `k 0.04, cap 30, regression 0.5,
+window 800, sigma 13.90` (fitted on 2019-20 → 2021-22, sigma on 2022-23;
+committed in `src/predictor/model/stage1_settings.json`).
+
+- **Test seasons (3,690 games, never tuned on):** accuracy **67.3%** against
+  always-pick-home **54.7%** (edge 12.6 percentage points, exact sign test
+  p = 6e-37); Brier 0.2083; log loss 0.6038.
+- **Per test season:** 2023-24 66.0% vs 54.3%; 2024-25 66.1% vs 54.4%;
+  2025-26 69.7% vs 55.4%. **The first half of the bar is met.**
+- **Calibration: the second half is NOT met.** The model is underconfident:
+  said 35.5% → happened 28.0% (450 games); said 16.8% → 6.3% (63 games);
+  said 84.0% → 87.8% (245 games). The average gap (2.6 points) hides this.
+  The numeric reading of "a few points" — 5 percentage points, in buckets of
+  50+ games — was fixed on 2026-09-28, *after* the first test-season run, so
+  it is a reporting convention, not a pre-registered threshold. The miss
+  holds under any reasonable reading (7.5 points over 450 games).
+- **Likely cause, not yet acted on:** sigma was set on 2022-23, the model's
+  weakest season (63.7%), which widens every probability. Any recalibration
+  must be chosen without looking at test seasons again, or the test stops
+  being a test. Deferred to the owner.
+- **Publishable today:** the accuracy result and the explanations. **Not
+  publishable yet:** any claim that the stated probabilities are calibrated.
+
 ### Stage 1 — additive points model
 
 Team strength as an Elo rating updated on margin of victory, with between-season regression toward the mean.

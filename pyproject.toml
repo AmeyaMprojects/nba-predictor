@@ -14,6 +14,7 @@ dependencies = [
     # Required by DuckDB to return TIMESTAMP WITH TIME ZONE values to Python.
     # Without it, any query selecting observed_at raises ModuleNotFoundError.
     "pytz>=2024.1",
+    "numpy>=2.0",
 ]
 
 [project.optional-dependencies]

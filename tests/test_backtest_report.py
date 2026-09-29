@@ -382,7 +382,13 @@ def test_verdict_is_too_close_to_call_when_the_exact_p_value_is_not_significant(
     text = report.format_report(summarize(preds))
     first = verdict_line(text)
     assert first.startswith("TOO CLOSE TO CALL")
-    assert "+3.6" in first
+    # t7-fix1 finding 3: the displayed edge is the difference of the
+    # DISPLAYED (rounded to one decimal) accuracy and baseline figures --
+    # accuracy 62/110 = 56.4% (rounded), baseline 58/110 = 52.7% (rounded),
+    # 56.4 - 52.7 = 3.7 -- not the unrounded (52-48)/110 = 3.6363...,
+    # which used to print "+3.6" and visibly disagree with the accuracy
+    # lines printed just below it.
+    assert "+3.7 percentage points" in first
     assert "100 disagreement" in first
     assert "p=0.764" in first
 
@@ -394,7 +400,7 @@ def test_verdict_beats_states_the_exact_p_value():
     text = report.format_report(summarize(preds))
     first = verdict_line(text)
     assert first == (
-        "BEATS always-pick-home by 54.5 points -- 100 disagreement(s), "
+        "BEATS always-pick-home by 54.5 percentage points -- 100 disagreement(s), "
         "exact sign-test p=1.12e-09"
     )
     assert "accuracy            :" in text
@@ -419,7 +425,7 @@ def test_verdict_loses_to_states_the_exact_p_value():
     text = report.format_report(summarize(preds))
     first = verdict_line(text)
     assert first == (
-        "LOSES TO always-pick-home by 54.5 points -- 100 disagreement(s), "
+        "LOSES TO always-pick-home by 54.5 percentage points -- 100 disagreement(s), "
         "exact sign-test p=1.12e-09"
     )
 
@@ -533,6 +539,45 @@ def test_paired_comparison_counts_only_disagreement_games():
     assert pc.losses == 48
 
 
+# --- t7-fix2 item B: the verdict's BEATS/LOSES TO direction must come from
+# the UNROUNDED paired result (wins vs losses), never from the rounded
+# DISPLAY figures -- a real, significant, but tiny edge can round to 0.0 on
+# screen while still being genuinely positive or negative. -------------------
+
+
+def test_verdict_direction_prefers_the_unrounded_wins_and_losses():
+    """Direct unit test of the direction decision, independent of any
+    rounding or display formatting."""
+    beats = metrics.PairedComparison(
+        wins=6, losses=0, edge=0.0006, standard_error=0.0002, p_value=0.03125
+    )
+    loses = metrics.PairedComparison(
+        wins=0, losses=6, edge=-0.0006, standard_error=0.0002, p_value=0.03125
+    )
+    assert report._verdict_direction(beats) == "BEATS"
+    assert report._verdict_direction(loses) == "LOSES TO"
+
+
+def test_verdict_direction_is_correct_even_when_the_displayed_edge_rounds_to_zero():
+    """A concrete report-level reproduction of the bug: 6 wins / 0 losses
+    diluted by 12,994 agreeing (home-favoured, home-won) games gives
+    accuracy == 100.0% exactly and baseline == 99.9538...%, which ALSO
+    rounds to 100.0% -- so the two DISPLAYED figures are identical
+    (edge_pts == 0.0) even though the real, unrounded edge is a genuine
+    +0.046 percentage points and the exact sign-test p-value (0.03125) is
+    significant. Deciding direction from `edge_pts > 0` would print
+    "LOSES TO ... by 0.0"; deciding it from wins vs losses must print
+    "BEATS ... by 0.0" instead -- same displayed number, correct word.
+    """
+    preds = _paired_preds(wins=6, losses=0, agreeing=12_994)
+    r = summarize(preds)
+    assert round(r.accuracy * 100, 1) == round(r.home_baseline * 100, 1) == 100.0
+    text = report.format_report(r)
+    first = verdict_line(text)
+    assert first.startswith("BEATS always-pick-home by 0.0 percentage points")
+    assert "p=0.0312" in first
+
+
 # --- FIX 9: "not yet played" vs "played but the score is missing" ---------
 
 
@@ -594,3 +639,362 @@ def test_report_always_states_regular_season_scope():
     text = report.format_report(summarize(preds))
     assert "regular-season games only" in text
     assert "playoffs, play-in, and preseason" in text
+
+
+# --- Task 7: `scope` overrides the header's season label, and a per-season
+# table lets a reader see that one lucky season did not carry a pooled
+# headline unseen. -----------------------------------------------------
+
+
+def _pred(season="2024-25", p_home=0.7, home_won=True, gid="g"):
+    return make(p_home, home_won, gid=gid, season=season)
+
+
+def _stats(n):
+    return ReplayStats(
+        considered=n, predicted=n, skipped_conflicting_metadata=0,
+        skipped_buffer_too_early=0,
+        skipped_buffer_too_early_reconstructed=0,
+        skipped_no_tipoff=0,
+        considered_by_season={"2024-25": n},
+        skipped_no_tipoff_by_season={},
+        skipped_no_result=0, skipped_score_missing=0,
+        skipped_result_visible=0, declined=0, failed=0,
+    )
+
+
+def test_scope_replaces_the_season_label_in_the_header():
+    preds = [_pred(season="2023-24"), _pred(season="2024-25")]
+    result = report.summarize(
+        preds, _stats(len(preds)), model="stage1", buffer_minutes=30,
+        market_available=False, market_row_count=0,
+        scope="test seasons 2023-24, 2024-25, 2025-26 only",
+    )
+    text = report.format_report(result)
+    assert "Season              : test seasons 2023-24, 2024-25, 2025-26 only" in text
+
+
+# --- t7-fix1 finding 1: the games-scored line and the pooled skip lines
+# under "Coverage and exclusions" must not let a pooled (all-seasons) count
+# be mistaken for a count over just the scoped headline. ------------------
+
+
+def test_games_scored_line_states_the_test_season_count_separately_from_the_pooled_total():
+    """`result.stats` is the POOLED ReplayStats across every replayed
+    season even when `scope` narrows the header to a subset of seasons --
+    printing it as "N of M considered" would silently claim the pooled
+    total is the headline's own total. State them separately instead."""
+    preds = [_pred(season="2023-24") for _ in range(3)]
+    stats = _stats(30)  # pooled: 30 games considered/predicted across all seasons
+    result = report.summarize(
+        preds, stats, model="stage1", buffer_minutes=30,
+        market_available=False, market_row_count=0,
+        scope="test season 2023-24 only -- the model's settings were never tuned on it",
+    )
+    text = report.format_report(result)
+    assert (
+        "games scored        : 3 test-season games (30 replayed in total, "
+        "including warm-up, fit and calibrate seasons)" in text
+    )
+
+
+def test_pooled_skip_lines_say_across_all_replayed_seasons_when_scope_is_set():
+    preds = [_pred(season="2023-24") for _ in range(3)]
+    stats = ReplayStats(
+        considered=33, predicted=30, skipped_conflicting_metadata=3,
+        skipped_buffer_too_early=0,
+        skipped_buffer_too_early_reconstructed=0,
+        skipped_no_tipoff=0,
+        considered_by_season={"2023-24": 33},
+        skipped_no_tipoff_by_season={},
+        skipped_no_result=0, skipped_score_missing=0,
+        skipped_result_visible=0, declined=0, failed=0,
+    )
+    result = report.summarize(
+        preds, stats, model="stage1", buffer_minutes=30,
+        market_available=False, market_row_count=0,
+        scope="test season 2023-24 only -- the model's settings were never tuned on it",
+    )
+    text = report.format_report(result)
+    assert "3 game(s) skipped -- the archive holds contradictory rows" in text
+    assert "(across all replayed seasons)" in text
+
+
+def test_pooled_skip_lines_omit_the_note_when_scope_is_not_set():
+    preds = [make(0.7, i < 70, f"g{i}") for i in range(100)]
+    stats = ReplayStats(
+        considered=103, predicted=100, skipped_conflicting_metadata=3,
+        skipped_buffer_too_early=0,
+        skipped_buffer_too_early_reconstructed=0,
+        skipped_no_tipoff=0,
+        considered_by_season={"2024-25": 103},
+        skipped_no_tipoff_by_season={},
+        skipped_no_result=0, skipped_score_missing=0,
+        skipped_result_visible=0, declined=0, failed=0,
+    )
+    text = report.format_report(summarize(preds, stats))
+    assert "(across all replayed seasons)" not in text
+
+
+# --- t7-fix1 finding 3: calibration error is a percentage-point gap, not a
+# game-score-points gap. ----------------------------------------------------
+
+
+def test_calibration_error_line_says_percentage_points():
+    preds = [make(0.7, i < 70, f"g{i}") for i in range(100)]
+    text = report.format_report(summarize(preds))
+    assert "percentage points average gap" in text
+
+
+def test_season_table_by_hand():
+    preds = [
+        _pred(season="2023-24", p_home=0.9, home_won=True),
+        _pred(season="2023-24", p_home=0.2, home_won=True),
+        _pred(season="2014-15", p_home=0.6, home_won=False),
+    ]
+    text = report.format_season_table(preds, lambda s: "test" if s == "2023-24" else "warm-up")
+    lines = text.splitlines()
+    assert lines[0].startswith("  By season")
+    # 2014-15: 1 game, model picked home and lost -> 0.0%; home won 0% ;
+    # Brier (0.6-0)^2 = 0.36
+    assert "2014-15  warm-up        1 games   model   0.0%   home   0.0%   Brier 0.3600" in text
+    # 2023-24: 2 games, model right once (0.9 home, won) and wrong once
+    # (0.2 away, home won) -> 50.0%; home won both -> 100.0%;
+    # Brier ((0.1)^2 + (0.8)^2) / 2 = 0.3250
+    assert "2023-24  test           2 games   model  50.0%   home 100.0%   Brier 0.3250" in text
+
+
+# --- Final review fix: the publishing bar (spec 3) -------------------------
+# publishing_bar/format_publishing_bar are pure functions of a list of
+# Predictions; every expectation below is worked out by hand in the comment
+# above the fixture that produces it, not read off the code's own output.
+
+
+def _homefav(n, p_home, home_won, prefix, season):
+    return [make(p_home, home_won, f"{prefix}{i}", season=season) for i in range(n)]
+
+
+def test_publishing_bar_met_case():
+    """MET: both seasons beat always-pick-home, and the only qualifying
+    (>=50 game) calibration bucket is within the 5-point bar.
+
+    2023-24 (60 games): 50 games at p_home=0.65 (bucket 60-70%), 32 of them
+    home_won=True (18 False) -- said 65.0%, actual 32/50=64.0% (gap 1.0, so
+    this bucket is the worst -- and only -- qualifying one). Plus 10 games
+    at p_home=0.1, home_won=False (away won, model right), which fall in
+    the 10-20% bucket (only 10 games there, never qualifies).
+      accuracy = (32 correct from the home group + 10 correct from the away
+                  group) / 60 = 42/60 = 70.0%
+      home_rate = 32/60 = 53.33...% -> displayed 53.3%
+      70.0 > 53.3 -> beats.
+    2024-25 (10 games): 5 at p_home=0.9/home_won=True (correct), 5 at
+    p_home=0.1/home_won=False (correct) -> accuracy 100.0%, home_rate 50.0%
+    -> beats.
+    """
+    preds = (
+        _homefav(32, 0.65, True, "a", "2023-24")
+        + _homefav(18, 0.65, False, "b", "2023-24")
+        + _homefav(10, 0.1, False, "c", "2023-24")
+        + _homefav(5, 0.9, True, "d", "2024-25")
+        + _homefav(5, 0.1, False, "e", "2024-25")
+    )
+    bar = report.publishing_bar(preds)
+    assert bar.season_beats == (
+        report.SeasonBeat("2023-24", 70.0, 53.3, True),
+        report.SeasonBeat("2024-25", 100.0, 50.0, True),
+    )
+    assert bar.all_seasons_beat is True
+    assert bar.worst_bucket is not None
+    assert bar.worst_bucket.count == 50
+    assert bar.worst_bucket.mean_predicted == pytest.approx(0.65)
+    assert bar.worst_bucket.observed_rate == pytest.approx(0.64)
+    assert bar.worst_bucket_gap == pytest.approx(1.0)
+    assert bar.calibration_met is True
+    assert bar.met is True
+
+    text = report.format_publishing_bar(bar)
+    assert (
+        "  Publishing bar (from the design spec; 'a few points' read as 5 "
+        "percentage points, in buckets of 50+ games -- a reading fixed after "
+        "the first test run):"
+    ) in text
+    assert "Beats always-pick-home in every test season:  YES" in text
+    assert "2023-24  70.0% vs 53.3%   yes" in text
+    assert "2024-25  100.0% vs 50.0%   yes" in text
+    assert "Calibration within 5 percentage points in every bucket of 50+ games:  YES" in text
+    assert "worst: said 65.0%, actual 64.0% (50 games) -- off by 1.0 points" in text
+    assert (
+        "Verdict: MET -- it beats always-pick-home in every test season and its "
+        "probabilities are within 5 points in every bucket of 50+ games."
+    ) in text
+
+
+def test_publishing_bar_not_met_when_one_season_loses():
+    """2023-24: 5 home-favoured correct + 5 away-favoured correct ->
+    accuracy 100.0%, home_rate 50.0% -> beats.
+    2024-25: 5 home-favoured WRONG (p_home=0.9, home_won=False) + 5
+    away-favoured WRONG (p_home=0.1, home_won=True) -> accuracy 0.0%,
+    home_rate 5/10=50.0% -> 0.0 > 50.0 is False -> loses.
+    No bucket reaches 50 games, so calibration is vacuously met; the bar
+    still fails because of the lost season.
+    """
+    preds = (
+        _homefav(5, 0.9, True, "a", "2023-24")
+        + _homefav(5, 0.1, False, "b", "2023-24")
+        + _homefav(5, 0.9, False, "c", "2024-25")
+        + _homefav(5, 0.1, True, "d", "2024-25")
+    )
+    bar = report.publishing_bar(preds)
+    assert bar.season_beats == (
+        report.SeasonBeat("2023-24", 100.0, 50.0, True),
+        report.SeasonBeat("2024-25", 0.0, 50.0, False),
+    )
+    assert bar.all_seasons_beat is False
+    assert bar.worst_bucket is None
+    assert bar.calibration_met is True
+    assert bar.met is False
+
+    text = report.format_publishing_bar(bar)
+    assert "Beats always-pick-home in every test season:  NO" in text
+    assert "2023-24  100.0% vs 50.0%   yes" in text
+    assert "2024-25  0.0% vs 50.0%   no" in text
+    assert (
+        "Verdict: NOT MET -- it did not beat always-pick-home in 2024-25. "
+        "Do not publish yet."
+    ) in text
+
+
+def test_publishing_bar_not_met_when_a_50plus_bucket_is_off_by_6():
+    """One test season, 50 games, all p_home=0.30 (bucket 30-40%, mean
+    predicted 30.0%): 12 home_won=True, 38 False.
+      accuracy: prediction is away (p_home<0.5); correct when home_won is
+        False -> 38/50 = 76.0%
+      home_rate = 12/50 = 24.0%  (76.0 > 24.0 -> beats)
+      bucket: said 30.0%, actual 12/50 = 24.0% -> gap 6.0, over the 5.0 bar.
+    """
+    preds = _homefav(12, 0.30, True, "a", "2023-24") + _homefav(38, 0.30, False, "b", "2023-24")
+    bar = report.publishing_bar(preds)
+    assert bar.season_beats == (report.SeasonBeat("2023-24", 76.0, 24.0, True),)
+    assert bar.all_seasons_beat is True
+    assert bar.worst_bucket is not None
+    assert bar.worst_bucket.count == 50
+    assert bar.worst_bucket_gap == pytest.approx(6.0)
+    assert bar.calibration_met is False
+    assert bar.met is False
+
+    text = report.format_publishing_bar(bar)
+    assert "Calibration within 5 percentage points in every bucket of 50+ games:  NO" in text
+    assert "worst: said 30.0%, actual 24.0% (50 games) -- off by 6.0 points" in text
+    assert (
+        "Verdict: NOT MET -- the accuracy result holds, but its stated probabilities "
+        "are off by more than 5 points in at least one bucket. Publish the accuracy "
+        "result; do not claim the probabilities are calibrated yet."
+    ) in text
+
+
+def test_publishing_bar_ignores_a_huge_gap_under_50_games():
+    """Same shape as the 6-point-gap test but only 49 games, and a much
+    bigger gap: all p_home=0.30, 5 home_won=True (44 False).
+      accuracy = 44/49 = 89.79...% -> displayed 89.8%
+      home_rate = 5/49 = 10.20...% -> displayed 10.2%  (beats)
+      bucket: said 30.0%, actual 5/49 = 10.204...% -> a ~19.8 point gap,
+      comfortably over the 5.0 bar -- but the bucket has only 49 games, one
+      short of CALIBRATION_BAR_MIN_GAMES, so it must not qualify and the bar
+      must still read MET.
+    """
+    preds = _homefav(5, 0.30, True, "a", "2023-24") + _homefav(44, 0.30, False, "b", "2023-24")
+    bar = report.publishing_bar(preds)
+    assert bar.all_seasons_beat is True
+    assert bar.worst_bucket is None
+    assert bar.calibration_met is True
+    assert bar.met is True
+
+    text = report.format_publishing_bar(bar)
+    assert "Calibration within 5 percentage points in every bucket of 50+ games:  YES" in text
+    assert "worst:" not in text
+    assert (
+        "Verdict: MET -- it beats always-pick-home in every test season and its "
+        "probabilities are within 5 points in every bucket of 50+ games."
+    ) in text
+
+
+def test_publishing_bar_met_when_bucket_gap_is_exactly_5():
+    """The displayed gap counts as "within" the bar AT the boundary: gap ==
+    CALIBRATION_BAR_POINTS (5.0) must read YES, not NO.
+
+    50 games at p_home=0.65 (bucket 60-70%, mean predicted 65.0%), 30 of
+    them home_won=True -> observed 30/50 = 60.0%. Displayed gap
+    |65.0 - 60.0| = 5.0 -- exactly the bar, so within.
+    Plus 10 games at p_home=0.1, home_won=False (correct away pick, and too
+    few to qualify as their own bucket) so the season's accuracy clears its
+    own home rate:
+      accuracy = (30 correct home picks + 10 correct away picks) / 60
+               = 40/60 = 66.7%
+      home_rate = 30/60 = 50.0%  (66.7 > 50.0 -> beats)
+    """
+    preds = _homefav(30, 0.65, True, "a", "2023-24") + _homefav(
+        20, 0.65, False, "b", "2023-24"
+    ) + _homefav(10, 0.1, False, "c", "2023-24")
+    bar = report.publishing_bar(preds)
+    assert bar.all_seasons_beat is True
+    assert bar.worst_bucket is not None
+    assert bar.worst_bucket.count == 50
+    assert bar.worst_bucket_gap == pytest.approx(5.0)
+    assert bar.calibration_met is True
+    assert bar.met is True
+
+    text = report.format_publishing_bar(bar)
+    assert "Calibration within 5 percentage points in every bucket of 50+ games:  YES" in text
+    assert "worst: said 65.0%, actual 60.0% (50 games) -- off by 5.0 points" in text
+    assert (
+        "Verdict: MET -- it beats always-pick-home in every test season and its "
+        "probabilities are within 5 points in every bucket of 50+ games."
+    ) in text
+
+
+def test_publishing_bar_not_met_when_bucket_gap_is_5point1():
+    """One tenth of a point past the bar (5.1, not 5.0) must read NO.
+
+    Same shape as the exactly-5.0 case, except the 50-game group is at
+    p_home=0.651 (still bucket 60-70%, but mean predicted displays as
+    65.1%, not 65.0%) with the same 30 home wins -> observed 60.0%.
+    Displayed gap |65.1 - 60.0| = 5.1 -- one tenth of a point over the bar.
+    """
+    preds = _homefav(30, 0.651, True, "a", "2023-24") + _homefav(
+        20, 0.651, False, "b", "2023-24"
+    ) + _homefav(10, 0.1, False, "c", "2023-24")
+    bar = report.publishing_bar(preds)
+    assert bar.all_seasons_beat is True
+    assert bar.worst_bucket is not None
+    assert bar.worst_bucket.count == 50
+    assert bar.worst_bucket_gap == pytest.approx(5.1)
+    assert bar.calibration_met is False
+    assert bar.met is False
+
+    text = report.format_publishing_bar(bar)
+    assert "Calibration within 5 percentage points in every bucket of 50+ games:  NO" in text
+    assert "worst: said 65.1%, actual 60.0% (50 games) -- off by 5.1 points" in text
+    assert (
+        "Verdict: NOT MET -- the accuracy result holds, but its stated probabilities "
+        "are off by more than 5 points in at least one bucket. Publish the accuracy "
+        "result; do not claim the probabilities are calibrated yet."
+    ) in text
+
+
+def test_format_report_prints_the_publishing_bar_only_for_scoped_runs():
+    preds = _homefav(5, 0.9, True, "a", "2023-24") + _homefav(5, 0.1, False, "b", "2023-24")
+    stats = _stats(10)
+    scoped = report.summarize(
+        preds, stats, model="stage1", buffer_minutes=30, market_available=False,
+        market_row_count=0, scope="test season 2023-24 only",
+    )
+    text = report.format_report(scoped)
+    assert (
+        "Publishing bar (from the design spec; 'a few points' read as 5 "
+        "percentage points, in buckets of 50+ games -- a reading fixed after "
+        "the first test run):"
+    ) in text
+
+    unscoped = summarize(preds, stats)
+    text2 = report.format_report(unscoped)
+    assert "Publishing bar" not in text2

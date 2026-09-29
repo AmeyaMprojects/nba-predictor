@@ -411,10 +411,41 @@ def setup() -> None:
     typer.echo(f"ready. data dir: {settings.data_dir}")
 
 
+class _SeasonProgress:
+    """Wraps a predictor to print one STDERR line each time `replay.replay`
+    crosses into a new season (t7-fix1 finding 5).
+
+    The stage1 backtest against the real archive takes about 7.5 minutes
+    with no output at all otherwise -- easy to mistake for a hang. Printed
+    to STDERR, never STDOUT, since STDOUT is this command's publishable
+    report and must not carry progress chatter.
+
+    Final review (minor): this used to also print "(n of N seasons)", with
+    N taken from `replay.known_seasons` -- a count of seasons IN THE
+    ARCHIVE, not of seasons `replay.replay` will actually walk (which also
+    depends on the buffer, the leak guard, and whether a season has any
+    game this predictor is ever asked about). A season with zero predicted
+    games never increments `n`, so that total could sit at, say, "12 of 13"
+    forever once replay finished -- read by a human as a stuck run. Simplest
+    fix that cannot lie: drop the total; a plain running count needs no
+    denominator to prove the run is still moving.
+    """
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+        self._seen: set[str] = set()
+
+    def __call__(self, game, view):
+        if game.season not in self._seen:
+            self._seen.add(game.season)
+            typer.echo(f"scoring {game.season} ({len(self._seen)} so far)...", err=True)
+        return self._inner(game, view)
+
+
 @app.command("backtest")
 def backtest_cmd(
     model: str = typer.Option(
-        "always-home", help="Which predictor to score: always-home or coin-flip."
+        "always-home", help="Which predictor to score: always-home, coin-flip, or stage1."
     ),
     season: str = typer.Option(None, help="Limit to one season, e.g. 2024-25."),
     buffer_minutes: int = typer.Option(
@@ -427,16 +458,11 @@ def backtest_cmd(
     from predictor import db
     from predictor import status as status_mod
     from predictor.backtest import baselines, replay, report
-    from predictor.config import settings
+    from predictor.config import PROJECT_ROOT, settings
 
-    known = {
-        "always-home": baselines.always_home,
-        "coin-flip": baselines.fixed_probability(0.5),
-    }
-    if model not in known:
-        typer.echo(
-            f"Unknown model '{model}'. Available: {', '.join(sorted(known))}."
-        )
+    names = ("always-home", "coin-flip", "stage1")
+    if model not in names:
+        typer.echo(f"Unknown model '{model}'. Available: {', '.join(names)}.")
         raise typer.Exit(code=1)
 
     # FIX 1(c): backtest only ever READS the archive -- it must not migrate
@@ -480,9 +506,39 @@ def backtest_cmd(
             )
         raise typer.Exit(code=1) from None
 
+    stage1_predictor = None
+    settings_summary = None
+    if model == "stage1":
+        from predictor.model import settings as model_settings
+        from predictor.model import stage1
+
+        try:
+            loaded = model_settings.load()
+        except model_settings.SettingsError as exc:
+            typer.echo(f"Cannot run the stage1 model: {exc}")
+            raise typer.Exit(code=1) from None
+        stage1_predictor = stage1.Stage1Predictor(con, loaded)
+        # Final review (minor): name the settings this run actually used
+        # (and where they came from) right in the header -- a reader could
+        # not otherwise tell two runs with different settings apart.
+        r = loaded.ratings
+        settings_summary = (
+            f"k {r.k:g}, cap {r.margin_cap:g}, regression {r.season_regression:g}, "
+            f"window {r.hca_window}, sigma {loaded.sigma:.2f} "
+            f"({model_settings.SETTINGS_PATH.relative_to(PROJECT_ROOT)})"
+        )
+        # Finding 5 (t7-fix1): tell the user which season is being scored,
+        # without printing anything to STDOUT that would pollute the
+        # publishable report below.
+        chosen = _SeasonProgress(stage1_predictor)
+    elif model == "always-home":
+        chosen = baselines.always_home
+    else:
+        chosen = baselines.fixed_probability(0.5)
+
     try:
         preds, stats = replay.replay(
-            con, known[model], season=season, buffer_minutes=buffer_minutes
+            con, chosen, season=season, buffer_minutes=buffer_minutes
         )
     except ValueError as exc:
         typer.echo(f"Cannot run the backtest: {exc}.")
@@ -579,16 +635,145 @@ def backtest_cmd(
             )
         )
 
+    headline = preds
+    scope = None
+    if stage1_predictor is not None:
+        headline = [p for p in preds if model_settings.season_role(p.season) == "test"]
+        if not headline:
+            # Finding 2 (t7-fix1): a non-test --season (the test seasons ARE
+            # ingested) must name --season as the cause, not tell the user
+            # to ingest data that is already there.
+            if season is not None and season not in model_settings.TEST_SEASONS:
+                typer.echo(
+                    f"No test-season games were scored because --season {season} "
+                    "filtered them out. The test seasons are "
+                    f"{', '.join(model_settings.TEST_SEASONS)} -- drop --season, or "
+                    "pass one of those, to see the stage1 headline."
+                )
+            else:
+                typer.echo(
+                    "No test-season games were scored "
+                    f"({', '.join(model_settings.TEST_SEASONS)}), so there is no honest "
+                    "headline to report. Ingest those seasons and try again."
+                )
+            raise typer.Exit(code=1)
+        # Finding 2 (t7-fix1): built from the seasons actually present in the
+        # headline, sorted -- not hard-coded to all three test seasons,
+        # which is wrong under --season <one test season> or if a test
+        # season is missing from the archive.
+        headline_seasons = sorted({p.season for p in headline})
+        plural = len(headline_seasons) != 1
+        scope = (
+            f"test season{'s' if plural else ''} {', '.join(headline_seasons)} only -- "
+            f"the model's settings were never tuned on {'them' if plural else 'it'}"
+        )
+
     result = report.summarize(
-        preds,
+        headline,
         stats,
         model=model,
         buffer_minutes=buffer_minutes,
         market_available=market_available,
         market_reason=market_reason,
         market_row_count=market_row_count,
+        scope=scope,
+        settings_summary=settings_summary,
     )
     typer.echo(report.format_report(result))
+
+    if stage1_predictor is not None:
+        typer.echo("")
+        typer.echo(report.format_season_table(preds, model_settings.season_role))
+        # Finding 6 (t7-fix1): the table's "test" role is easy to misread as
+        # the only rows that count -- say plainly that the rest are not
+        # excluded, they are the seasons the model trained/tuned on.
+        #
+        # Final review (minor): the old wording ("earlier rows are seasons
+        # the model learned from or was tuned on") is false the moment a row
+        # labelled 'unassigned' by `model_settings.season_role` appears (a
+        # season outside warm-up/fit/calibrate/test) -- it is neither
+        # "earlier" nor something the model learned from or was tuned on.
+        # Naming all four non-test roles explicitly stays true regardless of
+        # which roles actually appear in this run's table.
+        typer.echo(
+            "  Only 'test' rows are the published held-out test; 'warm-up', "
+            "'fit' and 'calibrate' rows are seasons the model learned from or "
+            "was tuned on; 'unassigned' rows are outside the published test."
+        )
+        if stage1_predictor.unknown_cities or stage1_predictor.no_history:
+            typer.echo("")
+            # Finding 7 (t7-fix1): "Games" undercounted -- each row here is
+            # one TEAM's game (home or away), not one game, and the count
+            # spans every replayed season, not just the headline's test
+            # seasons -- said plainly rather than left ambiguous.
+            typer.echo(
+                "  Team-games where travel could not be measured (across all "
+                "replayed seasons, counted as 0):"
+            )
+            for city, n in sorted(stage1_predictor.unknown_cities.items()):
+                typer.echo(f"    {n:,} team-game(s): {city}")
+            typer.echo(
+                f"    {stage1_predictor.no_history:,} team-game(s) with no earlier game "
+                "(treated as fully rested, no travel)"
+            )
+        examples = [
+            stage1_predictor.breakdowns[p.game_id]
+            for p in headline[-3:]
+            if p.game_id in stage1_predictor.breakdowns
+        ]
+        if examples:
+            typer.echo("")
+            # Finding 4 (t7-fix1): no legend anywhere explained what the
+            # signed terms below mean or what unit they are in.
+            typer.echo(
+                "  Each term is in points of expected margin; positive numbers "
+                "favour the home team."
+            )
+            typer.echo("  Example explanations (most recent test-season games):")
+            for b in examples:
+                typer.echo(f"    {b.sentence()}")
+
+
+@app.command("fit-model")
+def fit_model_cmd() -> None:
+    """Choose the model's settings from past seasons and save them."""
+    import duckdb
+
+    from predictor import db
+    from predictor.model import fit as fit_mod
+    from predictor.model import settings as model_settings
+
+    try:
+        con = db.connect(read_only=True)
+    except duckdb.Error as exc:
+        typer.echo(
+            f"Could not open the database ({exc}). If another 'predictor' "
+            "command is running, wait a moment and try again."
+        )
+        raise typer.Exit(code=1) from None
+    try:
+        chosen = fit_mod.fit(con)
+    except fit_mod.FitError as exc:
+        typer.echo(f"Cannot fit the model: {exc}.")
+        raise typer.Exit(code=1) from None
+    except duckdb.Error as exc:
+        typer.echo(
+            f"The database is missing tables the model needs ({exc}). Run "
+            "'predictor ingest-season <season>' and 'predictor ingest-schedule "
+            "--season <season>' first."
+        )
+        raise typer.Exit(code=1) from None
+    finally:
+        con.close()
+    try:
+        model_settings.save(chosen, model_settings.SETTINGS_PATH)
+    except OSError as exc:
+        typer.echo(
+            f"Could not save the fitted settings to {model_settings.SETTINGS_PATH} ({exc})."
+        )
+        raise typer.Exit(code=1) from None
+    typer.echo(fit_mod.describe(chosen))
+    typer.echo(f"Saved to {model_settings.SETTINGS_PATH}.")
 
 
 if __name__ == "__main__":

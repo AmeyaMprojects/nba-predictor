@@ -1,0 +1,19 @@
+{
+  "calibrate_games": 1230,
+  "coefficients": {
+    "altitude": 1.17021,
+    "back_to_back": -2.011506,
+    "third_in_four": -0.252834,
+    "travel_per_1000km": -0.022147,
+    "tz_per_hour": -0.140327
+  },
+  "fit_games": 3369,
+  "ratings": {
+    "hca_window": 800,
+    "k": 0.04,
+    "margin_cap": 30.0,
+    "season_regression": 0.5
+  },
+  "sigma": 13.9,
+  "version": 1
+}
