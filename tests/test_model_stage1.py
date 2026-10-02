@@ -18,8 +18,8 @@ S = ModelSettings(
     coefficients=Coefficients(back_to_back=-2.0, third_in_four=-1.0,
                               travel_per_1000km=-0.5, tz_per_hour=-0.25, altitude=1.5),
     sigma=13.0,
-    fit_games=0,
-    calibrate_games=0,
+    half_life=None,
+    tuning_games=0,
 )
 
 

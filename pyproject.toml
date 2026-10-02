@@ -32,3 +32,5 @@ packages = ["src/predictor"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: real-archive checks over 60s; run with `uv run pytest -m slow`"]
+addopts = "-m 'not slow'"

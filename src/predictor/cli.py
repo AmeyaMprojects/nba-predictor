@@ -652,9 +652,9 @@ def backtest_cmd(
                 )
             else:
                 typer.echo(
-                    "No test-season games were scored "
-                    f"({', '.join(model_settings.TEST_SEASONS)}), so there is no honest "
-                    "headline to report. Ingest those seasons and try again."
+                    f"No live {model_settings.TEST_SEASONS[0]} games have been scored "
+                    "yet, so there is no test headline. The pre-season evaluation is "
+                    "'predictor evaluate-model'."
                 )
             raise typer.Exit(code=1)
         # Finding 2 (t7-fix1): built from the seasons actually present in the

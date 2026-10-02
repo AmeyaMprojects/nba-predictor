@@ -32,7 +32,7 @@ def _season(con, season, start, n_days, home_edge, gid_prefix="002"):
 
 
 def _history(con):
-    seasons = ms.WARMUP_SEASONS[-1:] + ms.FIT_SEASONS + (ms.CALIBRATE_SEASON,) + ms.TEST_SEASONS
+    seasons = ms.WARMUP_SEASONS[-1:] + ms.TUNING_SEASONS + ms.TEST_SEASONS
     for i, season in enumerate(seasons):
         _season(con, season, date(2015 + i, 11, 1), 20, home_edge=3)
 
@@ -48,14 +48,14 @@ def _plant_mislabeled_test_season_game(con, game_id, home_pts, away_pts):
     interleaved with real fit-season games between the same two teams.
 
     Every game in `_history`'s own test seasons is dated well after the
-    fit/calibrate window, so corrupting one of THOSE can never move the fit
-    -- simulation only ever walks forward in time, so a later-dated game
+    tuning window, so corrupting one of THOSE can never move the fit --
+    simulation only ever walks forward in time, so a later-dated game
     cannot affect the pre-game numbers of any earlier game regardless of
     whether the season exclusion works at all. Planting a mislabeled game
     inside the window, between teams that already play there, is the only
     way to make a broken exclusion actually show up as a different fit.
     """
-    plant_date = date(2016, 11, 2)  # inside the first fit season's date range
+    plant_date = date(2016, 11, 2)  # inside the first tuning season's date range
     add_game(con, game_id, ms.TEST_SEASONS[0], plant_date, "PHI", "NYK", home_pts, away_pts,
               city="Boston")
     return plant_date
@@ -113,7 +113,7 @@ def test_simulate_matches_stage1predictor_rating_gap_and_home_court(tmp_path):
     settings = ms.ModelSettings(
         ratings=params,
         coefficients=fit_mod.Coefficients(0.0, 0.0, 0.0, 0.0, 0.0),
-        sigma=13.0, fit_games=1, calibrate_games=1,
+        sigma=13.0, half_life=None, tuning_games=1,
     )
     predictor = Stage1Predictor(con, settings, venues)
     preds, stats = replay.replay(con, predictor)
@@ -129,11 +129,7 @@ def test_fit_counts_its_games_and_picks_values_from_the_grids(tmp_path):
     con = fixture_con(tmp_path)
     _history(con)
     s = fit_mod.fit(con)
-    assert s.fit_games == 3 * 40          # three fit seasons x 40 games
-    # sigma is set on every non-test, non-warm-up season pooled (three fit
-    # seasons + the calibrate season), not on the calibrate season alone:
-    # 4 seasons x 40 games.
-    assert s.calibrate_games == 4 * 40
+    assert s.tuning_games == 7 * 40       # seven tuning seasons x 40 games
     assert s.ratings.k in fit_mod.GRID_K
     assert s.ratings.margin_cap in fit_mod.GRID_CAP
     assert s.ratings.season_regression in fit_mod.GRID_REGRESSION
@@ -152,7 +148,7 @@ def test_describe_is_plain_english():
     s = ms.ModelSettings(
         ratings=fit_mod.RatingParams(0.08, 20.0, 0.33, 800),
         coefficients=fit_mod.Coefficients(-1.1, -0.6, -0.3, -0.2, 1.4),
-        sigma=13.2, fit_games=3369, calibrate_games=1230,
+        sigma=13.2, half_life=None, tuning_games=3369,
     )
     text = fit_mod.describe(s)
     assert "8% of" in text
@@ -162,6 +158,10 @@ def test_describe_is_plain_english():
     # Final review (minor): coefficients now print with 2 decimals, not 1.
     assert "back-to-back" in text and "-1.10" in text
     assert "13.2" in text
+    assert (
+        "Chosen on 3,369 tuning-season games (2019-20 to 2025-26); "
+        "recency: equal weight."
+    ) in text
 
 
 def test_describe_never_prints_negative_zero():
@@ -173,7 +173,7 @@ def test_describe_never_prints_negative_zero():
     s = ms.ModelSettings(
         ratings=fit_mod.RatingParams(0.08, 20.0, 0.33, 800),
         coefficients=fit_mod.Coefficients(-0.001, -0.3, -0.022147, 0.001, 1.4),
-        sigma=13.2, fit_games=3369, calibrate_games=1230,
+        sigma=13.2, half_life=None, tuning_games=3369,
     )
     text = fit_mod.describe(s)
     assert "-0.00" not in text
@@ -231,6 +231,7 @@ def test_fit_model_save_failure_is_a_plain_error(tmp_path, monkeypatch):
     assert not bad_path.exists()
 
 
+@pytest.mark.slow
 def test_committed_settings_reproduce_from_the_real_archive():
     """A published number must trace to settings anyone can re-derive."""
     con = open_real_archive_or_skip()
@@ -238,13 +239,3 @@ def test_committed_settings_reproduce_from_the_real_archive():
         assert fit_mod.fit(con) == ms.load()
     finally:
         con.close()
-
-
-def test_sigma_is_chosen_on_fit_and_calibrate_seasons_pooled(tmp_path):
-    """Changing a FIT-season result must be able to move sigma (it could not
-    when sigma was chosen on the calibrate season alone); changing a
-    warm-up result alone must not change the sigma sample size."""
-    con = fixture_con(tmp_path)
-    _history(con)
-    s = fit_mod.fit(con)
-    assert s.calibrate_games == s.fit_games + 40
