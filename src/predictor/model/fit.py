@@ -5,10 +5,11 @@ pooled together; test seasons are never read. The fit reads the games table
 directly -- it trains on completed past seasons and is not a prediction
 path -- and raises if a test season is loaded anyway.
 
-Temporary (Task 1 of the walk-forward recalibration): this still runs one
-grid search over all tuning seasons pooled, the way the old fit/calibrate
-split did. Walk-forward evaluation across the tuning seasons, and the
-recency (half-life) search, land in Task 2.
+`fit()` delegates grid search, recency weighting and sigma selection to
+`predictor.model.tuning`, the shared settings-selection engine used by both
+fit-model and evaluate-model (Task 2 of the walk-forward recalibration).
+Walk-forward evaluation across the tuning seasons -- picking among several
+jobs instead of the single equal-weight one below -- lands in Task 3.
 
 Simulation mirrors Stage1Predictor exactly: a date's results are applied
 only after every game on that date has been given its pre-game numbers,
@@ -17,16 +18,13 @@ because in the harness a result becomes visible the day after it is played.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
-from itertools import groupby, product
-
-import numpy as np
+from itertools import groupby
 
 from predictor import db
 from predictor.model import adjustments as adj
 from predictor.model.adjustments import Coefficients
-from predictor.model.ratings import RatingParams, Ratings, Result, win_probability
+from predictor.model.ratings import RatingParams, Ratings, Result
 from predictor.model.settings import (
     TEST_SEASONS,
     TUNING_SEASONS,
@@ -35,11 +33,18 @@ from predictor.model.settings import (
 )
 from predictor.model.venues import COMPETITIVE_PREFIXES, VenueIndex
 
-GRID_K = (0.04, 0.06, 0.08, 0.10, 0.12, 0.15)
-GRID_CAP = (15.0, 20.0, 25.0, 30.0)
-GRID_REGRESSION = (0.2, 0.33, 0.5, 0.66)
-GRID_WINDOW = (400, 800, 1230)
-SIGMA_GRID = tuple(i / 100 for i in range(800, 2001, 5))
+# Re-exported for compatibility (callers and tests import the grids from
+# here). Lazy via module __getattr__, not a top-level import, because
+# predictor.model.tuning imports FitError/_Game/_simulate from this module
+# at its own top level -- a top-level import here would be circular.
+_TUNING_NAMES = {"GRID_K", "GRID_CAP", "GRID_REGRESSION", "GRID_WINDOW", "SIGMA_GRID"}
+
+
+def __getattr__(name: str):
+    if name in _TUNING_NAMES:
+        from predictor.model import tuning
+        return getattr(tuning, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class FitError(Exception):
@@ -101,69 +106,19 @@ def _simulate(params: RatingParams, games: list[_Game]) -> list[tuple[float, flo
     return out
 
 
-def _residuals(games, pre, seasons):
-    rows = [
-        (g, gap, hc)
-        for g, (gap, hc) in zip(games, pre)
-        if g.result.season in seasons and g.result.game_id.startswith("002")
-    ]
-    X = np.array([g.x for g, _, _ in rows], dtype=float).reshape(len(rows), 5)
-    y = np.array(
-        [g.result.home_points - g.result.away_points - gap - hc for g, gap, hc in rows],
-        dtype=float,
-    )
-    return rows, X, y
-
-
 def fit(con) -> ModelSettings:
+    """Equal-weight fit on every tuning season pooled (Task 1 behaviour),
+    now chosen by the shared engine. Lazy import: `tuning` imports
+    FitError/_Game/_simulate from this module at its own top level, so
+    importing it here at module level would be circular.
+    """
+    from predictor.model import tuning
+
     venues = VenueIndex.from_db(con)
     games = _load(con, venues)
-    tuning_count = sum(
-        1 for g in games
-        if g.result.season in TUNING_SEASONS and g.result.game_id.startswith("002")
-    )
-    if tuning_count == 0:
-        raise FitError(
-            "not enough history to fit the model: the tuning seasons "
-            f"({', '.join(TUNING_SEASONS)}) must have results. Run "
-            "'predictor ingest-season <season>' for each"
-        )
-
-    best = None
-    for k, cap, reg, window in product(GRID_K, GRID_CAP, GRID_REGRESSION, GRID_WINDOW):
-        params = RatingParams(k, cap, reg, window)
-        pre = _simulate(params, games)
-        _, X, y = _residuals(games, pre, TUNING_SEASONS)
-        coef, *_ = np.linalg.lstsq(X, y, rcond=None)
-        mse = float(np.mean((y - X @ coef) ** 2))
-        if best is None or mse < best[0]:
-            best = (mse, params, coef)
-    _, params, coef = best
-    coefficients = Coefficients(*(round(float(c), 6) for c in coef))
-
-    pre = _simulate(params, games)
-    rows, _, _ = _residuals(games, pre, TUNING_SEASONS)
-    spreads = [
-        gap + hc + sum(adj.astuple_terms(coefficients, g.x))
-        for (g, gap, hc) in rows
-    ]
-    outcomes = [g.result.home_points > g.result.away_points for g, _, _ in rows]
-    best_sigma = None
-    for sigma in SIGMA_GRID:
-        loss = 0.0
-        for spread, won in zip(spreads, outcomes):
-            p = min(max(win_probability(spread, sigma), 1e-12), 1 - 1e-12)
-            loss -= math.log(p if won else 1 - p)
-        if best_sigma is None or loss < best_sigma[0]:
-            best_sigma = (loss, sigma)
-
-    return ModelSettings(
-        ratings=params,
-        coefficients=coefficients,
-        sigma=best_sigma[1],
-        half_life=None,
-        tuning_games=tuning_count,
-    )
+    job = tuning.Job(TUNING_SEASONS, None)
+    c = tuning.choose(games, [job])[job]
+    return ModelSettings(c.params, c.coefficients, c.sigma, None, c.games)
 
 
 def _fmt_coef(v: float) -> str:

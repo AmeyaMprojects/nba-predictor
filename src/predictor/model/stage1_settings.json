@@ -1,19 +1,19 @@
 {
   "coefficients": {
-    "altitude": 0.679589,
-    "back_to_back": -2.177825,
-    "third_in_four": -0.505157,
-    "travel_per_1000km": 0.141283,
-    "tz_per_hour": -0.457576
+    "altitude": 0.65823,
+    "back_to_back": -2.193468,
+    "third_in_four": -0.497576,
+    "travel_per_1000km": 0.14164,
+    "tz_per_hour": -0.464303
   },
   "half_life": null,
   "ratings": {
     "hca_window": 1230,
     "k": 0.04,
-    "margin_cap": 30.0,
+    "margin_cap": 40.0,
     "season_regression": 0.5
   },
-  "sigma": 12.4,
+  "sigma": 12.8,
   "tuning_games": 8289,
   "version": 2
 }

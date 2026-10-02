@@ -1,9 +1,9 @@
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 from typer.testing import CliRunner
 
-from model_fixtures import add_game, fixture_con
+from model_fixtures import add_game, build_history, fixture_con
 from predictor import cli, config, db
 from predictor.backtest import replay
 from predictor.config import Settings
@@ -13,33 +13,10 @@ from predictor.model.stage1 import Stage1Predictor
 from predictor.model.venues import VenueIndex
 from real_archive import open_real_archive_or_skip
 
-TEAMS = ["PHI", "NYK", "BOS", "MIA"]
-
-
-def _season(con, season, start, n_days, home_edge, gid_prefix="002"):
-    """A tiny round-robin: every day two games, home team wins by `home_edge`
-    plus a deterministic team-strength term."""
-    strength = {"PHI": 3, "NYK": -3, "BOS": 1, "MIA": -1}
-    n = 0
-    for day in range(n_days):
-        d = start + timedelta(days=2 * day)
-        pairs = [(TEAMS[day % 4], TEAMS[(day + 1) % 4]), (TEAMS[(day + 2) % 4], TEAMS[(day + 3) % 4])]
-        for home, away in pairs:
-            n += 1
-            margin = home_edge + strength[home] - strength[away]
-            add_game(con, f"{gid_prefix}{season[2:4]}{n:05d}", season, d, home, away,
-                     100 + max(margin, 0), 100 + max(-margin, 0), city="Boston")
-
-
-def _history(con):
-    seasons = ms.WARMUP_SEASONS[-1:] + ms.TUNING_SEASONS + ms.TEST_SEASONS
-    for i, season in enumerate(seasons):
-        _season(con, season, date(2015 + i, 11, 1), 20, home_edge=3)
-
 
 def test_fit_is_deterministic(tmp_path):
     con = fixture_con(tmp_path)
-    _history(con)
+    build_history(con)
     assert fit_mod.fit(con) == fit_mod.fit(con)
 
 
@@ -47,7 +24,7 @@ def _plant_mislabeled_test_season_game(con, game_id, home_pts, away_pts):
     """A game LABELLED with a test season but DATED inside the fit window,
     interleaved with real fit-season games between the same two teams.
 
-    Every game in `_history`'s own test seasons is dated well after the
+    Every game in `build_history`'s own test seasons is dated well after the
     tuning window, so corrupting one of THOSE can never move the fit --
     simulation only ever walks forward in time, so a later-dated game
     cannot affect the pre-game numbers of any earlier game regardless of
@@ -63,7 +40,7 @@ def _plant_mislabeled_test_season_game(con, game_id, home_pts, away_pts):
 
 def test_fit_ignores_test_seasons_entirely(tmp_path):
     con = fixture_con(tmp_path)
-    _history(con)
+    build_history(con)
     _plant_mislabeled_test_season_game(con, "00299999901", 100, 90)
     before = fit_mod.fit(con)
 
@@ -77,7 +54,7 @@ def test_fit_ignores_test_seasons_entirely(tmp_path):
 
 def test_load_never_returns_a_row_from_a_test_season(tmp_path):
     con = fixture_con(tmp_path)
-    _history(con)
+    build_history(con)
     _plant_mislabeled_test_season_game(con, "00299999902", 100, 90)
     games = fit_mod._load(con, VenueIndex.from_db(con))
     assert games  # sanity: history was actually loaded
@@ -127,7 +104,7 @@ def test_simulate_matches_stage1predictor_rating_gap_and_home_court(tmp_path):
 
 def test_fit_counts_its_games_and_picks_values_from_the_grids(tmp_path):
     con = fixture_con(tmp_path)
-    _history(con)
+    build_history(con)
     s = fit_mod.fit(con)
     assert s.tuning_games == 7 * 40       # seven tuning seasons x 40 games
     assert s.ratings.k in fit_mod.GRID_K
@@ -189,7 +166,7 @@ def test_fit_model_command_writes_the_settings_file(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "settings", s)
     con = db.connect()
     db.migrate(con)
-    _history(con)
+    build_history(con)
     con.close()
     out_path = tmp_path / "stage1_settings.json"
     monkeypatch.setattr(ms, "SETTINGS_PATH", out_path)
@@ -221,7 +198,7 @@ def test_fit_model_save_failure_is_a_plain_error(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "settings", s)
     con = db.connect()
     db.migrate(con)
-    _history(con)
+    build_history(con)
     con.close()
     bad_path = tmp_path / "does-not-exist" / "stage1_settings.json"
     monkeypatch.setattr(ms, "SETTINGS_PATH", bad_path)
