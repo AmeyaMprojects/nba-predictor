@@ -30,10 +30,20 @@ HALF_LIVES = (None, 3.0, 1.0)
 TIE_TOLERANCE = 0.001
 
 
+def _validate_seasons_and_half_life(seasons: tuple[str, ...], half_life: float | None) -> None:
+    if len(set(seasons)) != len(seasons) or tuple(seasons) != tuple(sorted(seasons)):
+        raise ValueError(
+            f"seasons must be strictly chronological (sorted, no duplicates), got {seasons!r}"
+        )
+    if half_life is not None and half_life <= 0:
+        raise ValueError(f"half_life must be None or positive, got {half_life!r}")
+
+
 def season_weights(seasons: tuple[str, ...], half_life: float | None) -> dict[str, float]:
     """Weight of each season in `seasons` (oldest -> newest). `None` gives
     equal weight 1.0 everywhere; otherwise the newest season is 1.0 and each
     season `half_life` seasons older is half the weight."""
+    _validate_seasons_and_half_life(seasons, half_life)
     n = len(seasons)
     if half_life is None:
         return {s: 1.0 for s in seasons}
@@ -44,6 +54,9 @@ def season_weights(seasons: tuple[str, ...], half_life: float | None) -> dict[st
 class Job:
     seasons: tuple[str, ...]
     half_life: float | None
+
+    def __post_init__(self) -> None:
+        _validate_seasons_and_half_life(self.seasons, self.half_life)
 
 
 @dataclass(frozen=True)
@@ -77,6 +90,11 @@ def choose(games: list[_Game], jobs: list[Job]) -> dict[Job, Choice]:
     loss) replaces the current best, so a tie keeps whichever combination
     `product`'s fixed iteration order saw first. TIE_TOLERANCE is not used
     here -- that is the walk-forward winner rule between jobs (Task 3).
+
+    After the grid loop, each job's winning `RatingParams` is re-simulated
+    once to compute its sigma -- cached per distinct winning `RatingParams`
+    (`sims`), so when several jobs land on the same params that re-simulation
+    happens only once, not once per job.
     """
     X_all = np.array([g.x for g in games], dtype=float).reshape(len(games), 5)
     margin = np.array(

@@ -9,12 +9,24 @@ from datetime import date
 
 import pytest
 
-from model_fixtures import _season_games, build_history, fixture_con
+from model_fixtures import build_history, fixture_con
 from predictor import db
 from predictor.model import fit as fit_mod
 from predictor.model import settings as ms
 from predictor.model import tuning
 from predictor.model.venues import VenueIndex
+
+
+def _neutral_game(gid, season, d, home, away, home_pts, away_pts, x):
+    """A hand-built `fit._Game`, bypassing `_load`/the database entirely, so
+    a test can fix the adjustment feature vector `x` directly instead of
+    deriving it from a schedule. `neutral=True` so `_simulate`'s home-court
+    term is 0.0 for this game regardless of `hca_window`.
+    """
+    return fit_mod._Game(
+        fit_mod.Result(gid, season, d, home, away, home_pts, away_pts, True),
+        x,
+    )
 
 
 def test_equal_weight_is_one_everywhere():
@@ -41,6 +53,38 @@ def test_grids_are_exact():
     assert tuning.GRID_WINDOW == (400, 800, 1230)
     assert tuning.HALF_LIVES == (None, 3.0, 1.0)
     assert tuning.TIE_TOLERANCE == 0.001
+
+
+def test_season_weights_rejects_seasons_out_of_order():
+    with pytest.raises(ValueError, match="chronological"):
+        tuning.season_weights(("b", "a"), None)
+
+
+def test_season_weights_rejects_duplicate_seasons():
+    with pytest.raises(ValueError, match="chronological"):
+        tuning.season_weights(("a", "a", "b"), None)
+
+
+def test_season_weights_rejects_nonpositive_half_life():
+    with pytest.raises(ValueError, match="half_life"):
+        tuning.season_weights(("a", "b"), 0.0)
+    with pytest.raises(ValueError, match="half_life"):
+        tuning.season_weights(("a", "b"), -1.0)
+
+
+def test_job_rejects_seasons_out_of_order():
+    with pytest.raises(ValueError, match="chronological"):
+        tuning.Job(("b", "a"), None)
+
+
+def test_job_rejects_duplicate_seasons():
+    with pytest.raises(ValueError, match="chronological"):
+        tuning.Job(("a", "a"), None)
+
+
+def test_job_rejects_nonpositive_half_life():
+    with pytest.raises(ValueError, match="half_life"):
+        tuning.Job(("a", "b"), 0.0)
 
 
 def _load(con):
@@ -94,38 +138,205 @@ def test_job_ignores_games_outside_its_seasons(tmp_path):
     assert after == before
 
 
-def _history_with_home_edge(con, edges, games_per_season=40):
-    """Like `build_history`, but each season's home-court edge can be
-    overridden via `edges` (default 3 everywhere) -- lets a test make one
-    season's games look structurally unlike the rest."""
-    seasons = ms.WARMUP_SEASONS[-1:] + ms.TUNING_SEASONS + ms.TEST_SEASONS
-    n_days = games_per_season // 2
-    for i, season in enumerate(seasons):
-        _season_games(con, season, date(2015 + i, 11, 1), n_days, home_edge=edges.get(season, 3))
+def _unique_team_pairs(n):
+    """`n` (home, away) team-name pairs, no name ever repeated anywhere in
+    this sequence. A team that never plays more than once always has
+    rating 0.0 at its one pre-game moment, for every possible RatingParams
+    -- there's no history for any params to have built up."""
+    for i in range(n):
+        yield f"H{i}", f"A{i}"
 
 
-def test_recency_weight_changes_the_chosen_settings(tmp_path):
-    """Weighting matters. Fixture: every tuning season is an ordinary
-    `home_edge=3` season except the OLDEST (`TUNING_SEASONS[0]`), which is
-    planted with a huge `home_edge=40` -- a blowout home margin baked into
-    every one of its games. Equal weight (`None`) lets that one outlier
-    season pull the weighted grid-MSE, lstsq coefficients and sigma loss
-    along with the six ordinary seasons; half-life 1.0 discounts it to
-    0.5**6 of a newest-season game's weight, so the fit is effectively
-    chosen on the six ordinary seasons alone. The two jobs must not land on
-    the same Choice (asserted directly, per the brief: comparing a derived
-    summary like mean predicted spread is more fragile than just comparing
-    the minimisers, which is what the recency weighting is actually for).
+def _recency_weighting_games():
+    """OLD season: 2 back-to-back (`x[0]=1`) games, home blows out by 20.
+    NEW season: 2 back-to-back games, home loses by 20 (the opposite sign).
+    Every team pair is unique (see `_unique_team_pairs`) and every game is
+    neutral, so `_simulate` gives gap = home_court = 0.0 for EVERY game,
+    for EVERY one of the 900 grid combinations -- not just the one that
+    happens to win. That makes two things exact, not just "probably true":
+    (1) the whole grid ties, so the winning params must be the very first
+    combination in `product`'s order (GRID_K[0], GRID_CAP[0],
+    GRID_REGRESSION[0], GRID_WINDOW[0]) -- this fixture doubles as the
+    tie-break fixture below; and (2) with gap=hc=0, the regression target
+    for every row is just its raw margin, and since columns 1-4 of `x` are
+    0 for every row, only `x[0]=1` rows constrain coefficient 0 at all (a
+    row with x=(0,0,0,0,0) predicts 0 regardless of the coefficients, so it
+    contributes a constant to the loss that cannot move the fit). For a
+    column that is 1 on a subset and 0 elsewhere, the weighted-least-squares
+    minimiser for that column is exactly the WEIGHTED MEAN of the target
+    over that subset -- here, the weighted mean of the four +-20 margins.
     """
-    con = fixture_con(tmp_path)
-    old_season = ms.TUNING_SEASONS[0]
-    _history_with_home_edge(con, {old_season: 40.0})
-    games = _load(con)
+    teams = _unique_team_pairs(4)
+    games = []
+    for i, margin in enumerate([20, 20]):  # OLD season, 2 games
+        home, away = next(teams)
+        games.append(_neutral_game(
+            f"0020000000{i}", "1900-01", date(1900, 1, 1 + i), home, away,
+            100 + margin, 100, (1.0, 0, 0, 0, 0),
+        ))
+    for i, margin in enumerate([-20, -20]):  # NEW season, 2 games
+        home, away = next(teams)
+        games.append(_neutral_game(
+            f"0020000001{i}", "1901-02", date(1901, 1, 1 + i), home, away,
+            100, 100 - margin, (1.0, 0, 0, 0, 0),
+        ))
+    return games
 
-    job_equal = tuning.Job(ms.TUNING_SEASONS, None)
-    job_half_life_1 = tuning.Job(ms.TUNING_SEASONS, 1.0)
+
+def test_recency_weight_changes_the_fitted_coefficient():
+    """Weighting matters in the least-squares fit itself (not just in which
+    grid combination wins). By the derivation in `_recency_weighting_games`,
+    the back_to_back coefficient is exactly the weighted mean of the four
+    back-to-back margins (+20, +20 from OLD; -20, -20 from NEW):
+
+    - equal weight (all four weight 1.0): (20+20-20-20)/4 = 0.0 exactly --
+      the old and new seasons' opposite effects cancel.
+    - half-life 1.0 (two seasons: OLD weight 0.5**((2-1-0)/1)=0.5, NEW
+      weight 0.5**((2-1-1)/1)=1.0): (0.5*20+0.5*20+1.0*-20+1.0*-20) / 3
+      = (10+10-20-20)/3 = -20/3 = -6.666667.
+
+    Mutation-check (recorded in the Task 2 fix report): replacing
+    `sw = np.sqrt(w)` with `sw = np.ones_like(w)` makes the half-life-1.0
+    coefficient come out 0.0 too (the lstsq step silently stops being
+    weighted) -- this test then fails on the second assertion.
+    """
+    games = _recency_weighting_games()
+    job_equal = tuning.Job(("1900-01", "1901-02"), None)
+    job_half_life_1 = tuning.Job(("1900-01", "1901-02"), 1.0)
     chosen = tuning.choose(games, [job_equal, job_half_life_1])
-    assert chosen[job_equal] != chosen[job_half_life_1]
+
+    assert chosen[job_equal].coefficients.back_to_back == pytest.approx(0.0, abs=1e-6)
+    assert chosen[job_half_life_1].coefficients.back_to_back == pytest.approx(-20 / 3)
+
+
+def test_ties_keep_the_first_grid_combination_in_order():
+    """Every one of the 900 combinations ties exactly on this fixture (see
+    `_recency_weighting_games`'s docstring), so the winner must be the
+    first one `product(GRID_K, GRID_CAP, GRID_REGRESSION, GRID_WINDOW)`
+    produces. Mutation-check: changing the grid loop's `mse < best[job][0]`
+    to `<=` makes every later tied combination replace the current best
+    too, so the LAST combination wins instead
+    (`RatingParams(GRID_K[-1], GRID_CAP[-1], GRID_REGRESSION[-1],
+    GRID_WINDOW[-1])`) and this assertion fails.
+    """
+    games = _recency_weighting_games()
+    job = tuning.Job(("1900-01", "1901-02"), None)
+    chosen = tuning.choose(games, [job])[job]
+    assert chosen.params == tuning.RatingParams(
+        tuning.GRID_K[0], tuning.GRID_CAP[0], tuning.GRID_REGRESSION[0], tuning.GRID_WINDOW[0],
+    )
+
+
+def _grid_selection_weighting_games():
+    """Built so that recency-weighting the grid-MSE (not just the lstsq)
+    changes which of the 10 GRID_K values wins -- `margin_cap`, `season_
+    regression` and `hca_window` are all neutralised first:
+
+    - every game is neutral, so `hca_window` never matters (home_court is
+      never read pre-game, and the rolling-margin deque is never appended
+      to either).
+    - every margin below is tiny (<=10) next to the smallest GRID_CAP
+      (15.0), so `margin_cap` never clips, for any grid cap value.
+    - `season_regression` only fires "the first time a new season is
+      seen" (`Ratings.enter_season`); OLD is simulated first ever (no
+      regression event), and every NEW-season team here is brand new (so
+      its rating is 0 regardless of what regression did to OLD's now-
+      irrelevant teams).
+
+    That leaves k as the only grid dimension with any effect on `pre`, so
+    for a fixed k the other 90 (cap, reg, window) combinations tie and the
+    first of them (GRID_CAP[0], GRID_REGRESSION[0], GRID_WINDOW[0]) is what
+    represents that k against every other k's own first representative.
+
+    Three games carry `x=(1,0,0,0,0)` (back_to_back); a fourth (`O1`, all
+    zeros) only sets up a k-dependent rating gap for `O2` and otherwise
+    contributes a constant to every candidate's loss (its own row predicts
+    0 regardless of the fit, so it can't move the argmin over k):
+    - O1: X home vs Y away, margin +1 -- first-ever game, gap=0 always.
+      After this, rating(X) = +k, rating(Y) = -k (predicted was 0).
+    - O2: Y home vs X away (OLD season), margin -9, x=(1,0,0,0,0). Pre-game
+      gap = rating(Y)-rating(X) = -2k, so y_O2(k) = -9 - (-2k) - 0 = -9+2k.
+    - O2b: fresh teams (never played), OLD season, margin -7,
+      x=(1,0,0,0,0). Fresh teams -> gap=0 always -> y_O2b = -7 (constant).
+    - N1: fresh teams, NEW season, margin -10, x=(1,0,0,0,0). Fresh teams
+      -> gap=0 always -> y_N1 = -10 (constant).
+
+    Job(("2000-01","2001-02"), 1.0) weights OLD=0.5, NEW=1.0 (two seasons).
+    Only O2, O2b, N1 carry x[0]=1, so (as in `_recency_weighting_games`)
+    the fitted back_to_back coefficient is their weighted mean:
+        c0(k) = (0.5*y_O2(k) + 0.5*y_O2b + 1.0*y_N1) / 2.0
+    Writing a(k) = y_O2(k) - y_N1, algebra gives y_O2(k)-c0(k) = a(k)/1.5
+    and y_O2b/y_N1's residuals as fixed multiples of a(k) too, so BOTH the
+    correctly-weighted grid-MSE and an unweighted mean of the same three
+    squared residuals are positive multiples of a(k)**2 alone when there
+    are only 2 distinct values among the 3 points -- weighting can't change
+    the argmin then. With 3 genuinely distinct values (y_O2(k), y_O2b,
+    y_N1) that degeneracy breaks, and a numeric sweep over GRID_K (recorded
+    in the fix report) confirms: the correctly-weighted grid-MSE is
+    minimised at k=GRID_K[0]=0.02 (monotonically increasing in k), while
+    the SAME three residuals averaged WITHOUT the 0.5/0.5/1.0 weights is
+    minimised at k=GRID_K[-1]=0.20 (monotonically decreasing in k) --
+    confirmed against a live `tuning.choose()` run too, not just the
+    closed-form formula.
+    """
+    o1 = _neutral_game("00200000001", "2000-01", date(2000, 1, 1), "X", "Y", 101, 100, (0.0, 0, 0, 0, 0))
+    o2 = _neutral_game("00200000002", "2000-01", date(2000, 1, 2), "Y", "X", 100, 109, (1.0, 0, 0, 0, 0))
+    o2b = _neutral_game("00200000003", "2000-01", date(2000, 1, 3), "U", "V", 100, 107, (1.0, 0, 0, 0, 0))
+    n1 = _neutral_game("00200000004", "2001-02", date(2001, 1, 1), "P", "Q", 100, 110, (1.0, 0, 0, 0, 0))
+    return [o1, o2, o2b, n1]
+
+
+def test_recency_weight_changes_which_grid_combination_wins():
+    """The recency-weighted grid-MSE (`tuning.choose`'s `mse = ...` line)
+    picks a different `k` than an unweighted mean of the same residuals
+    would -- see `_grid_selection_weighting_games`'s docstring for the
+    derivation and the numeric sweep.
+
+    Mutation-check (recorded in the Task 2 fix report): this test fails
+    under EITHER of the two mutations findings called out:
+    - `mse = float(np.mean((y - X @ coef) ** 2))` (the `w *`/`/np.sum(w)`
+      weighting dropped from the grid-MSE line) selects k=GRID_K[-1]=0.20
+      instead of 0.02, so the `params` assertion fails.
+    - `sw = np.ones_like(w)` (the lstsq weighting dropped) leaves `params`
+      at k=0.02 here, but changes the fitted coefficient from -8.99 to
+      -8.653333, so the `coefficients` assertion fails instead.
+    """
+    games = _grid_selection_weighting_games()
+    job = tuning.Job(("2000-01", "2001-02"), 1.0)
+    chosen = tuning.choose(games, [job])[job]
+    assert chosen.params == tuning.RatingParams(
+        tuning.GRID_K[0], tuning.GRID_CAP[0], tuning.GRID_REGRESSION[0], tuning.GRID_WINDOW[0],
+    )
+    assert chosen.coefficients.back_to_back == pytest.approx(-8.99)
+
+
+def test_spreads_and_outcomes_filters_and_computes_correctly():
+    """Only `002` games in the given seasons survive, in input order, and
+    each spread is exactly gap + home_court + the adjustment terms.
+
+    Every team pair here is unique and every game neutral (see
+    `_neutral_game`), so gap = home_court = 0.0 regardless of `params` --
+    spread reduces to the adjustment terms alone, hand-checkable directly:
+    `g1` has back_to_back=1.0 and coefficient 2.5, so its spread is exactly
+    2.5; `g4` has back_to_back=0.0, so its spread is exactly 0.0.
+    """
+    coefficients = fit_mod.Coefficients(2.5, 0.0, 0.0, 0.0, 0.0)
+    params = fit_mod.RatingParams(0.1, 20.0, 0.5, 10)
+
+    g1 = _neutral_game("00200001", "S1", date(2050, 1, 1), "A1", "B1", 101, 100, (1.0, 0, 0, 0, 0))
+    g2 = _neutral_game("00300002", "S1", date(2050, 1, 2), "A2", "B2", 110, 100, (1.0, 0, 0, 0, 0))
+    g3 = _neutral_game("00200003", "S2", date(2050, 1, 3), "A3", "B3", 105, 100, (1.0, 0, 0, 0, 0))
+    g4 = _neutral_game("00200004", "S1", date(2050, 1, 4), "A4", "B4", 95, 100, (0.0, 0, 0, 0, 0))
+
+    out = tuning.spreads_and_outcomes([g1, g2, g3, g4], params, coefficients, ("S1",))
+
+    assert [g.result.game_id for g, _, _ in out] == ["00200001", "00200004"]
+    g, spread, won = out[0]
+    assert spread == pytest.approx(2.5)
+    assert won is True
+    g, spread, won = out[1]
+    assert spread == pytest.approx(0.0)
+    assert won is False
 
 
 def test_job_with_no_matching_games_raises_fit_error():
