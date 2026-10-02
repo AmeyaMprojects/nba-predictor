@@ -136,6 +136,10 @@ def _fmt_coef(v: float) -> str:
 
 
 def describe(s: ModelSettings) -> str:
+    # Lazy import: `evaluate` imports `_load` from this module at its own
+    # top level, so importing it here at module level would be circular.
+    from predictor.model import evaluate as evaluate_mod
+
     r, c = s.ratings, s.coefficients
     return "\n".join([
         f"Ratings move {r.k * 100:.0f}% of each game's surprise; blowouts count as at "
@@ -151,5 +155,5 @@ def describe(s: ModelSettings) -> str:
         f"Typical game-to-game spread (sigma): {s.sigma:.2f} points.",
         f"Chosen on {s.tuning_games:,} tuning-season games "
         f"({TUNING_SEASONS[0]} to {TUNING_SEASONS[-1]}); recency: "
-        f"{'equal weight' if s.half_life is None else f'half-life {s.half_life:g} season(s)'}.",
+        f"{evaluate_mod.variant_label(s.half_life)}.",
     ])

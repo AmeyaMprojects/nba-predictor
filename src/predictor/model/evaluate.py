@@ -121,7 +121,11 @@ def evaluate(con, progress=None) -> Evaluation:
 
     all_jobs = [job for jobs in fold_jobs.values() for _, job in jobs]
     all_jobs += list(final_jobs.values())
-    progress("simulating 900 rating settings...")
+    grid_size = (
+        len(tuning.GRID_K) * len(tuning.GRID_CAP)
+        * len(tuning.GRID_REGRESSION) * len(tuning.GRID_WINDOW)
+    )
+    progress(f"simulating {grid_size:,} rating settings...")
     choices = tuning.choose(games, all_jobs)
     progress("scoring walk-forward predictions...")
 
@@ -203,8 +207,8 @@ def format_evaluation(ev: Evaluation) -> str:
             f"{v.brier:.4f}    {v.accuracy * 100:4.1f}%"
         )
     lines.append(
-        f"  Chosen: {variant_label(ev.winner.half_life)} (lowest log loss; "
-        f"within {tuning.TIE_TOLERANCE:g} the simpler variant wins)"
+        f"  Chosen: {variant_label(ev.winner.half_life)} (lowest log loss; a "
+        f"later variant must beat it by more than {tuning.TIE_TOLERANCE:g})"
     )
     lines.append("")
     lines.append("  By season (chosen variant; settings chosen on earlier seasons only):")

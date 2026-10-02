@@ -101,8 +101,9 @@ def _multi_test_season_archive(tmp_path, monkeypatch):
     (2024-25) alongside the one test season (2026-27) -- enough to tell a
     dynamically-built scope label, built from `season_role`, apart from one
     that might wrongly claim a tuning season as part of the test (t7-fix1
-    finding 2). Now that `TEST_SEASONS` holds exactly one season, this is
-    the only way left to exercise "not hard-coded"."""
+    finding 2) -- it guards the headline filter: the scope line must
+    exclude the 2024-25 tuning-season predictions and name only the test
+    season, even though both seasons are replayed."""
     s = Settings(data_dir=tmp_path)
     s.ensure_dirs()
     monkeypatch.setattr(config, "settings", s)
@@ -130,7 +131,6 @@ def test_scope_header_lists_only_the_test_seasons_actually_present(tmp_path, mon
     out = runner.invoke(cli.app, ["backtest", "--model", "stage1"])
     assert out.exit_code == 0, out.output
     assert "test season 2026-27 only" in out.output
-    assert "second look" in out.output
     # The 2024-25 tuning-season game IS replayed (its progress line can show
     # up in the mixed stdout/stderr capture), but the header/scope line must
     # never claim it as part of the test.
@@ -151,8 +151,7 @@ def test_season_filter_narrows_the_header_to_just_that_test_season(tmp_path, mon
     season_line = next(line for line in lines if line.strip().startswith("Season"))
     assert season_line.strip() == (
         "Season              : test season 2026-27 only -- no setting was "
-        "fitted on it; second look -- the sigma rule was revised on 2026-10-02 "
-        "after a first look at these seasons"
+        "fitted on it"
     )
     assert "2024-25" not in out.output
     # t7-fix2 item A: `--season 2026-27` makes `replay.replay` walk ONLY

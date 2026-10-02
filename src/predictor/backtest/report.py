@@ -181,12 +181,25 @@ def format_publishing_bar(bar: PublishingBar, season_word: str = "test season") 
             "its probabilities are within 5 points in every bucket of 50+ games."
         )
     elif bar.all_seasons_beat:
-        # Seasons hold; only calibration fails.
+        # Seasons hold; only calibration fails. `season_word` tells a real,
+        # held-out backtest (the default, "test season") from a walk-forward
+        # evaluation on the tuning seasons -- the latter is not a clean
+        # test, so its closing sentence must not read as a green light to
+        # publish.
+        if season_word == "test season":
+            closing = (
+                "Publish the accuracy result; do not claim the probabilities are "
+                "calibrated yet."
+            )
+        else:
+            closing = (
+                "The accuracy result holds on these seasons, but this is not a "
+                "clean test; do not claim the probabilities are calibrated."
+            )
         lines.append(
             "    Verdict: NOT MET -- the accuracy result holds, but its stated "
             "probabilities are off by more than 5 points in at least one bucket. "
-            "Publish the accuracy result; do not claim the probabilities are "
-            "calibrated yet."
+            + closing
         )
     else:
         lost_seasons = _english_list([sb.season for sb in bar.season_beats if not sb.beats])

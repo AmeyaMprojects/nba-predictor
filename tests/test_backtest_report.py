@@ -929,6 +929,27 @@ def test_publishing_bar_not_met_when_a_50plus_bucket_is_off_by_6():
     ) in text
 
 
+def test_publishing_bar_not_met_calibration_only_with_a_non_default_season_word():
+    """Task 3's walk-forward evaluation is not a clean test -- when
+    `season_word` is not the default "test season", the calibration-only
+    NOT MET verdict must not read as a green light to publish ("Publish the
+    accuracy result..."); it must say plainly this is not a clean test."""
+    preds = _homefav(12, 0.30, True, "a", "2023-24") + _homefav(38, 0.30, False, "b", "2023-24")
+    bar = report.publishing_bar(preds)
+    assert bar.all_seasons_beat is True
+    assert bar.calibration_met is False
+    assert bar.met is False
+
+    text = report.format_publishing_bar(bar, season_word="evaluated season")
+    assert "Publish the accuracy result" not in text
+    assert (
+        "Verdict: NOT MET -- the accuracy result holds, but its stated probabilities "
+        "are off by more than 5 points in at least one bucket. The accuracy result "
+        "holds on these seasons, but this is not a clean test; do not claim the "
+        "probabilities are calibrated."
+    ) in text
+
+
 def test_publishing_bar_ignores_a_huge_gap_under_50_games():
     """Same shape as the 6-point-gap test but only 49 games, and a much
     bigger gap: all p_home=0.30, 5 home_won=True (44 False).

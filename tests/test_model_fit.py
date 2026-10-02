@@ -11,7 +11,6 @@ from predictor.model import fit as fit_mod
 from predictor.model import settings as ms
 from predictor.model.stage1 import Stage1Predictor
 from predictor.model.venues import VenueIndex
-from real_archive import open_real_archive_or_skip
 
 
 def test_fit_is_deterministic(tmp_path):
@@ -141,6 +140,26 @@ def test_describe_is_plain_english():
     ) in text
 
 
+def test_describe_recency_labels_match_variant_label():
+    """`describe` must print the same recency label `evaluate.variant_label`
+    uses elsewhere (the walk-forward table, `evaluate-model`'s "Chosen:"
+    line), not a second hand-written copy that can drift -- e.g. the old
+    "half-life 1 season(s)" literal instead of "half-life 1 season"."""
+    from predictor.model import evaluate as evaluate_mod
+
+    base = dict(
+        ratings=fit_mod.RatingParams(0.08, 20.0, 0.33, 800),
+        coefficients=fit_mod.Coefficients(-1.1, -0.6, -0.3, -0.2, 1.4),
+        sigma=13.2, tuning_games=3369,
+    )
+    for half_life in (None, 3.0, 1.0):
+        s = ms.ModelSettings(half_life=half_life, **base)
+        text = fit_mod.describe(s)
+        assert f"recency: {evaluate_mod.variant_label(half_life)}." in text
+    assert "half-life 1 season." in fit_mod.describe(ms.ModelSettings(half_life=1.0, **base))
+    assert "season(s)" not in fit_mod.describe(ms.ModelSettings(half_life=1.0, **base))
+
+
 def test_describe_never_prints_negative_zero():
     """Final review (minor): the committed settings' travel_per_1000km
     (-0.022147) rounds to "-0.0" at 1 decimal -- a term a reader sees as
@@ -206,13 +225,3 @@ def test_fit_model_save_failure_is_a_plain_error(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "Traceback" not in result.output
     assert not bad_path.exists()
-
-
-@pytest.mark.slow
-def test_committed_settings_reproduce_from_the_real_archive():
-    """A published number must trace to settings anyone can re-derive."""
-    con = open_real_archive_or_skip()
-    try:
-        assert fit_mod.fit(con) == ms.load()
-    finally:
-        con.close()

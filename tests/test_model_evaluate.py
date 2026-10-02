@@ -85,6 +85,24 @@ def test_pick_winner_keeps_the_first_variant_when_no_later_one_clears_the_tolera
     assert evaluate_mod.pick_winner(variants).half_life is None
 
 
+def test_progress_names_the_actual_grid_size(tmp_path):
+    """The 'simulating N rating settings...' message must be derived from
+    the grid sizes, not a hard-coded literal -- this pins today's actual
+    grid size (10 x 5 x 6 x 3 = 900) so the message stays honest if any
+    grid ever changes."""
+    expected = (
+        len(tuning.GRID_K) * len(tuning.GRID_CAP)
+        * len(tuning.GRID_REGRESSION) * len(tuning.GRID_WINDOW)
+    )
+    assert expected == 900
+
+    con = fixture_con(tmp_path)
+    build_history(con)
+    messages = []
+    evaluate_mod.evaluate(con, progress=messages.append)
+    assert "simulating 900 rating settings..." in messages
+
+
 def test_evaluate_is_deterministic_and_final_matches_the_winner(tmp_path):
     con = fixture_con(tmp_path)
     build_history(con)
@@ -103,7 +121,7 @@ def test_format_evaluation_has_every_required_section(tmp_path):
     for v in ev.variants:
         assert evaluate_mod.variant_label(v.half_life) in text
     assert "Chosen:" in text
-    assert "within 0.001 the simpler variant wins" in text
+    assert "a later variant must beat it by more than 0.001" in text
     for season in evaluate_mod.WALK_FORWARD_SEASONS:
         assert season in text
     assert "Final settings for 2026-27" in text
