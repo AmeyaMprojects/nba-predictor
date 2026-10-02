@@ -753,13 +753,13 @@ def _open_for_fitting():
         raise typer.Exit(code=1) from None
 
 
-def _run_evaluation(fit_mod, evaluate_mod, con):
+def _run_evaluation(fit_mod, evaluate_mod, con, progress=None):
     """Shared `evaluate()` call + plain-English error handling for
     fit-model and evaluate-model."""
     import duckdb
 
     try:
-        return evaluate_mod.evaluate(con)
+        return evaluate_mod.evaluate(con, progress=progress)
     except fit_mod.FitError as exc:
         typer.echo(f"Cannot fit the model: {exc}.")
         raise typer.Exit(code=1) from None
@@ -794,8 +794,8 @@ def fit_model_cmd() -> None:
     typer.echo(fit_mod.describe(ev.final))
     for v in ev.variants:
         typer.echo(
-            f"  {evaluate_mod.variant_label(v.half_life)}: log loss {v.log_loss:.4f}, "
-            f"Brier {v.brier:.4f}, accuracy {v.accuracy * 100:.1f}%"
+            f"  walk-forward: {evaluate_mod.variant_label(v.half_life)}: log loss "
+            f"{v.log_loss:.4f}, Brier {v.brier:.4f}, accuracy {v.accuracy * 100:.1f}%"
         )
     typer.echo(f"Chosen: {evaluate_mod.variant_label(ev.winner.half_life)}")
     typer.echo(f"Saved to {model_settings.SETTINGS_PATH}.")
@@ -808,11 +808,12 @@ def evaluate_model_cmd() -> None:
     from predictor.model import evaluate as evaluate_mod
     from predictor.model import fit as fit_mod
 
+    def progress(message: str) -> None:
+        typer.echo(message, err=True)
+
     con = _open_for_fitting()
     try:
-        typer.echo("simulating 900 rating settings...", err=True)
-        typer.echo("fitting 21 season sets...", err=True)
-        ev = _run_evaluation(fit_mod, evaluate_mod, con)
+        ev = _run_evaluation(fit_mod, evaluate_mod, con, progress=progress)
     finally:
         con.close()
     typer.echo(evaluate_mod.format_evaluation(ev))

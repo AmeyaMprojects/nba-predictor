@@ -36,6 +36,15 @@ from predictor.model.venues import VenueIndex
 # tuning season to fold on, so it is never walk-forward predicted.
 WALK_FORWARD_SEASONS = TUNING_SEASONS[1:]
 
+_NUMBER_WORDS = {
+    1: "one", 2: "two", 3: "three", 4: "four", 5: "five",
+    6: "six", 7: "seven", 8: "eight", 9: "nine", 10: "ten",
+}
+
+
+def _number_word(n: int) -> str:
+    return _NUMBER_WORDS.get(n, str(n))
+
 
 def fold_job(season: str, half_life: float | None) -> tuning.Job:
     """The job that could have been fit before `season` started: every
@@ -87,9 +96,20 @@ def variant_label(half_life: float | None) -> str:
     return f"half-life {half_life:g} {word}"
 
 
-def evaluate(con) -> Evaluation:
+def evaluate(con, progress=None) -> Evaluation:
     """Walk-forward evaluate every recency variant and return the winner's
-    final (all-tuning-seasons) settings."""
+    final (all-tuning-seasons) settings.
+
+    `progress`, if given, is called with a short plain-English stage message
+    at each of the two slow stages (the one `tuning.choose` call, then
+    turning its 21 Choices into walk-forward predictions and metrics) -- so
+    a long-running caller (the CLI) can print real progress instead of
+    guessing when each stage starts.
+    """
+    if progress is None:
+        def progress(_message: str) -> None:
+            pass
+
     venues = VenueIndex.from_db(con)
     games = fit._load(con, venues)
 
@@ -101,7 +121,9 @@ def evaluate(con) -> Evaluation:
 
     all_jobs = [job for jobs in fold_jobs.values() for _, job in jobs]
     all_jobs += list(final_jobs.values())
+    progress("simulating 900 rating settings...")
     choices = tuning.choose(games, all_jobs)
+    progress("scoring walk-forward predictions...")
 
     variants = []
     for hl in tuning.HALF_LIVES:
@@ -181,8 +203,8 @@ def format_evaluation(ev: Evaluation) -> str:
             f"{v.brier:.4f}    {v.accuracy * 100:4.1f}%"
         )
     lines.append(
-        f"  Chosen: {variant_label(ev.winner.half_life)} (lowest log loss; a "
-        f"later variant must win by more than {tuning.TIE_TOLERANCE:g})"
+        f"  Chosen: {variant_label(ev.winner.half_life)} (lowest log loss; "
+        f"within {tuning.TIE_TOLERANCE:g} the simpler variant wins)"
     )
     lines.append("")
     lines.append("  By season (chosen variant; settings chosen on earlier seasons only):")
@@ -197,6 +219,7 @@ def format_evaluation(ev: Evaluation) -> str:
             f"home {metrics.home_rate(season_preds) * 100:.1f}%   "
             f"Brier {metrics.brier_score(season_preds):.4f}"
         )
+    lines.append("")
     lines.append(format_calibration_table(metrics.calibration_bins(ev.winner.predictions)))
     lines.append("")
     lines.append(
@@ -204,11 +227,17 @@ def format_evaluation(ev: Evaluation) -> str:
             publishing_bar(ev.winner.predictions), season_word="evaluated season"
         )
     )
+    lines.append(
+        "  This is a walk-forward result on the tuning seasons, not a clean test: the "
+        "method was chosen after a first look at 2023-26. The clean test, including any "
+        "calibration claim, is 2026-27 predicted live."
+    )
     lines.append("")
     fr = ev.final.ratings
     lines.append(
-        f"  Final settings for {TEST_SEASONS[0]} (all seven tuning seasons, "
-        f"{variant_label(ev.final.half_life)}):"
+        f"  Final settings for {TEST_SEASONS[0]} (all {_number_word(len(TUNING_SEASONS))} "
+        f"tuning seasons, {variant_label(ev.final.half_life)}; the walk-forward above "
+        "scores the method, not these exact settings):"
     )
     lines.append(
         f"    k {fr.k:g} cap {fr.margin_cap:g} regression {fr.season_regression:g} "

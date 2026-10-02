@@ -5,11 +5,13 @@ pooled together; test seasons are never read. The fit reads the games table
 directly -- it trains on completed past seasons and is not a prediction
 path -- and raises if a test season is loaded anyway.
 
-`fit()` delegates grid search, recency weighting and sigma selection to
-`predictor.model.tuning`, the shared settings-selection engine used by both
-fit-model and evaluate-model (Task 2 of the walk-forward recalibration).
-Walk-forward evaluation across the tuning seasons -- picking among several
-jobs instead of the single equal-weight one below -- lands in Task 3.
+`fit()` returns the winner of the walk-forward evaluation's final,
+all-tuning-seasons fit (Task 3 of the walk-forward recalibration,
+`predictor.model.evaluate`): whichever recency variant (equal weight, or a
+half-life) had the lowest mean walk-forward log loss across the tuning
+seasons. `evaluate.evaluate()` in turn delegates grid search, recency
+weighting and sigma selection to `predictor.model.tuning`, the shared
+settings-selection engine used by both fit-model and evaluate-model (Task 2).
 
 Simulation mirrors Stage1Predictor exactly: a date's results are applied
 only after every game on that date has been given its pre-game numbers,

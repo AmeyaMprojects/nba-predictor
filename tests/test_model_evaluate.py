@@ -103,11 +103,25 @@ def test_format_evaluation_has_every_required_section(tmp_path):
     for v in ev.variants:
         assert evaluate_mod.variant_label(v.half_life) in text
     assert "Chosen:" in text
+    assert "within 0.001 the simpler variant wins" in text
     for season in evaluate_mod.WALK_FORWARD_SEASONS:
         assert season in text
     assert "Final settings for 2026-27" in text
+    assert "the walk-forward above scores the method, not these exact settings" in text
     assert "evaluated season" in text
     assert "Calibration -- when it said X%, how often did that happen?" in text
+    # Fix round 1 (controller ruling, 2026-10-02): the publishing-bar MET
+    # verdict must never be read as the clean test -- this is walk-forward
+    # on the tuning seasons; the real, held-out test is 2026-27 live.
+    assert (
+        "This is a walk-forward result on the tuning seasons, not a clean test: the "
+        "method was chosen after a first look at 2023-26. The clean test, including "
+        "any calibration claim, is 2026-27 predicted live."
+    ) in text
+    # The caveat must come AFTER the publishing bar's verdict, not before it
+    # (a reader must see the MET/NOT MET line before the caveat that
+    # qualifies it).
+    assert text.index("Verdict:") < text.index("This is a walk-forward result")
 
 
 def test_evaluate_model_cli_prints_the_evaluation(tmp_path, monkeypatch):
@@ -141,6 +155,7 @@ def test_fit_model_cli_saves_the_winners_half_life(tmp_path, monkeypatch):
     result = CliRunner().invoke(cli.app, ["fit-model"])
     assert result.exit_code == 0, result.output
     assert "Chosen:" in result.output
+    assert "  walk-forward: " in result.output
     saved = ms.load(out_path)
 
     con2 = db.connect(read_only=True)
