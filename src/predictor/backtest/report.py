@@ -138,16 +138,24 @@ def _english_list(items: Sequence[str]) -> str:
     return ", ".join(items[:-1]) + " and " + items[-1]
 
 
-def format_publishing_bar(bar: PublishingBar) -> str:
+def format_publishing_bar(bar: PublishingBar, season_word: str = "test season") -> str:
     """Render `publishing_bar`'s verdict plainly -- "If it misses, the
-    report says so plainly" (spec 3)."""
+    report says so plainly" (spec 3).
+
+    `season_word` names what each `SeasonBeat` actually is -- "test season"
+    for a real backtest (the default, unchanged), "evaluated season" for
+    the walk-forward evaluation (task 3), which beats always-pick-home on
+    WALK-FORWARD seasons, not held-out test seasons. A caller that passes a
+    plural noun here (there is no such caller today) would need the 's'
+    itself; nothing in this function pluralizes it.
+    """
     lines = [
         "  Publishing bar (from the design spec; 'a few points' read as 5 "
         "percentage points, in buckets of 50+ games -- a reading fixed after "
         "the first test run):"
     ]
     lines.append(
-        "    Beats always-pick-home in every test season:  "
+        f"    Beats always-pick-home in every {season_word}:  "
         + ("YES" if bar.all_seasons_beat else "NO")
     )
     for sb in bar.season_beats:
@@ -169,7 +177,7 @@ def format_publishing_bar(bar: PublishingBar) -> str:
         )
     if bar.met:
         lines.append(
-            "    Verdict: MET -- it beats always-pick-home in every test season and "
+            f"    Verdict: MET -- it beats always-pick-home in every {season_word} and "
             "its probabilities are within 5 points in every bucket of 50+ games."
         )
     elif bar.all_seasons_beat:
@@ -340,6 +348,21 @@ def _provenance_header(result: BacktestResult) -> list[str]:
     return lines
 
 
+def format_calibration_table(bins: Sequence[metrics.CalibrationBin]) -> str:
+    """The 10-bucket "said / actual / games" calibration table, extracted
+    from `format_report` so `evaluate.format_evaluation` (task 3) can print
+    the identical rows for its own walk-forward predictions."""
+    lines = ["  Calibration -- when it said X%, how often did that happen?"]
+    for b in bins:
+        lines.append(
+            f"    {b.low * 100:3.0f}-{b.high * 100:3.0f}%  "
+            f"said {b.mean_predicted * 100:5.1f}%  "
+            f"actual {b.observed_rate * 100:5.1f}%  "
+            f"({b.count:,} games)"
+        )
+    return "\n".join(lines)
+
+
 def format_report(result: BacktestResult) -> str:
     """A report someone can read in thirty seconds and trust."""
     header = _provenance_header(result)
@@ -495,15 +518,8 @@ def format_report(result: BacktestResult) -> str:
         f"  calibration error   : {result.calibration_error * 100:.1f} percentage points "
         "average gap",
         "",
-        "  Calibration -- when it said X%, how often did that happen?",
     ]
-    for b in result.bins:
-        lines.append(
-            f"    {b.low * 100:3.0f}-{b.high * 100:3.0f}%  "
-            f"said {b.mean_predicted * 100:5.1f}%  "
-            f"actual {b.observed_rate * 100:5.1f}%  "
-            f"({b.count:,} games)"
-        )
+    lines.append(format_calibration_table(result.bins))
 
     # Final review: only a scoped (stage1 test-season headline) run has a
     # publishing claim to check -- always-home/coin-flip output is

@@ -774,6 +774,43 @@ def _homefav(n, p_home, home_won, prefix, season):
     return [make(p_home, home_won, f"{prefix}{i}", season=season) for i in range(n)]
 
 
+def test_format_calibration_table_pins_one_rows_exact_text():
+    """Task 3 extracted this out of `format_report` so `evaluate.py` can
+    print the identical rows for its own walk-forward predictions -- pin
+    the exact text of one row directly against `format_calibration_table`,
+    not only indirectly through `format_report`."""
+    preds = [make(0.65, i < 65, f"a{i}") for i in range(100)]
+    text = report.format_calibration_table(metrics.calibration_bins(preds))
+    assert "  Calibration -- when it said X%, how often did that happen?" in text
+    assert " 60- 70%  said  65.0%  actual  65.0%  (100 games)" in text
+
+
+def test_format_publishing_bar_default_season_word_is_unchanged():
+    preds = _homefav(5, 0.9, True, "a", "2024-25") + _homefav(5, 0.1, False, "b", "2024-25")
+    bar = report.publishing_bar(preds)
+    text = report.format_publishing_bar(bar)
+    assert "Beats always-pick-home in every test season:  YES" in text
+    assert (
+        "Verdict: MET -- it beats always-pick-home in every test season and its "
+        "probabilities are within 5 points in every bucket of 50+ games."
+    ) in text
+
+
+def test_format_publishing_bar_season_word_is_configurable():
+    """Task 3's walk-forward evaluation beats always-pick-home on EVALUATED
+    seasons, not held-out TEST seasons -- `season_word` lets it say so
+    without a second copy of this function."""
+    preds = _homefav(5, 0.9, True, "a", "2024-25") + _homefav(5, 0.1, False, "b", "2024-25")
+    bar = report.publishing_bar(preds)
+    text = report.format_publishing_bar(bar, season_word="evaluated season")
+    assert "Beats always-pick-home in every evaluated season:  YES" in text
+    assert "test season" not in text
+    assert (
+        "Verdict: MET -- it beats always-pick-home in every evaluated season and its "
+        "probabilities are within 5 points in every bucket of 50+ games."
+    ) in text
+
+
 def test_publishing_bar_met_case():
     """MET: both seasons beat always-pick-home, and the only qualifying
     (>=50 game) calibration bucket is within the 5-point bar.

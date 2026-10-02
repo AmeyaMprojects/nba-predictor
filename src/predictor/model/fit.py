@@ -107,18 +107,15 @@ def _simulate(params: RatingParams, games: list[_Game]) -> list[tuple[float, flo
 
 
 def fit(con) -> ModelSettings:
-    """Equal-weight fit on every tuning season pooled (Task 1 behaviour),
-    now chosen by the shared engine. Lazy import: `tuning` imports
-    FitError/_Game/_simulate from this module at its own top level, so
-    importing it here at module level would be circular.
+    """The winner of the walk-forward evaluation's final, all-tuning-seasons
+    fit (Task 3): whichever recency variant (equal weight, or a half-life)
+    had the lowest mean walk-forward log loss. Lazy import: `evaluate`
+    imports `_load` from this module at its own top level, so importing it
+    here at module level would be circular.
     """
-    from predictor.model import tuning
+    from predictor.model import evaluate as evaluate_mod
 
-    venues = VenueIndex.from_db(con)
-    games = _load(con, venues)
-    job = tuning.Job(TUNING_SEASONS, None)
-    c = tuning.choose(games, [job])[job]
-    return ModelSettings(c.params, c.coefficients, c.sigma, None, c.games)
+    return evaluate_mod.evaluate(con).final
 
 
 def _fmt_coef(v: float) -> str:

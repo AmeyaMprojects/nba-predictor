@@ -736,25 +736,30 @@ def backtest_cmd(
                 typer.echo(f"    {b.sentence()}")
 
 
-@app.command("fit-model")
-def fit_model_cmd() -> None:
-    """Choose the model's settings from past seasons and save them."""
+def _open_for_fitting():
+    """Shared read-only open + plain-English duckdb error handling for
+    fit-model and evaluate-model. Returns the connection, or exits 1."""
     import duckdb
 
     from predictor import db
-    from predictor.model import fit as fit_mod
-    from predictor.model import settings as model_settings
 
     try:
-        con = db.connect(read_only=True)
+        return db.connect(read_only=True)
     except duckdb.Error as exc:
         typer.echo(
             f"Could not open the database ({exc}). If another 'predictor' "
             "command is running, wait a moment and try again."
         )
         raise typer.Exit(code=1) from None
+
+
+def _run_evaluation(fit_mod, evaluate_mod, con):
+    """Shared `evaluate()` call + plain-English error handling for
+    fit-model and evaluate-model."""
+    import duckdb
+
     try:
-        chosen = fit_mod.fit(con)
+        return evaluate_mod.evaluate(con)
     except fit_mod.FitError as exc:
         typer.echo(f"Cannot fit the model: {exc}.")
         raise typer.Exit(code=1) from None
@@ -765,17 +770,52 @@ def fit_model_cmd() -> None:
             "--season <season>' first."
         )
         raise typer.Exit(code=1) from None
+
+
+@app.command("fit-model")
+def fit_model_cmd() -> None:
+    """Pick settings by walk-forward evaluation and save the winner's."""
+    from predictor.model import evaluate as evaluate_mod
+    from predictor.model import fit as fit_mod
+    from predictor.model import settings as model_settings
+
+    con = _open_for_fitting()
+    try:
+        ev = _run_evaluation(fit_mod, evaluate_mod, con)
     finally:
         con.close()
     try:
-        model_settings.save(chosen, model_settings.SETTINGS_PATH)
+        model_settings.save(ev.final, model_settings.SETTINGS_PATH)
     except OSError as exc:
         typer.echo(
             f"Could not save the fitted settings to {model_settings.SETTINGS_PATH} ({exc})."
         )
         raise typer.Exit(code=1) from None
-    typer.echo(fit_mod.describe(chosen))
+    typer.echo(fit_mod.describe(ev.final))
+    for v in ev.variants:
+        typer.echo(
+            f"  {evaluate_mod.variant_label(v.half_life)}: log loss {v.log_loss:.4f}, "
+            f"Brier {v.brier:.4f}, accuracy {v.accuracy * 100:.1f}%"
+        )
+    typer.echo(f"Chosen: {evaluate_mod.variant_label(ev.winner.half_life)}")
     typer.echo(f"Saved to {model_settings.SETTINGS_PATH}.")
+
+
+@app.command("evaluate-model")
+def evaluate_model_cmd() -> None:
+    """Walk-forward evaluate every recency variant and print the result
+    (does not save anything -- see 'predictor fit-model' for that)."""
+    from predictor.model import evaluate as evaluate_mod
+    from predictor.model import fit as fit_mod
+
+    con = _open_for_fitting()
+    try:
+        typer.echo("simulating 900 rating settings...", err=True)
+        typer.echo("fitting 21 season sets...", err=True)
+        ev = _run_evaluation(fit_mod, evaluate_mod, con)
+    finally:
+        con.close()
+    typer.echo(evaluate_mod.format_evaluation(ev))
 
 
 if __name__ == "__main__":
