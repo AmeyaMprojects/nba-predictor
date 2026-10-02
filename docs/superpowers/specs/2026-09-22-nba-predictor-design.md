@@ -445,6 +445,33 @@ requires studying 2023-26, so those seasons are **retired as the test**.
 - **No re-cutting:** if walk-forward still misses the bar, the report says
   NOT MET and 2026-27 live decides.
 
+#### Walk-forward result — 2026-10-03
+
+`predictor evaluate-model` (7,230 games, 2020-21 → 2025-26, each season
+predicted with settings chosen only on earlier tuning seasons):
+
+| Recency variant | log loss | Brier | accuracy |
+|---|---|---|---|
+| equal weight (**chosen**) | 0.6205 | 0.2158 | 65.4% |
+| half-life 3 seasons | 0.6205 | 0.2157 | 65.4% |
+| half-life 1 season | 0.6207 | 0.2159 | 65.4% |
+
+Recency weighting made no difference; equal weight wins by the
+simpler-variant rule. Faster ratings did not help either: every fold still
+chose rating speed 4%. The improvement came from widening the blowout cap
+(30 → 40) and from choosing sigma on more seasons.
+
+- **Beats always-pick-home in all six seasons** (62.0–69.0% vs 54.3–58.0%).
+- **Calibration within 5 points in every bucket of 50+ games**; worst
+  20–30% bucket said 25.8%, happened 22.1% (384 games).
+- **Publishing bar: MET on walk-forward** — not a clean test, because the
+  method was designed after the first look at 2023-26; the report says so.
+- **Final settings for 2026-27:** k 0.04, cap 40, regression 0.5, window
+  1,230, sigma 12.80 (all seven tuning seasons, equal weight).
+- **Publishable now:** the first-look accuracy result, the walk-forward
+  result *with its caveat*, and the explanations. **Calibration claims:**
+  2026-27 live remains the clean judge.
+
 ### Stage 1 — additive points model
 
 Team strength as an Elo rating updated on margin of victory, with between-season regression toward the mean.
