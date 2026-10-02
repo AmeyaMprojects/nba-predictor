@@ -317,6 +317,8 @@ would hide them at every historical cutoff.
 
 #### Seasons: fit, calibrate, test
 
+> **Superseded 2026-10-02** — season roles, the test, and how settings are chosen are now defined in **Calibration redesign — decided 2026-10-02** below. Kept as the record of the first delivery.
+
 | Role | Seasons | What happens |
 |---|---|---|
 | Warm-up | 2014-15 → 2018-19 | Results ingested; ratings update; nothing scored or fitted |
@@ -325,6 +327,8 @@ would hide them at every historical cutoff.
 | Test | 2023-24 → 2025-26 | Nothing tuned. The only publishable numbers |
 
 #### What the report adds
+
+> **Superseded 2026-10-02** — season roles, the test, and how settings are chosen are now defined in **Calibration redesign — decided 2026-10-02** below. Kept as the record of the first delivery.
 
 For the test seasons, pooled and per season:
 - accuracy against the always-pick-home baseline
@@ -351,6 +355,8 @@ says so plainly.
   existing path, counted, never dropped.
 
 #### Testing
+
+> **Superseded 2026-10-02** — season roles, the test, and how settings are chosen are now defined in **Calibration redesign — decided 2026-10-02** below. Kept as the record of the first delivery.
 
 1. **Leak safety.** The harness's adversarial tests run with the model
    plugged in. Output is invariant to future fixtures and not-yet-visible
@@ -415,6 +421,8 @@ Second-look result on the same test seasons (labelled as such in the report):
 - **Decision:** stop adjusting. The clean judge is the 2026-27 season,
   predicted live before tip-off. Any model change to address road favourites
   (e.g. faster-moving ratings) is a design change for a later sub-project.
+  *Reversed the same day at the owner's request — see* **Calibration
+  redesign — decided 2026-10-02** *below.*
 
 #### Calibration redesign — decided 2026-10-02
 
@@ -456,10 +464,14 @@ predicted with settings chosen only on earlier tuning seasons):
 | half-life 3 seasons | 0.6205 | 0.2157 | 65.4% |
 | half-life 1 season | 0.6207 | 0.2159 | 65.4% |
 
-Recency weighting made no difference; equal weight wins by the
-simpler-variant rule. Faster ratings did not help either: every fold still
-chose rating speed 4%. The improvement came from widening the blowout cap
-(30 → 40) and from choosing sigma on more seasons.
+The three variants scored within 0.0002 of each other; equal weight is kept
+because no later variant beat it by more than 0.001. Every fold still chose
+rating speed 4%, so faster ratings were not selected. Compared with the first
+delivery, the chosen blowout cap moved from 30 to 40 and sigma is chosen on
+more seasons; no experiment isolated which change matters, so this is an
+observation, not a measured cause. The chosen cap (40) and the final
+home-court window (1,230) sit at the top of their grids, so better values may
+lie beyond them.
 
 - **Beats always-pick-home in all six seasons** (62.0–69.0% vs 54.3–58.0%).
 - **Calibration within 5 points in every bucket of 50+ games**; worst
@@ -468,6 +480,9 @@ chose rating speed 4%. The improvement came from widening the blowout cap
   method was designed after the first look at 2023-26; the report says so.
 - **Final settings for 2026-27:** k 0.04, cap 40, regression 0.5, window
   1,230, sigma 12.80 (all seven tuning seasons, equal weight).
+- **Before publishing any number:** run `uv run pytest -m slow` (it checks
+  that `evaluate-model` reproduces the committed settings from the archive)
+  and quote `predictor evaluate-model` output verbatim, caveat included.
 - **Publishable now:** the first-look accuracy result, the walk-forward
   result *with its caveat*, and the explanations. **Calibration claims:**
   2026-27 live remains the clean judge.
