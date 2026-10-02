@@ -33,6 +33,8 @@ class ModelSettings:
     coefficients: Coefficients
     sigma: float
     fit_games: int
+    # Games sigma was chosen on: every fit + calibrate season pooled (since
+    # 2026-10-02). Name kept for settings-file compatibility.
     calibrate_games: int
 
 

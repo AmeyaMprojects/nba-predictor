@@ -665,7 +665,9 @@ def backtest_cmd(
         plural = len(headline_seasons) != 1
         scope = (
             f"test season{'s' if plural else ''} {', '.join(headline_seasons)} only -- "
-            f"the model's settings were never tuned on {'them' if plural else 'it'}"
+            f"no setting was fitted on {'them' if plural else 'it'}; second look -- "
+            "the sigma rule was revised on 2026-10-02 after a first look at "
+            "these seasons"
         )
 
     result = report.summarize(

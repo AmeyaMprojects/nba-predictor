@@ -127,6 +127,7 @@ def test_scope_header_lists_only_the_test_seasons_actually_present(tmp_path, mon
     out = runner.invoke(cli.app, ["backtest", "--model", "stage1"])
     assert out.exit_code == 0, out.output
     assert "test seasons 2023-24, 2024-25 only" in out.output
+    assert "second look" in out.output
     assert "2025-26" not in out.output
 
 
@@ -140,8 +141,9 @@ def test_season_filter_narrows_the_header_to_just_that_test_season(tmp_path, mon
     lines = out.output.splitlines()
     season_line = next(line for line in lines if line.strip().startswith("Season"))
     assert season_line.strip() == (
-        "Season              : test season 2023-24 only -- the model's "
-        "settings were never tuned on it"
+        "Season              : test season 2023-24 only -- no setting was "
+        "fitted on it; second look -- the sigma rule was revised on 2026-10-02 "
+        "after a first look at these seasons"
     )
     assert "2024-25" not in out.output
     # t7-fix2 item A: `--season 2023-24` makes `replay.replay` walk ONLY

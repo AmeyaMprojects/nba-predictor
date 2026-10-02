@@ -117,9 +117,19 @@ def fit(con) -> ModelSettings:
     fit_count = sum(
         1 for g in games if g.result.season in FIT_SEASONS and g.result.game_id.startswith("002")
     )
+    # Sigma is chosen on every tuning season pooled (fit seasons + the
+    # calibrate season), decided 2026-10-02: chosen on 2022-23 alone it was
+    # 13.9, an outlier against 12.7-13.3 for each other tuning season, and the
+    # first test-season run came out underconfident. The rule was chosen
+    # without re-scoring the test seasons; see the spec's "Result" notes.
+    sigma_seasons = FIT_SEASONS + (CALIBRATE_SEASON,)
     cal_count = sum(
         1 for g in games
         if g.result.season == CALIBRATE_SEASON and g.result.game_id.startswith("002")
+    )
+    sigma_count = sum(
+        1 for g in games
+        if g.result.season in sigma_seasons and g.result.game_id.startswith("002")
     )
     if fit_count == 0 or cal_count == 0:
         raise FitError(
@@ -141,7 +151,7 @@ def fit(con) -> ModelSettings:
     coefficients = Coefficients(*(round(float(c), 6) for c in coef))
 
     pre = _simulate(params, games)
-    rows, _, _ = _residuals(games, pre, (CALIBRATE_SEASON,))
+    rows, _, _ = _residuals(games, pre, sigma_seasons)
     spreads = [
         gap + hc + sum(adj.astuple_terms(coefficients, g.x))
         for (g, gap, hc) in rows
@@ -161,7 +171,7 @@ def fit(con) -> ModelSettings:
         coefficients=coefficients,
         sigma=best_sigma[1],
         fit_games=fit_count,
-        calibrate_games=cal_count,
+        calibrate_games=sigma_count,
     )
 
 
@@ -195,5 +205,5 @@ def describe(s: ModelSettings) -> str:
         f"  playing at altitude (Denver, Utah)   {_fmt_coef(c.altitude)}",
         f"Typical game-to-game spread (sigma): {s.sigma:.2f} points.",
         f"Chosen on {s.fit_games:,} fit-season games; sigma set on "
-        f"{s.calibrate_games:,} calibrate-season games.",
+        f"{s.calibrate_games:,} games from {FIT_SEASONS[0]} to {CALIBRATE_SEASON}.",
     ])

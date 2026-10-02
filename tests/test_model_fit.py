@@ -130,7 +130,10 @@ def test_fit_counts_its_games_and_picks_values_from_the_grids(tmp_path):
     _history(con)
     s = fit_mod.fit(con)
     assert s.fit_games == 3 * 40          # three fit seasons x 40 games
-    assert s.calibrate_games == 40
+    # sigma is set on every non-test, non-warm-up season pooled (three fit
+    # seasons + the calibrate season), not on the calibrate season alone:
+    # 4 seasons x 40 games.
+    assert s.calibrate_games == 4 * 40
     assert s.ratings.k in fit_mod.GRID_K
     assert s.ratings.margin_cap in fit_mod.GRID_CAP
     assert s.ratings.season_regression in fit_mod.GRID_REGRESSION
@@ -235,3 +238,13 @@ def test_committed_settings_reproduce_from_the_real_archive():
         assert fit_mod.fit(con) == ms.load()
     finally:
         con.close()
+
+
+def test_sigma_is_chosen_on_fit_and_calibrate_seasons_pooled(tmp_path):
+    """Changing a FIT-season result must be able to move sigma (it could not
+    when sigma was chosen on the calibrate season alone); changing a
+    warm-up result alone must not change the sigma sample size."""
+    con = fixture_con(tmp_path)
+    _history(con)
+    s = fit_mod.fit(con)
+    assert s.calibrate_games == s.fit_games + 40

@@ -394,6 +394,28 @@ committed in `src/predictor/model/stage1_settings.json`).
 - **Publishable today:** the accuracy result and the explanations. **Not
   publishable yet:** any claim that the stated probabilities are calibrated.
 
+#### Recalibration — 2026-10-02 (second look)
+
+Rule change, chosen without re-scoring the test seasons: sigma is now fitted
+on all four tuning seasons pooled (2019-20 → 2022-23, 4,599 games) instead of
+2022-23 alone. Per-season optima were 12.7 / 13.3 / 12.85 / 13.9 — 2022-23 was
+the outlier — and the pooled value is **13.15**. Nothing else changed.
+
+Second-look result on the same test seasons (labelled as such in the report):
+- accuracy unchanged (67.3% vs 54.7%); Brier 0.2083 → 0.2079; log loss
+  0.6038 → 0.6027; average calibration gap 2.6 → 2.1 points.
+- The upper half is now calibrated (said 83.9% → 84.9%; said 92.1% → 92.5%).
+- **The bar is still NOT met** at the low end: said 16.4% → 6.4% (78 games);
+  said 35.5% → 29.5% (451 games). Strong road favourites won more often in
+  2023-26 than the model said.
+- On the tuning seasons, with the same settings, every bucket of 50+ games is
+  within 4.5 points. The low-end miss appears **only** in the test seasons, so
+  no further correction can be chosen from tuning data; fitting one now would
+  be fitting to the test. It is treated as out-of-sample drift.
+- **Decision:** stop adjusting. The clean judge is the 2026-27 season,
+  predicted live before tip-off. Any model change to address road favourites
+  (e.g. faster-moving ratings) is a design change for a later sub-project.
+
 ### Stage 1 — additive points model
 
 Team strength as an Elo rating updated on margin of victory, with between-season regression toward the mean.
