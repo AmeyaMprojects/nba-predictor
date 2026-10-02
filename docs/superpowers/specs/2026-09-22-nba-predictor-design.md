@@ -416,6 +416,35 @@ Second-look result on the same test seasons (labelled as such in the report):
   predicted live before tip-off. Any model change to address road favourites
   (e.g. faster-moving ratings) is a design change for a later sub-project.
 
+#### Calibration redesign — decided 2026-10-02
+
+The second look showed the remaining miss is structural: after 2023 the
+league is more lopsided (rating-gap spread 6.5 vs 5.4) and slow ratings
+understate gaps (actual margin rises 1.12 points per rating point, against
+0.98 before), so strong road favourites win more than predicted. Fixing it
+requires studying 2023-26, so those seasons are **retired as the test**.
+
+- **Season roles:** warm-up 2014-15 → 2018-19; **tuning 2019-20 → 2025-26**;
+  **test 2026-27, predicted live**. The first-look 2023-26 accuracy result
+  stays on record as such and is not overwritten.
+- **Walk-forward evaluation** replaces the held-out test for design choices:
+  each season 2020-21 → 2025-26 is predicted with settings chosen only on the
+  tuning seasons before it. The publishing bar is judged on these
+  predictions. The method was designed after the first look at 2023-26, and
+  the report says so; the calibration claim still waits for 2026-27 live.
+- **Wider search:** rating speed 2–20%, summer pull-back 0–66%, blowout cap
+  15–40, home-court window unchanged; sigma chosen on the same seasons.
+- **Recency variants:** equal weight; half-life 3 seasons; half-life 1
+  season. Weights apply to every choice (grid, coefficients, sigma). The
+  variant with the lowest pooled walk-forward log loss wins; within 0.001,
+  the simpler variant (in that order) wins.
+- **Final settings for 2026-27** are chosen on all seven tuning seasons with
+  the winning variant. `predictor evaluate-model` prints the walk-forward
+  report; `predictor fit-model` saves the final settings; `backtest --model
+  stage1` reports only live 2026-27 games once they exist.
+- **No re-cutting:** if walk-forward still misses the bar, the report says
+  NOT MET and 2026-27 live decides.
+
 ### Stage 1 — additive points model
 
 Team strength as an Elo rating updated on margin of victory, with between-season regression toward the mean.
