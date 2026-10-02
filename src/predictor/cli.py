@@ -693,14 +693,14 @@ def backtest_cmd(
         # Final review (minor): the old wording ("earlier rows are seasons
         # the model learned from or was tuned on") is false the moment a row
         # labelled 'unassigned' by `model_settings.season_role` appears (a
-        # season outside warm-up/fit/calibrate/test) -- it is neither
-        # "earlier" nor something the model learned from or was tuned on.
-        # Naming all four non-test roles explicitly stays true regardless of
-        # which roles actually appear in this run's table.
+        # season outside warm-up/tuning/test) -- it is neither "earlier" nor
+        # something the model learned from or was tuned on. Naming the
+        # non-test roles explicitly stays true regardless of which roles
+        # actually appear in this run's table.
         typer.echo(
-            "  Only 'test' rows are the published held-out test; 'warm-up', "
-            "'fit' and 'calibrate' rows are seasons the model learned from or "
-            "was tuned on; 'unassigned' rows are outside the published test."
+            "  Only 'test' rows are the live held-out test; 'warm-up' and "
+            "'tuning' rows are seasons the model learned from or was tuned "
+            "on; 'unassigned' rows are outside the test."
         )
         if stage1_predictor.unknown_cities or stage1_predictor.no_history:
             typer.echo("")

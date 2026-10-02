@@ -464,20 +464,20 @@ def format_report(result: BacktestResult) -> str:
     # a header that says "test seasons ... only"). State the headline's own
     # scored count and the pooled total separately instead.
     #
-    # t7-fix2 item A: the "(N replayed in total, including warm-up, fit and
-    # calibrate seasons)" clause is only true when the pooled total actually
+    # t7-fix2 item A: the "(N replayed in total, including warm-up and
+    # tuning seasons)" clause is only true when the pooled total actually
     # EXCEEDS the headline's own count -- e.g. under `--season <test
     # season>`, replay.replay only ever walks that one season, so
     # `s.predicted == len(result.predictions)` exactly and nothing besides
     # the headline's own games was replayed. Printing the "including..."
-    # clause there would falsely claim warm-up/fit/calibrate seasons were
-    # replayed when none were.
+    # clause there would falsely claim warm-up/tuning seasons were replayed
+    # when none were.
     n_test = len(result.predictions)
     if result.scope is not None and s.predicted > n_test:
         games_scored_line = (
             f"  games scored        : {n_test:,} test-season games "
-            f"({s.predicted:,} replayed in total, including warm-up, fit and "
-            "calibrate seasons)"
+            f"({s.predicted:,} replayed in total, including warm-up and "
+            "tuning seasons)"
         )
     elif result.scope is not None:
         games_scored_line = f"  games scored        : {n_test:,} test-season games"

@@ -694,7 +694,7 @@ def test_games_scored_line_states_the_test_season_count_separately_from_the_pool
     text = report.format_report(result)
     assert (
         "games scored        : 3 test-season games (30 replayed in total, "
-        "including warm-up, fit and calibrate seasons)" in text
+        "including warm-up and tuning seasons)" in text
     )
 
 

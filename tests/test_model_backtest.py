@@ -62,11 +62,11 @@ def test_stage1_headline_is_test_seasons_only(tmp_path, monkeypatch):
     assert "40 test-season games" in out.output
     # t7-fix2 item A: the default run (no --season) replays the warm-up
     # season too, so the pooled total (41) genuinely exceeds the
-    # test-season count (40) -- the "including warm-up, fit and calibrate
-    # seasons" clause is TRUE here and must still be printed.
+    # test-season count (40) -- the "including warm-up and tuning seasons"
+    # clause is TRUE here and must still be printed.
     assert (
-        "40 test-season games (41 replayed in total, including warm-up, "
-        "fit and calibrate seasons)" in out.output
+        "40 test-season games (41 replayed in total, including warm-up and "
+        "tuning seasons)" in out.output
     )
     assert "By season" in out.output
     assert "2018-19  warm-up" in out.output
@@ -79,13 +79,13 @@ def test_stage1_headline_is_test_seasons_only(tmp_path, monkeypatch):
         "Settings            : k 0.1, cap 20, regression 0.5, window 100, "
         "sigma 13.00 (src/predictor/model/stage1_settings.json)" in out.output
     )
-    # Final review (minor): the season-table note names all four non-test
-    # roles explicitly (not just "earlier rows"), so it stays true even when
-    # an 'unassigned' season appears in the table.
+    # Final review (minor): the season-table note names the non-test roles
+    # explicitly (not just "earlier rows"), so it stays true even when an
+    # 'unassigned' season appears in the table.
     assert (
-        "Only 'test' rows are the published held-out test; 'warm-up', "
-        "'fit' and 'calibrate' rows are seasons the model learned from or "
-        "was tuned on; 'unassigned' rows are outside the published test."
+        "Only 'test' rows are the live held-out test; 'warm-up' and "
+        "'tuning' rows are seasons the model learned from or was tuned "
+        "on; 'unassigned' rows are outside the test."
     ) in out.output
     # Final review: the publishing bar block prints for a scoped (stage1)
     # run.
@@ -158,8 +158,8 @@ def test_season_filter_narrows_the_header_to_just_that_test_season(tmp_path, mon
     # t7-fix2 item A: `--season 2026-27` makes `replay.replay` walk ONLY
     # that season, so the pooled total equals the test-season count exactly
     # -- nothing besides the headline's own games was replayed, so the
-    # "including warm-up, fit and calibrate seasons" clause would be false
-    # here and must not be printed.
+    # "including warm-up and tuning seasons" clause would be false here and
+    # must not be printed.
     games_scored_line = next(
         line for line in lines if line.strip().startswith("games scored")
     )
