@@ -395,3 +395,38 @@ def test_game_missing_from_schedule_is_counted_not_guessed(tmp_path):
                   AsOfView(con, _cutoff(date(2025, 1, 15))))
     assert b.home == 0.0 or b.home == pytest.approx(0.0)
     assert p.unknown_cities["(game not in the schedule)"] == 1
+
+
+def test_a_prior_season_result_seen_after_the_new_season_began_equals_fresh(tmp_path):
+    """A 2024-25 result dated 2025-06-01 is first observed on 2025-10-25,
+    after the predictor has already entered 2025-26 (explaining a game on
+    2025-10-22). Its key sorts after everything applied, so the old
+    trigger applied it incrementally: Ratings switched back to 2024-25 and
+    then forward again, regressing every rating twice more. A fresh
+    predictor at the same cutoff applies it in order and regresses once.
+    They must agree."""
+    con = fixture_con(tmp_path)
+    add_game(con, "0022400001", "2024-25", date(2025, 4, 1), "PHI", "NYK", 110, 100,
+             city="Philadelphia")
+    add_game(con, "0042400001", "2024-25", date(2025, 6, 1), "BOS", "PHI", 100, 90,
+             city="Boston",
+             final_observed_at=datetime(2025, 10, 25, 12, tzinfo=UTC))
+    add_game(con, "0022500001", "2025-26", date(2025, 10, 22), "PHI", "NYK",
+             city="Philadelphia")
+    add_game(con, "0022500002", "2025-26", date(2025, 10, 28), "PHI", "BOS",
+             city="Philadelphia")
+
+    first = _game("0022500001", date(2025, 10, 22), "PHI", "NYK", season="2025-26")
+    later = _game("0022500002", date(2025, 10, 28), "PHI", "BOS", season="2025-26")
+
+    incremental = Stage1Predictor(con, S)
+    incremental.explain(first, AsOfView(con, _cutoff(date(2025, 10, 22))))
+    got = incremental.explain(later, AsOfView(con, _cutoff(date(2025, 10, 28))))
+
+    fresh = Stage1Predictor(con, S).explain(later, AsOfView(con, _cutoff(date(2025, 10, 28))))
+    assert got == fresh
+    # Hand check of the fresh path: game A moves PHI +1 / NYK -1 (k 0.1, margin
+    # 10, home court 0); game B (BOS home, home court 10 from A): predicted
+    # 0 - 1 + 10 = 9, margin 10, delta 0.1 -> BOS +0.1, PHI 0.9. Entering
+    # 2025-26 halves every rating once: PHI 0.45, BOS 0.05.
+    assert fresh.rating == pytest.approx(0.45 - 0.05)
