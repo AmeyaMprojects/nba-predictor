@@ -9,9 +9,8 @@ from predictor.asof import AsOfView
 from predictor.backtest.baselines import GameToPredict
 from predictor.model.adjustments import Coefficients
 from predictor.model.live import (
-    EASTERN,
-    STALE_AFTER,
     START_BUFFER,
+    LogError,
     grade,
     grades_path,
     in_season,
@@ -19,6 +18,7 @@ from predictor.model.live import (
     log_path,
     predict_today,
     read_log,
+    results_missing,
     slate_for,
 )
 from predictor.model.ratings import RatingParams
@@ -37,6 +37,9 @@ S = ModelSettings(
 
 SEASON = "2026-27"
 
+_SETTINGS_JSON = {"k": 0.1, "margin_cap": 20.0, "season_regression": 0.5,
+                  "hca_window": 100, "sigma": 13.0, "half_life": None}
+
 
 def _insert_final(con, game_id, season, game_date, home, away, home_pts, away_pts,
                    observed_at, reconstructed=False):
@@ -53,6 +56,27 @@ def _append_raw_line(path, line):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(line, sort_keys=True) + "\n")
+
+
+def _hand_predicted_line(game_id, home, away, tip, p_home, predicted_at, game_date="2026-11-10"):
+    return {
+        "predicted_at": predicted_at.isoformat(),
+        "game_id": game_id,
+        "season": SEASON,
+        "game_date": game_date,
+        "tip_off_utc": tip.isoformat(),
+        "home_team": home,
+        "away_team": away,
+        "status": "predicted",
+        "reason": None,
+        "spread": 0.0,
+        "p_home": p_home,
+        "sentence": None,
+        "terms": None,
+        "settings": _SETTINGS_JSON,
+        "stale_results": False,
+        "last_result_capture": None,
+    }
 
 
 # --- 1. the slate ------------------------------------------------------
@@ -77,6 +101,24 @@ def test_slate_keeps_only_todays_eastern_games(tmp_path):
     assert g.game_date == date(2026, 10, 21)
     assert g.home_team == "PHI" and g.away_team == "NYK"
     assert g.tip_off_utc == datetime(2026, 10, 21, 19, 30, tzinfo=UTC)
+
+
+def test_slate_uses_et_date_not_utc_date(tmp_path):
+    """2026-10-22 02:00 UTC is 22:00 ET on 2026-10-21 and 07:30 IST on
+    2026-10-22 -- a case where the UTC calendar date and the ET calendar
+    date disagree (unlike the 12:30 UTC case above, where ET and UTC
+    happen to share a date). Using ``now.date()`` (the UTC date) instead of
+    ``now.astimezone(EASTERN).date()`` would pick 2026-10-22 and miss the
+    actual (ET) slate entirely."""
+    con = fixture_con(tmp_path)
+    now = datetime(2026, 10, 22, 2, 0, tzinfo=UTC)
+    insert_schedule_row(con, "0022600011", date(2026, 10, 21), "PHI", "NYK",
+                         datetime(2026, 10, 21, 23, 0, tzinfo=UTC), season=SEASON)
+    insert_schedule_row(con, "0022600012", date(2026, 10, 22), "BOS", "MIA",
+                         datetime(2026, 10, 22, 23, 0, tzinfo=UTC), season=SEASON)
+
+    slate = slate_for(con, now)
+    assert [g.game_id for g in slate] == ["0022600011"]
 
 
 def test_slate_uses_latest_schedule_vintage_and_orders_by_tipoff_then_id(tmp_path):
@@ -118,7 +160,8 @@ def test_predicted_line_matches_a_fresh_predictor_call(tmp_path):
     insert_schedule_row(con, "0022600110", date(2026, 11, 5), "PHI", "NYK",
                          now + timedelta(hours=2), season=SEASON)
 
-    result = predict_today(con, S, tmp_path / "repo", now)
+    repo_dir = tmp_path / "repo"
+    result = predict_today(con, S, repo_dir, now)
     assert result.predicted == 1 and result.not_predicted == 0
 
     fresh = Stage1Predictor(con, S).explain(
@@ -132,6 +175,19 @@ def test_predicted_line_matches_a_fresh_predictor_call(tmp_path):
     assert line["sentence"] == fresh.sentence()
     assert line["terms"] == {name: pytest.approx(round(value, 6)) for name, value in fresh.terms()}
 
+    # The raw file text, not just the parsed dict: keys sorted, and the
+    # rounded (not full-precision) spread/p_home actually on disk.
+    raw_text = log_path(repo_dir, SEASON).read_text(encoding="utf-8")
+    assert raw_text.endswith("\n")
+    raw_line = raw_text.splitlines()[-1]
+    key_order = json.loads(raw_line, object_pairs_hook=lambda pairs: [k for k, _ in pairs])
+    assert key_order == sorted(key_order)
+    assert f'"spread": {json.dumps(round(fresh.spread, 6))}' in raw_line
+    assert f'"p_home": {json.dumps(round(fresh.p_home, 6))}' in raw_line
+    # The raw spread/p_home must actually have more than 6 decimals, or
+    # rounding could never be observed on the wire.
+    assert round(fresh.spread, 6) != fresh.spread or round(fresh.p_home, 6) != fresh.p_home
+
 
 # --- 3. the start buffer -------------------------------------------------
 
@@ -143,10 +199,14 @@ def test_start_buffer_boundary(tmp_path):
                          now + timedelta(minutes=20), season=SEASON)
     insert_schedule_row(con, "0022600202", date(2026, 11, 10), "BOS", "MIA",
                          now + timedelta(minutes=31), season=SEASON)
+    # Exactly on the buffer boundary: `tip - START_BUFFER == now`, which is
+    # `<= now` -- still "already started (or within 30 minutes)".
+    insert_schedule_row(con, "0022600203", date(2026, 11, 10), "DEN", "LAL",
+                         now + START_BUFFER, season=SEASON)
 
     result = predict_today(con, S, tmp_path / "repo", now)
     assert result.predicted == 1
-    assert result.not_predicted == 1
+    assert result.not_predicted == 2
 
     by_id = {line["game_id"]: line for line in result.lines_written}
     early = by_id["0022600201"]
@@ -157,6 +217,9 @@ def test_start_buffer_boundary(tmp_path):
     )
     assert early["spread"] is None and early["p_home"] is None and early["sentence"] is None
     assert early["terms"] is None
+
+    exactly_on_buffer = by_id["0022600203"]
+    assert exactly_on_buffer["status"] == "not_predicted"
 
     late = by_id["0022600202"]
     assert late["status"] == "predicted"
@@ -196,38 +259,86 @@ def test_same_day_rerun_is_a_duplicate_but_reschedule_predicts_again(tmp_path):
     ]
 
 
-# --- 5. staleness ----------------------------------------------------------
+# --- 5. staleness: results_missing ----------------------------------------
 
-def test_stale_when_in_season_and_capture_is_old(tmp_path):
+def test_in_season_uses_latest_schedule_vintage(tmp_path):
     con = fixture_con(tmp_path)
     now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
-    old_capture = now - STALE_AFTER - timedelta(hours=4)
-    add_game(con, "0022600401", SEASON, date(2026, 11, 1), "BOS", "MIA", 100, 90,
-             city="Boston", final_observed_at=old_capture, reconstructed=False)
-    insert_schedule_row(con, "0022600402", date(2026, 11, 10), "PHI", "NYK",
-                         now + timedelta(hours=2), season=SEASON)
+    gid = "0022600801"
+    # An old vintage puts the tip-off within the +/-3 day window...
+    insert_schedule_row(con, gid, date(2026, 11, 10), "PHI", "NYK",
+                         now + timedelta(days=1),
+                         observed_at=datetime(2026, 10, 1, tzinfo=UTC), season=SEASON)
+    # ...but the LATEST vintage reschedules it far outside that window.
+    insert_schedule_row(con, gid, date(2026, 12, 10), "PHI", "NYK",
+                         now + timedelta(days=30),
+                         observed_at=datetime(2026, 11, 1, tzinfo=UTC), season=SEASON)
+    assert in_season(con, now) is False
 
-    assert in_season(con, now) is True
-    assert last_capture(con) == old_capture
+
+def test_not_stale_on_opening_night_with_no_past_games(tmp_path):
+    con = fixture_con(tmp_path)
+    now = datetime(2026, 10, 21, 20, 0, tzinfo=UTC)
+    assert results_missing(con, now) == []
+    result = predict_today(con, S, tmp_path / "repo", now)
+    assert result.stale is False
+
+
+def test_stale_when_a_recent_game_has_no_final_result(tmp_path):
+    con = fixture_con(tmp_path)
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    # Tipped 20 hours ago -- within [now-3d, now-12h] -- with no FINAL row.
+    insert_schedule_row(con, "0022600811", date(2026, 11, 9), "PHI", "NYK",
+                         now - timedelta(hours=20), season=SEASON)
+    insert_schedule_row(con, "0022600812", date(2026, 11, 10), "BOS", "MIA",
+                         now + timedelta(hours=2), season=SEASON)
+    assert results_missing(con, now) == ["0022600811"]
 
     result = predict_today(con, S, tmp_path / "repo", now)
     assert result.stale is True
     assert len(result.lines_written) == 1
-    line = result.lines_written[0]
-    assert line["stale_results"] is True
-    assert line["last_result_capture"] == old_capture.isoformat()
+    assert result.lines_written[0]["stale_results"] is True
 
 
-def test_not_stale_off_season_with_no_capture(tmp_path):
+def test_not_stale_once_the_missing_games_final_is_captured(tmp_path):
     con = fixture_con(tmp_path)
-    now = datetime(2026, 7, 1, 12, 0, tzinfo=UTC)  # off-season, nothing scheduled
-
-    assert in_season(con, now) is False
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    insert_schedule_row(con, "0022600813", date(2026, 11, 9), "PHI", "NYK",
+                         now - timedelta(hours=20), season=SEASON)
+    insert_schedule_row(con, "0022600814", date(2026, 11, 10), "BOS", "MIA",
+                         now + timedelta(hours=2), season=SEASON)
+    # A backfilled (not live-captured) FINAL row is enough to clear
+    # `results_missing` -- ANY FINAL row counts -- even though it does NOT
+    # count as a `last_capture()` (reconstructed = TRUE).
+    _insert_final(con, "0022600813", SEASON, date(2026, 11, 9), "PHI", "NYK",
+                  110, 100, observed_at=now - timedelta(hours=19), reconstructed=True)
+    assert results_missing(con, now) == []
     assert last_capture(con) is None
 
     result = predict_today(con, S, tmp_path / "repo", now)
     assert result.stale is False
-    assert result.lines_written == []
+    assert len(result.lines_written) == 1
+    line = result.lines_written[0]
+    assert line["stale_results"] is False
+    assert line["last_result_capture"] is None
+
+
+def test_old_missing_result_does_not_count_as_stale(tmp_path):
+    con = fixture_con(tmp_path)
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    # Tipped 4 days ago -- older than the 3-day window.
+    insert_schedule_row(con, "0022600815", date(2026, 11, 6), "PHI", "NYK",
+                         now - timedelta(days=4), season=SEASON)
+    assert results_missing(con, now) == []
+
+
+def test_very_recent_missing_result_does_not_count_as_stale(tmp_path):
+    con = fixture_con(tmp_path)
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    # Tipped only 6 hours ago -- inside the 12-hour grace period.
+    insert_schedule_row(con, "0022600816", date(2026, 11, 10), "PHI", "NYK",
+                         now - timedelta(hours=6), season=SEASON)
+    assert results_missing(con, now) == []
 
 
 # --- 6. append-only ----------------------------------------------------
@@ -253,6 +364,26 @@ def test_log_is_append_only(tmp_path):
     full_bytes = path.read_bytes()
     assert full_bytes.startswith(first_run_bytes)
     assert len(full_bytes) > len(first_run_bytes)
+
+
+def test_read_log_rejects_a_truncated_file_and_never_appends(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    path = log_path(repo_dir, SEASON)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"game_id": "x"}\n{"game_id": "truncated"', encoding="utf-8")
+    before = path.read_bytes()
+
+    with pytest.raises(LogError):
+        read_log(path)
+
+    insert_schedule_row(con, "0022600950", date(2026, 11, 10), "PHI", "NYK",
+                         now + timedelta(hours=2), season=SEASON)
+    with pytest.raises(LogError):
+        predict_today(con, S, repo_dir, now)
+
+    assert path.read_bytes() == before  # never touched, let alone appended onto
 
 
 # --- 7. leak safety ------------------------------------------------------
@@ -303,6 +434,9 @@ def test_grading(tmp_path):
     result = predict_today(con, S, repo_dir, now)
     assert result.predicted == 1 and result.not_predicted == 1
     predicted_line = next(l for l in result.lines_written if l["game_id"] == "0022600701")
+    # Zero history on both teams: spread is exactly 0, so p_home is exactly
+    # 0.5 (erf(0) == 0) -- a deterministic, non-flaky "favourite" baseline.
+    assert predicted_line["p_home"] == 0.5
 
     later = now + timedelta(hours=3)
     _insert_final(con, "0022600701", SEASON, date(2026, 11, 10), "PHI", "NYK",
@@ -314,25 +448,8 @@ def test_grading(tmp_path):
     # must never be graded even though a FINAL result exists for it.
     insert_schedule_row(con, "0022600703", date(2026, 11, 10), "DEN", "LAL",
                          now + timedelta(hours=1), season=SEASON)
-    late_line = {
-        "predicted_at": (now + timedelta(hours=1)).isoformat(),
-        "game_id": "0022600703",
-        "season": SEASON,
-        "game_date": "2026-11-10",
-        "tip_off_utc": (now + timedelta(hours=1)).isoformat(),
-        "home_team": "DEN",
-        "away_team": "LAL",
-        "status": "predicted",
-        "reason": None,
-        "spread": 1.0,
-        "p_home": 0.6,
-        "sentence": None,
-        "terms": None,
-        "settings": {"k": 0.1, "margin_cap": 20.0, "season_regression": 0.5,
-                     "hca_window": 100, "sigma": 13.0, "half_life": None},
-        "stale_results": False,
-        "last_result_capture": None,
-    }
+    late_line = _hand_predicted_line("0022600703", "DEN", "LAL",
+                                      now + timedelta(hours=1), 0.6, now + timedelta(hours=1))
     _append_raw_line(log_path(repo_dir, SEASON), late_line)
     _insert_final(con, "0022600703", SEASON, date(2026, 11, 10), "DEN", "LAL",
                   120, 100, observed_at=later, reconstructed=False)
@@ -347,8 +464,113 @@ def test_grading(tmp_path):
     assert g["predicted_at"] == predicted_line["predicted_at"]
     assert g["p_home"] == predicted_line["p_home"]
     assert g["home_won"] is True
-    assert g["correct"] == ((predicted_line["p_home"] >= 0.5) == True)
+    assert g["correct"] is True  # p_home 0.5 >= 0.5 and home (PHI) actually won
 
     # Re-grading adds nothing.
     assert grade(con, repo_dir, SEASON, later + timedelta(hours=1)) == 0
     assert len(read_log(grades_path(repo_dir, SEASON))) == 1
+
+
+def test_grade_correct_is_literal_true_or_false(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    tip = now + timedelta(hours=2)
+
+    insert_schedule_row(con, "0022600910", date(2026, 11, 10), "PHI", "NYK", tip, season=SEASON)
+    insert_schedule_row(con, "0022600911", date(2026, 11, 10), "BOS", "MIA", tip, season=SEASON)
+    _append_raw_line(log_path(repo_dir, SEASON),
+                      _hand_predicted_line("0022600910", "PHI", "NYK", tip, 0.9, now))
+    _append_raw_line(log_path(repo_dir, SEASON),
+                      _hand_predicted_line("0022600911", "BOS", "MIA", tip, 0.2, now))
+
+    later = tip + timedelta(hours=1)
+    # Favourite (p_home 0.9) wins at home -> correct.
+    _insert_final(con, "0022600910", SEASON, date(2026, 11, 10), "PHI", "NYK",
+                  110, 100, observed_at=later, reconstructed=False)
+    # Home underdog (p_home 0.2) wins anyway -> incorrect.
+    _insert_final(con, "0022600911", SEASON, date(2026, 11, 10), "BOS", "MIA",
+                  105, 100, observed_at=later, reconstructed=False)
+
+    assert grade(con, repo_dir, SEASON, later) == 2
+    grades = {g["game_id"]: g for g in read_log(grades_path(repo_dir, SEASON))}
+    assert grades["0022600910"]["correct"] is True
+    assert grades["0022600911"]["correct"] is False
+
+
+def test_grade_uses_the_latest_predicted_line_before_tip(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    tip = now + timedelta(hours=2)
+    insert_schedule_row(con, "0022600920", date(2026, 11, 10), "PHI", "NYK", tip, season=SEASON)
+
+    # Two predicted lines for the same game (e.g. an early run, then a
+    # re-poll later), both logged before tip-off. The LATER one must win.
+    _append_raw_line(log_path(repo_dir, SEASON),
+                      _hand_predicted_line("0022600920", "PHI", "NYK", tip, 0.2, now))
+    _append_raw_line(log_path(repo_dir, SEASON),
+                      _hand_predicted_line("0022600920", "PHI", "NYK", tip, 0.8,
+                                           now + timedelta(minutes=30)))
+
+    later = tip + timedelta(hours=1)
+    _insert_final(con, "0022600920", SEASON, date(2026, 11, 10), "PHI", "NYK",
+                  110, 100, observed_at=later, reconstructed=False)
+
+    assert grade(con, repo_dir, SEASON, later) == 1
+    grades = read_log(grades_path(repo_dir, SEASON))
+    assert len(grades) == 1
+    assert grades[0]["predicted_at"] == (now + timedelta(minutes=30)).isoformat()
+    assert grades[0]["p_home"] == 0.8
+    assert grades[0]["correct"] is True
+
+
+def test_grade_requires_the_final_rows_game_date_to_match_the_line(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    tip = now + timedelta(hours=2)
+    insert_schedule_row(con, "0022600930", date(2026, 11, 10), "PHI", "NYK", tip, season=SEASON)
+    _append_raw_line(log_path(repo_dir, SEASON),
+                      _hand_predicted_line("0022600930", "PHI", "NYK", tip, 0.6, now))
+
+    later = tip + timedelta(hours=1)
+    # A FINAL row for the same game_id but a DIFFERENT game_date (the game
+    # itself was rescheduled, not just corrected) must not be used to grade
+    # this line.
+    _insert_final(con, "0022600930", SEASON, date(2026, 11, 11), "PHI", "NYK",
+                  110, 100, observed_at=later, reconstructed=False)
+
+    assert grade(con, repo_dir, SEASON, later) == 0
+    assert read_log(grades_path(repo_dir, SEASON)) == []
+
+
+def test_grade_cutoff_uses_the_earlier_of_logged_and_current_tip(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    original_tip = now + timedelta(hours=2)
+    insert_schedule_row(con, "0022600940", date(2026, 11, 10), "PHI", "NYK",
+                         original_tip, season=SEASON)
+
+    # Logged before the ORIGINAL tip-off, but after what the schedule will
+    # later say was the real (corrected) tip-off.
+    predicted_at = now + timedelta(hours=1)
+    _append_raw_line(
+        log_path(repo_dir, SEASON),
+        _hand_predicted_line("0022600940", "PHI", "NYK", original_tip, 0.6, predicted_at),
+    )
+
+    # The schedule is corrected to an EARLIER tip-off, before `predicted_at`.
+    corrected_tip = now + timedelta(minutes=30)
+    insert_schedule_row(con, "0022600940", date(2026, 11, 10), "PHI", "NYK",
+                         corrected_tip, observed_at=now + timedelta(minutes=45), season=SEASON)
+
+    later = original_tip + timedelta(hours=1)
+    _insert_final(con, "0022600940", SEASON, date(2026, 11, 10), "PHI", "NYK",
+                  110, 100, observed_at=later, reconstructed=False)
+
+    # The effective cutoff is min(original_tip, corrected_tip) == corrected_tip,
+    # and predicted_at is AFTER that -- never graded.
+    assert grade(con, repo_dir, SEASON, later) == 0
+    assert read_log(grades_path(repo_dir, SEASON)) == []

@@ -2,10 +2,13 @@
 
 Spec: the live-operation plan, task 2. Every public prediction is written
 once, to an append-only JSONL file, before the game tips off -- never
-rewritten -- and is graded only once a captured result (a FINAL row with
-``reconstructed = FALSE``) exists for it. The model is read only through
-``Stage1Predictor``/``AsOfView``, exactly as in the backtest harness, so a
-live run cannot leak a result into its own prediction.
+rewritten -- and is graded once a FINAL result exists for it in the games
+table: ANY FINAL row counts, live-captured or backfilled -- grading does
+not care how a result arrived, only that one did. (``last_result_capture``
+and the ``stale``/``results_missing`` check below are the parts of this
+module that care specifically about *live* captures.) The model is read
+only through ``Stage1Predictor``/``AsOfView``, exactly as in the backtest
+harness, so a live run cannot leak a result into its own prediction.
 
 Local machine time is IST and launchd fires on local time, but the slate is
 a US-Eastern calendar date (``EASTERN``) -- the league's own day boundary.
@@ -30,7 +33,19 @@ from predictor.model.venues import COMPETITIVE_PREFIXES
 
 EASTERN = ZoneInfo("America/New_York")
 START_BUFFER = timedelta(minutes=30)
-STALE_AFTER = timedelta(hours=36)
+
+# `in_season`: how far from `now`, in either direction, a game still counts
+# as "nearby" (used to decide whether a quiet archive means off-season or a
+# broken capture job).
+IN_SEASON_WINDOW = timedelta(days=3)
+
+# `results_missing`: a game's result only counts as overdue once it has had
+# time to be reported (RESULTS_MISSING_GRACE since tip-off) and only while
+# that gap is still recent (within RESULTS_MISSING_WINDOW) -- an old gap
+# (a long-finished game nobody ever captured) must not pin `stale` True
+# forever, and a game that only just tipped off must not trip it either.
+RESULTS_MISSING_GRACE = timedelta(hours=12)
+RESULTS_MISSING_WINDOW = timedelta(days=3)
 
 _NOT_PREDICTED_REASON = (
     "game had already started (or was within 30 minutes of tip-off) when "
@@ -38,6 +53,10 @@ _NOT_PREDICTED_REASON = (
 )
 
 _COMPETITIVE_SQL = ", ".join(f"'{p}'" for p in COMPETITIVE_PREFIXES)
+
+
+class LogError(Exception):
+    """A prediction/grades log file is corrupt or otherwise unusable."""
 
 
 @dataclass(frozen=True)
@@ -110,19 +129,80 @@ def last_capture(con) -> datetime | None:
 
 
 def in_season(con, now: datetime) -> bool:
-    """True if any competitive schedule game tips off within 3 days of ``now``."""
+    """True if any competitive game's LATEST schedule vintage tips off
+    within ``IN_SEASON_WINDOW`` of ``now``, in either direction."""
     db.require_utc(now, "now")
     table = db.POINT_IN_TIME_TABLES["schedule"]
     row = con.execute(
         f"""
-        SELECT 1 FROM {table}
-        WHERE substr(game_id, 1, 3) IN ({_COMPETITIVE_SQL})
+        WITH latest AS (
+            SELECT game_id, tip_off_utc,
+                   row_number() OVER (
+                       PARTITION BY game_id ORDER BY observed_at DESC
+                   ) AS rn
+            FROM {table}
+        )
+        SELECT 1 FROM latest
+        WHERE rn = 1
+          AND substr(game_id, 1, 3) IN ({_COMPETITIVE_SQL})
           AND tip_off_utc BETWEEN ? AND ?
         LIMIT 1
         """,
-        [now - timedelta(days=3), now + timedelta(days=3)],
+        [now - IN_SEASON_WINDOW, now + IN_SEASON_WINDOW],
     ).fetchone()
     return row is not None
+
+
+def results_missing(con, now: datetime) -> list[str]:
+    """Competitive games whose LATEST schedule vintage tipped off between
+    ``RESULTS_MISSING_WINDOW`` and ``RESULTS_MISSING_GRACE`` ago and have no
+    FINAL row in the games table at all -- ANY FINAL row counts, so this is
+    blind to whether a result was live-captured or backfilled; it only
+    asks whether one exists yet. Exposed as its own function because Task
+    4's status command reuses it, not just this module's ``stale`` flag.
+    """
+    db.require_utc(now, "now")
+    schedule_table = db.POINT_IN_TIME_TABLES["schedule"]
+    games_table = db.POINT_IN_TIME_TABLES["games"]
+    rows = con.execute(
+        f"""
+        WITH latest AS (
+            SELECT game_id, tip_off_utc,
+                   row_number() OVER (
+                       PARTITION BY game_id ORDER BY observed_at DESC
+                   ) AS rn
+            FROM {schedule_table}
+        )
+        SELECT l.game_id
+        FROM latest l
+        WHERE l.rn = 1
+          AND substr(l.game_id, 1, 3) IN ({_COMPETITIVE_SQL})
+          AND l.tip_off_utc IS NOT NULL
+          AND l.tip_off_utc BETWEEN ? AND ?
+          AND NOT EXISTS (
+              SELECT 1 FROM {games_table} g
+              WHERE g.game_id = l.game_id AND g.status = 'FINAL'
+          )
+        ORDER BY l.game_id
+        """,
+        [now - RESULTS_MISSING_WINDOW, now - RESULTS_MISSING_GRACE],
+    ).fetchall()
+    return [r[0] for r in rows]
+
+
+def _current_tip(con, game_id: str) -> datetime | None:
+    """The LATEST schedule vintage's tip-off for one game, or None if the
+    game is not (or no longer) in the schedule."""
+    table = db.POINT_IN_TIME_TABLES["schedule"]
+    row = con.execute(
+        f"""
+        SELECT tip_off_utc FROM {table}
+        WHERE game_id = ?
+        QUALIFY row_number() OVER (PARTITION BY game_id ORDER BY observed_at DESC) = 1
+        """,
+        [game_id],
+    ).fetchone()
+    return row[0] if row is not None else None
 
 
 def log_path(repo_dir: Path, season: str) -> Path:
@@ -134,10 +214,26 @@ def grades_path(repo_dir: Path, season: str) -> Path:
 
 
 def read_log(path: Path) -> list[dict]:
+    """Every line of an append-only JSONL log, or ``[]`` if it is missing.
+
+    A non-empty file that does not end with a newline means the last
+    ``write()`` was cut off mid-line (e.g. a crash during an append) --
+    reading it as if the partial line were not there would silently lose
+    evidence that something is wrong, and letting a caller then append a
+    fresh line after that partial one would merge the two into one corrupt
+    line forever. So this raises instead, and raises BEFORE any caller that
+    reads-then-appends (``predict_today``, ``grade``) has a chance to write
+    anything -- the file is never touched here, only read.
+    """
     try:
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return []
+    if text and not text.endswith("\n"):
+        raise LogError(
+            f"the prediction log at {path} ends with an incomplete line; "
+            "it was not modified -- inspect and repair it by hand"
+        )
     return [json.loads(line) for line in text.splitlines() if line.strip()]
 
 
@@ -169,9 +265,7 @@ def predict_today(con, settings: ModelSettings, repo_dir: Path, now: datetime) -
     db.require_utc(now, "now")
     games = slate_for(con, now)
     last_cap = last_capture(con)
-    stale_flag = in_season(con, now) and (
-        last_cap is None or now - last_cap > STALE_AFTER
-    )
+    stale_flag = bool(results_missing(con, now))
     settings_dict = _settings_dict(settings)
     predictor = Stage1Predictor(con, settings)
 
@@ -239,24 +333,36 @@ def predict_today(con, settings: ModelSettings, repo_dir: Path, now: datetime) -
 
 
 def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
-    """Grade every predicted game that now has a captured FINAL result.
+    """Grade every predicted game that now has a FINAL result.
 
     For each ``game_id``, the latest ``predicted`` line whose own
-    ``predicted_at`` precedes its own ``tip_off_utc`` is the one graded --
-    a ``not_predicted`` line, or a prediction logged at or after tip-off
-    (which should never happen, but is never trusted either), is skipped.
-    The result read is a scoring read, like replay's: the latest FINAL row
-    for the game, regardless of when it was observed relative to ``now`` --
-    grading only ever runs after the fact.
+    ``predicted_at`` precedes its own cutoff is the one graded -- a
+    ``not_predicted`` line is never a candidate. The cutoff is the EARLIER
+    of the line's own logged ``tip_off_utc`` and the schedule's CURRENT
+    latest-vintage tip-off for that game: if the game was rescheduled
+    earlier after the line was written, the old logged tip-off would wrongly
+    still call a too-late prediction "before tip-off", so the live schedule
+    is consulted too and whichever tip-off is earlier wins. A missing
+    current schedule row (long gone from the feed) falls back to the
+    line's own tip-off.
+
+    The FINAL row read is a scoring read, like replay's: the latest FINAL
+    row for the game, regardless of when it was observed relative to
+    ``now`` -- grading only ever runs after the fact. It must also match
+    the line's own ``game_date``: a FINAL row for the same ``game_id`` under
+    a DIFFERENT date (the game itself was rescheduled, not just corrected)
+    is not this prediction's result and is not used to grade it.
     """
     log = read_log(log_path(repo_dir, season))
     latest_predicted: dict[str, dict] = {}
     for line in log:
         if line["status"] != "predicted":
             continue
-        tip = datetime.fromisoformat(line["tip_off_utc"])
+        own_tip = datetime.fromisoformat(line["tip_off_utc"])
+        current_tip = _current_tip(con, line["game_id"])
+        cutoff = own_tip if current_tip is None else min(own_tip, current_tip)
         predicted_at = datetime.fromisoformat(line["predicted_at"])
-        if predicted_at >= tip:
+        if predicted_at >= cutoff:
             continue
         current = latest_predicted.get(line["game_id"])
         if current is None or predicted_at > datetime.fromisoformat(current["predicted_at"]):
@@ -273,10 +379,10 @@ def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
         line = latest_predicted[game_id]
         row = con.execute(
             f"SELECT home_points, away_points FROM {games_table} "
-            "WHERE game_id = ? AND status = 'FINAL' "
+            "WHERE game_id = ? AND game_date = ? AND status = 'FINAL' "
             "AND home_points IS NOT NULL AND away_points IS NOT NULL "
             "ORDER BY observed_at DESC LIMIT 1",
-            [game_id],
+            [game_id, date.fromisoformat(line["game_date"])],
         ).fetchone()
         if row is None:
             continue
