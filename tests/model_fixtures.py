@@ -35,6 +35,7 @@ def add_game(
     city="Boston",
     neutral=False,
     final_observed_at=None,
+    reconstructed=True,
 ):
     games = db.POINT_IN_TIME_TABLES["games"]
     sched = db.POINT_IN_TIME_TABLES["schedule"]
@@ -53,8 +54,9 @@ def add_game(
         con.execute(
             f"INSERT INTO {games} (game_id, season, game_date, home_team, away_team,"
             " home_points, away_points, status, reconstructed, observed_at)"
-            " VALUES (?,?,?,?,?,?,?,'FINAL',TRUE,?)",
-            [game_id, season, game_date, home, away, home_pts, away_pts, final_observed_at],
+            " VALUES (?,?,?,?,?,?,?,'FINAL',?,?)",
+            [game_id, season, game_date, home, away, home_pts, away_pts,
+             reconstructed, final_observed_at],
         )
     tip = datetime.combine(game_date + timedelta(days=1), time(0), tzinfo=UTC)
     con.execute(
