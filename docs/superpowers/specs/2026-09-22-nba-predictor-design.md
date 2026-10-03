@@ -643,3 +643,56 @@ Pinned dependencies, seeded simulations, and model version recorded with every p
 - Exact seasons to include in training and backtest (start with one season replay, expand once clean).
 - Which historical odds dataset to adopt, pending a quality assessment during implementation of sub-project 1.
 - Chart visual identity — palette and typography to be chosen during sub-project 5.
+
+---
+
+## 7. Live operation — decided 2026-10-04
+
+What must run from opening night: live result capture and a daily,
+append-only, publicly verifiable prediction log. Briefs and charts (section 5)
+come later.
+
+### Daily rhythm (local time IST; NBA tips ~9:30pm–9:30am IST)
+
+| Time | Job | Does |
+|---|---|---|
+| 10:30 | `ingest-schedule` (exists) | refresh schedule |
+| 11:00 | `capture-results` | archive the raw current-season results, then add a FINAL row for every newly finished game, `observed_at` = real capture time, `reconstructed = FALSE` |
+| 18:00 | `predict-today` | grade any predictions whose results are now in; predict every game on today's US-Eastern slate that has not tipped; append to the log; commit and push |
+
+`capture-results` uses the same endpoint as the historical archive
+(LeagueGameFinder) so team codes and pairing match history exactly. It
+downloads and archives before opening the database (the lock lesson from
+1.1).
+
+### The prediction log
+
+- `predictions/<season>.jsonl` in the repository — one line per game per
+  prediction run, never edited. A line holds: prediction time, game, teams,
+  tip-off, status (`predicted` / `not_predicted` with a reason), spread, win
+  probability, the explanation sentence and its terms, the exact settings,
+  and whether results were stale.
+- The model predicts through `AsOfView` cut at the prediction time — the same
+  leak-proof path as the backtest.
+- A game that has already tipped (laptop asleep, late run) gets a
+  `not_predicted` line rather than disappearing.
+- Results older than 36 hours during the season: still predict, but every
+  line is marked `stale_results: true` with the last capture time.
+- Same-day re-runs add nothing for games already logged that day.
+- **Grades** go to `predictions/<season>-grades.jsonl` (append-only): for each
+  game, the latest `predicted` line made before tip-off is graded once its
+  result is captured.
+
+### Publishing
+
+The repository is pushed daily to a **public GitHub repo**; GitHub's record
+of when each push arrived lets anyone verify a call existed before tip-off.
+The job commits only the log files, only on `main`; on any other branch it
+writes the log, skips the commit, and `status` says so. A failed push is
+retried on the next run; `status` reports "log not published since …".
+
+### Health
+
+`predictor status` adds: live results (stale after 36 hours *while games are
+being played*; quiet in the off-season), prediction log (last run), and
+publication (unpushed commits).
