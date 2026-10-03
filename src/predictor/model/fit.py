@@ -1,9 +1,17 @@
 """Choose every Stage 1 setting from past seasons only (spec 3).
 
-Fit seasons choose the rating settings and adjustment sizes; the calibrate
-season chooses only sigma; test seasons are never read. The fit reads the
-games table directly -- it trains on completed past seasons and is not a
-prediction path -- and raises if a test season is loaded anyway.
+Tuning seasons choose the rating settings, adjustment sizes, and sigma,
+pooled together; test seasons are never read. The fit reads the games table
+directly -- it trains on completed past seasons and is not a prediction
+path -- and raises if a test season is loaded anyway.
+
+`fit()` returns the winner of the walk-forward evaluation's final,
+all-tuning-seasons fit (Task 3 of the walk-forward recalibration,
+`predictor.model.evaluate`): whichever recency variant (equal weight, or a
+half-life) had the lowest mean walk-forward log loss across the tuning
+seasons. `evaluate.evaluate()` in turn delegates grid search, recency
+weighting and sigma selection to `predictor.model.tuning`, the shared
+settings-selection engine used by both fit-model and evaluate-model (Task 2).
 
 Simulation mirrors Stage1Predictor exactly: a date's results are applied
 only after every game on that date has been given its pre-game numbers,
@@ -12,30 +20,33 @@ because in the harness a result becomes visible the day after it is played.
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
-from itertools import groupby, product
-
-import numpy as np
+from itertools import groupby
 
 from predictor import db
 from predictor.model import adjustments as adj
 from predictor.model.adjustments import Coefficients
-from predictor.model.ratings import RatingParams, Ratings, Result, win_probability
+from predictor.model.ratings import RatingParams, Ratings, Result
 from predictor.model.settings import (
-    CALIBRATE_SEASON,
-    FIT_SEASONS,
     TEST_SEASONS,
+    TUNING_SEASONS,
     WARMUP_SEASONS,
     ModelSettings,
 )
 from predictor.model.venues import COMPETITIVE_PREFIXES, VenueIndex
 
-GRID_K = (0.04, 0.06, 0.08, 0.10, 0.12, 0.15)
-GRID_CAP = (15.0, 20.0, 25.0, 30.0)
-GRID_REGRESSION = (0.2, 0.33, 0.5, 0.66)
-GRID_WINDOW = (400, 800, 1230)
-SIGMA_GRID = tuple(i / 100 for i in range(800, 2001, 5))
+# Re-exported for compatibility (callers and tests import the grids from
+# here). Lazy via module __getattr__, not a top-level import, because
+# predictor.model.tuning imports FitError/_Game/_simulate from this module
+# at its own top level -- a top-level import here would be circular.
+_TUNING_NAMES = {"GRID_K", "GRID_CAP", "GRID_REGRESSION", "GRID_WINDOW", "SIGMA_GRID"}
+
+
+def __getattr__(name: str):
+    if name in _TUNING_NAMES:
+        from predictor.model import tuning
+        return getattr(tuning, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class FitError(Exception):
@@ -49,7 +60,7 @@ class _Game:
 
 
 def _load(con, venues: VenueIndex) -> list[_Game]:
-    seasons = WARMUP_SEASONS + FIT_SEASONS + (CALIBRATE_SEASON,)
+    seasons = WARMUP_SEASONS + TUNING_SEASONS
     table = db.POINT_IN_TIME_TABLES["games"]
     prefixes = ", ".join(f"'{p}'" for p in COMPETITIVE_PREFIXES)
     placeholders = ", ".join("?" for _ in seasons)
@@ -97,72 +108,16 @@ def _simulate(params: RatingParams, games: list[_Game]) -> list[tuple[float, flo
     return out
 
 
-def _residuals(games, pre, seasons):
-    rows = [
-        (g, gap, hc)
-        for g, (gap, hc) in zip(games, pre)
-        if g.result.season in seasons and g.result.game_id.startswith("002")
-    ]
-    X = np.array([g.x for g, _, _ in rows], dtype=float).reshape(len(rows), 5)
-    y = np.array(
-        [g.result.home_points - g.result.away_points - gap - hc for g, gap, hc in rows],
-        dtype=float,
-    )
-    return rows, X, y
-
-
 def fit(con) -> ModelSettings:
-    venues = VenueIndex.from_db(con)
-    games = _load(con, venues)
-    fit_count = sum(
-        1 for g in games if g.result.season in FIT_SEASONS and g.result.game_id.startswith("002")
-    )
-    cal_count = sum(
-        1 for g in games
-        if g.result.season == CALIBRATE_SEASON and g.result.game_id.startswith("002")
-    )
-    if fit_count == 0 or cal_count == 0:
-        raise FitError(
-            "not enough history to fit the model: the fit seasons "
-            f"({', '.join(FIT_SEASONS)}) and the calibrate season ({CALIBRATE_SEASON}) "
-            "must have results. Run 'predictor ingest-season <season>' for each"
-        )
+    """The winner of the walk-forward evaluation's final, all-tuning-seasons
+    fit (Task 3): whichever recency variant (equal weight, or a half-life)
+    had the lowest mean walk-forward log loss. Lazy import: `evaluate`
+    imports `_load` from this module at its own top level, so importing it
+    here at module level would be circular.
+    """
+    from predictor.model import evaluate as evaluate_mod
 
-    best = None
-    for k, cap, reg, window in product(GRID_K, GRID_CAP, GRID_REGRESSION, GRID_WINDOW):
-        params = RatingParams(k, cap, reg, window)
-        pre = _simulate(params, games)
-        _, X, y = _residuals(games, pre, FIT_SEASONS)
-        coef, *_ = np.linalg.lstsq(X, y, rcond=None)
-        mse = float(np.mean((y - X @ coef) ** 2))
-        if best is None or mse < best[0]:
-            best = (mse, params, coef)
-    _, params, coef = best
-    coefficients = Coefficients(*(round(float(c), 6) for c in coef))
-
-    pre = _simulate(params, games)
-    rows, _, _ = _residuals(games, pre, (CALIBRATE_SEASON,))
-    spreads = [
-        gap + hc + sum(adj.astuple_terms(coefficients, g.x))
-        for (g, gap, hc) in rows
-    ]
-    outcomes = [g.result.home_points > g.result.away_points for g, _, _ in rows]
-    best_sigma = None
-    for sigma in SIGMA_GRID:
-        loss = 0.0
-        for spread, won in zip(spreads, outcomes):
-            p = min(max(win_probability(spread, sigma), 1e-12), 1 - 1e-12)
-            loss -= math.log(p if won else 1 - p)
-        if best_sigma is None or loss < best_sigma[0]:
-            best_sigma = (loss, sigma)
-
-    return ModelSettings(
-        ratings=params,
-        coefficients=coefficients,
-        sigma=best_sigma[1],
-        fit_games=fit_count,
-        calibrate_games=cal_count,
-    )
+    return evaluate_mod.evaluate(con).final
 
 
 def _fmt_coef(v: float) -> str:
@@ -181,6 +136,10 @@ def _fmt_coef(v: float) -> str:
 
 
 def describe(s: ModelSettings) -> str:
+    # Lazy import: `evaluate` imports `_load` from this module at its own
+    # top level, so importing it here at module level would be circular.
+    from predictor.model import evaluate as evaluate_mod
+
     r, c = s.ratings, s.coefficients
     return "\n".join([
         f"Ratings move {r.k * 100:.0f}% of each game's surprise; blowouts count as at "
@@ -194,6 +153,7 @@ def describe(s: ModelSettings) -> str:
         f"  per time zone crossed                {_fmt_coef(c.tz_per_hour)}",
         f"  playing at altitude (Denver, Utah)   {_fmt_coef(c.altitude)}",
         f"Typical game-to-game spread (sigma): {s.sigma:.2f} points.",
-        f"Chosen on {s.fit_games:,} fit-season games; sigma set on "
-        f"{s.calibrate_games:,} calibrate-season games.",
+        f"Chosen on {s.tuning_games:,} tuning-season games "
+        f"({TUNING_SEASONS[0]} to {TUNING_SEASONS[-1]}); recency: "
+        f"{evaluate_mod.variant_label(s.half_life)}.",
     ])

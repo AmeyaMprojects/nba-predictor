@@ -1,19 +1,19 @@
 {
-  "calibrate_games": 1230,
   "coefficients": {
-    "altitude": 1.17021,
-    "back_to_back": -2.011506,
-    "third_in_four": -0.252834,
-    "travel_per_1000km": -0.022147,
-    "tz_per_hour": -0.140327
+    "altitude": 0.65823,
+    "back_to_back": -2.193468,
+    "third_in_four": -0.497576,
+    "travel_per_1000km": 0.14164,
+    "tz_per_hour": -0.464303
   },
-  "fit_games": 3369,
+  "half_life": null,
   "ratings": {
-    "hca_window": 800,
+    "hca_window": 1230,
     "k": 0.04,
-    "margin_cap": 30.0,
+    "margin_cap": 40.0,
     "season_regression": 0.5
   },
-  "sigma": 13.9,
-  "version": 1
+  "sigma": 12.8,
+  "tuning_games": 8289,
+  "version": 2
 }

@@ -15,12 +15,13 @@ from predictor.model.adjustments import Coefficients
 from predictor.model.ratings import RatingParams
 
 WARMUP_SEASONS = ("2014-15", "2015-16", "2016-17", "2017-18", "2018-19")
-FIT_SEASONS = ("2019-20", "2020-21", "2021-22")
-CALIBRATE_SEASON = "2022-23"
-TEST_SEASONS = ("2023-24", "2024-25", "2025-26")
+TUNING_SEASONS = (
+    "2019-20", "2020-21", "2021-22", "2022-23", "2023-24", "2024-25", "2025-26",
+)
+TEST_SEASONS = ("2026-27",)
 
 SETTINGS_PATH = Path(__file__).with_name("stage1_settings.json")
-_VERSION = 1
+_VERSION = 2
 
 
 class SettingsError(Exception):
@@ -32,17 +33,18 @@ class ModelSettings:
     ratings: RatingParams
     coefficients: Coefficients
     sigma: float
-    fit_games: int
-    calibrate_games: int
+    # None means every tuning season weighs equally; otherwise the number of
+    # seasons a weight halves over (see HALF_LIVES in fit/tuning).
+    half_life: float | None
+    # Count of tuning-season games the settings were chosen on.
+    tuning_games: int
 
 
 def season_role(season: str) -> str:
     if season in WARMUP_SEASONS:
         return "warm-up"
-    if season in FIT_SEASONS:
-        return "fit"
-    if season == CALIBRATE_SEASON:
-        return "calibrate"
+    if season in TUNING_SEASONS:
+        return "tuning"
     if season in TEST_SEASONS:
         return "test"
     return "unassigned"
@@ -54,8 +56,8 @@ def to_json(s: ModelSettings) -> str:
         "ratings": asdict(s.ratings),
         "coefficients": asdict(s.coefficients),
         "sigma": s.sigma,
-        "fit_games": s.fit_games,
-        "calibrate_games": s.calibrate_games,
+        "half_life": s.half_life,
+        "tuning_games": s.tuning_games,
     }
     return json.dumps(doc, indent=2, sort_keys=True) + "\n"
 
@@ -70,6 +72,7 @@ def from_json(text: str) -> ModelSettings:
                 f"({doc.get('version')!r}). {hint}"
             )
         r = doc["ratings"]
+        half_life = doc["half_life"]
         s = ModelSettings(
             ratings=RatingParams(
                 k=float(r["k"]),
@@ -79,14 +82,19 @@ def from_json(text: str) -> ModelSettings:
             ),
             coefficients=Coefficients(**{k: float(v) for k, v in doc["coefficients"].items()}),
             sigma=float(doc["sigma"]),
-            fit_games=int(doc["fit_games"]),
-            calibrate_games=int(doc["calibrate_games"]),
+            half_life=None if half_life is None else float(half_life),
+            tuning_games=int(doc["tuning_games"]),
         )
     except SettingsError:
         raise
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
         raise SettingsError(f"the model settings file is unreadable ({exc!r}). {hint}") from None
-    if not math.isfinite(s.sigma) or s.sigma <= 0 or s.ratings.hca_window < 1:
+    if (
+        not math.isfinite(s.sigma) or s.sigma <= 0
+        or s.ratings.hca_window < 1
+        or (s.half_life is not None and (not math.isfinite(s.half_life) or s.half_life <= 0))
+        or s.tuning_games < 0
+    ):
         raise SettingsError(f"the model settings file holds impossible values. {hint}")
     return s
 

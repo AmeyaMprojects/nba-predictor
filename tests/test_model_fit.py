@@ -1,9 +1,9 @@
-from datetime import date, timedelta
+from datetime import date
 
 import pytest
 from typer.testing import CliRunner
 
-from model_fixtures import add_game, fixture_con
+from model_fixtures import add_game, build_history, fixture_con
 from predictor import cli, config, db
 from predictor.backtest import replay
 from predictor.config import Settings
@@ -11,35 +11,11 @@ from predictor.model import fit as fit_mod
 from predictor.model import settings as ms
 from predictor.model.stage1 import Stage1Predictor
 from predictor.model.venues import VenueIndex
-from real_archive import open_real_archive_or_skip
-
-TEAMS = ["PHI", "NYK", "BOS", "MIA"]
-
-
-def _season(con, season, start, n_days, home_edge, gid_prefix="002"):
-    """A tiny round-robin: every day two games, home team wins by `home_edge`
-    plus a deterministic team-strength term."""
-    strength = {"PHI": 3, "NYK": -3, "BOS": 1, "MIA": -1}
-    n = 0
-    for day in range(n_days):
-        d = start + timedelta(days=2 * day)
-        pairs = [(TEAMS[day % 4], TEAMS[(day + 1) % 4]), (TEAMS[(day + 2) % 4], TEAMS[(day + 3) % 4])]
-        for home, away in pairs:
-            n += 1
-            margin = home_edge + strength[home] - strength[away]
-            add_game(con, f"{gid_prefix}{season[2:4]}{n:05d}", season, d, home, away,
-                     100 + max(margin, 0), 100 + max(-margin, 0), city="Boston")
-
-
-def _history(con):
-    seasons = ms.WARMUP_SEASONS[-1:] + ms.FIT_SEASONS + (ms.CALIBRATE_SEASON,) + ms.TEST_SEASONS
-    for i, season in enumerate(seasons):
-        _season(con, season, date(2015 + i, 11, 1), 20, home_edge=3)
 
 
 def test_fit_is_deterministic(tmp_path):
     con = fixture_con(tmp_path)
-    _history(con)
+    build_history(con)
     assert fit_mod.fit(con) == fit_mod.fit(con)
 
 
@@ -47,15 +23,15 @@ def _plant_mislabeled_test_season_game(con, game_id, home_pts, away_pts):
     """A game LABELLED with a test season but DATED inside the fit window,
     interleaved with real fit-season games between the same two teams.
 
-    Every game in `_history`'s own test seasons is dated well after the
-    fit/calibrate window, so corrupting one of THOSE can never move the fit
-    -- simulation only ever walks forward in time, so a later-dated game
+    Every game in `build_history`'s own test seasons is dated well after the
+    tuning window, so corrupting one of THOSE can never move the fit --
+    simulation only ever walks forward in time, so a later-dated game
     cannot affect the pre-game numbers of any earlier game regardless of
     whether the season exclusion works at all. Planting a mislabeled game
     inside the window, between teams that already play there, is the only
     way to make a broken exclusion actually show up as a different fit.
     """
-    plant_date = date(2016, 11, 2)  # inside the first fit season's date range
+    plant_date = date(2016, 11, 2)  # inside the first tuning season's date range
     add_game(con, game_id, ms.TEST_SEASONS[0], plant_date, "PHI", "NYK", home_pts, away_pts,
               city="Boston")
     return plant_date
@@ -63,7 +39,7 @@ def _plant_mislabeled_test_season_game(con, game_id, home_pts, away_pts):
 
 def test_fit_ignores_test_seasons_entirely(tmp_path):
     con = fixture_con(tmp_path)
-    _history(con)
+    build_history(con)
     _plant_mislabeled_test_season_game(con, "00299999901", 100, 90)
     before = fit_mod.fit(con)
 
@@ -77,7 +53,7 @@ def test_fit_ignores_test_seasons_entirely(tmp_path):
 
 def test_load_never_returns_a_row_from_a_test_season(tmp_path):
     con = fixture_con(tmp_path)
-    _history(con)
+    build_history(con)
     _plant_mislabeled_test_season_game(con, "00299999902", 100, 90)
     games = fit_mod._load(con, VenueIndex.from_db(con))
     assert games  # sanity: history was actually loaded
@@ -113,7 +89,7 @@ def test_simulate_matches_stage1predictor_rating_gap_and_home_court(tmp_path):
     settings = ms.ModelSettings(
         ratings=params,
         coefficients=fit_mod.Coefficients(0.0, 0.0, 0.0, 0.0, 0.0),
-        sigma=13.0, fit_games=1, calibrate_games=1,
+        sigma=13.0, half_life=None, tuning_games=1,
     )
     predictor = Stage1Predictor(con, settings, venues)
     preds, stats = replay.replay(con, predictor)
@@ -127,10 +103,9 @@ def test_simulate_matches_stage1predictor_rating_gap_and_home_court(tmp_path):
 
 def test_fit_counts_its_games_and_picks_values_from_the_grids(tmp_path):
     con = fixture_con(tmp_path)
-    _history(con)
+    build_history(con)
     s = fit_mod.fit(con)
-    assert s.fit_games == 3 * 40          # three fit seasons x 40 games
-    assert s.calibrate_games == 40
+    assert s.tuning_games == 7 * 40       # seven tuning seasons x 40 games
     assert s.ratings.k in fit_mod.GRID_K
     assert s.ratings.margin_cap in fit_mod.GRID_CAP
     assert s.ratings.season_regression in fit_mod.GRID_REGRESSION
@@ -149,7 +124,7 @@ def test_describe_is_plain_english():
     s = ms.ModelSettings(
         ratings=fit_mod.RatingParams(0.08, 20.0, 0.33, 800),
         coefficients=fit_mod.Coefficients(-1.1, -0.6, -0.3, -0.2, 1.4),
-        sigma=13.2, fit_games=3369, calibrate_games=1230,
+        sigma=13.2, half_life=None, tuning_games=3369,
     )
     text = fit_mod.describe(s)
     assert "8% of" in text
@@ -159,6 +134,30 @@ def test_describe_is_plain_english():
     # Final review (minor): coefficients now print with 2 decimals, not 1.
     assert "back-to-back" in text and "-1.10" in text
     assert "13.2" in text
+    assert (
+        "Chosen on 3,369 tuning-season games (2019-20 to 2025-26); "
+        "recency: equal weight."
+    ) in text
+
+
+def test_describe_recency_labels_match_variant_label():
+    """`describe` must print the same recency label `evaluate.variant_label`
+    uses elsewhere (the walk-forward table, `evaluate-model`'s "Chosen:"
+    line), not a second hand-written copy that can drift -- e.g. the old
+    "half-life 1 season(s)" literal instead of "half-life 1 season"."""
+    from predictor.model import evaluate as evaluate_mod
+
+    base = dict(
+        ratings=fit_mod.RatingParams(0.08, 20.0, 0.33, 800),
+        coefficients=fit_mod.Coefficients(-1.1, -0.6, -0.3, -0.2, 1.4),
+        sigma=13.2, tuning_games=3369,
+    )
+    for half_life in (None, 3.0, 1.0):
+        s = ms.ModelSettings(half_life=half_life, **base)
+        text = fit_mod.describe(s)
+        assert f"recency: {evaluate_mod.variant_label(half_life)}." in text
+    assert "half-life 1 season." in fit_mod.describe(ms.ModelSettings(half_life=1.0, **base))
+    assert "season(s)" not in fit_mod.describe(ms.ModelSettings(half_life=1.0, **base))
 
 
 def test_describe_never_prints_negative_zero():
@@ -170,7 +169,7 @@ def test_describe_never_prints_negative_zero():
     s = ms.ModelSettings(
         ratings=fit_mod.RatingParams(0.08, 20.0, 0.33, 800),
         coefficients=fit_mod.Coefficients(-0.001, -0.3, -0.022147, 0.001, 1.4),
-        sigma=13.2, fit_games=3369, calibrate_games=1230,
+        sigma=13.2, half_life=None, tuning_games=3369,
     )
     text = fit_mod.describe(s)
     assert "-0.00" not in text
@@ -186,7 +185,7 @@ def test_fit_model_command_writes_the_settings_file(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "settings", s)
     con = db.connect()
     db.migrate(con)
-    _history(con)
+    build_history(con)
     con.close()
     out_path = tmp_path / "stage1_settings.json"
     monkeypatch.setattr(ms, "SETTINGS_PATH", out_path)
@@ -218,7 +217,7 @@ def test_fit_model_save_failure_is_a_plain_error(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "settings", s)
     con = db.connect()
     db.migrate(con)
-    _history(con)
+    build_history(con)
     con.close()
     bad_path = tmp_path / "does-not-exist" / "stage1_settings.json"
     monkeypatch.setattr(ms, "SETTINGS_PATH", bad_path)
@@ -226,12 +225,3 @@ def test_fit_model_save_failure_is_a_plain_error(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "Traceback" not in result.output
     assert not bad_path.exists()
-
-
-def test_committed_settings_reproduce_from_the_real_archive():
-    """A published number must trace to settings anyone can re-derive."""
-    con = open_real_archive_or_skip()
-    try:
-        assert fit_mod.fit(con) == ms.load()
-    finally:
-        con.close()

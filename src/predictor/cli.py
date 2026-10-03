@@ -652,9 +652,9 @@ def backtest_cmd(
                 )
             else:
                 typer.echo(
-                    "No test-season games were scored "
-                    f"({', '.join(model_settings.TEST_SEASONS)}), so there is no honest "
-                    "headline to report. Ingest those seasons and try again."
+                    f"No live {model_settings.TEST_SEASONS[0]} games have been scored "
+                    "yet, so there is no test headline. The pre-season evaluation is "
+                    "'predictor evaluate-model'."
                 )
             raise typer.Exit(code=1)
         # Finding 2 (t7-fix1): built from the seasons actually present in the
@@ -665,7 +665,7 @@ def backtest_cmd(
         plural = len(headline_seasons) != 1
         scope = (
             f"test season{'s' if plural else ''} {', '.join(headline_seasons)} only -- "
-            f"the model's settings were never tuned on {'them' if plural else 'it'}"
+            f"no setting was fitted on {'them' if plural else 'it'}"
         )
 
     result = report.summarize(
@@ -691,14 +691,14 @@ def backtest_cmd(
         # Final review (minor): the old wording ("earlier rows are seasons
         # the model learned from or was tuned on") is false the moment a row
         # labelled 'unassigned' by `model_settings.season_role` appears (a
-        # season outside warm-up/fit/calibrate/test) -- it is neither
-        # "earlier" nor something the model learned from or was tuned on.
-        # Naming all four non-test roles explicitly stays true regardless of
-        # which roles actually appear in this run's table.
+        # season outside warm-up/tuning/test) -- it is neither "earlier" nor
+        # something the model learned from or was tuned on. Naming the
+        # non-test roles explicitly stays true regardless of which roles
+        # actually appear in this run's table.
         typer.echo(
-            "  Only 'test' rows are the published held-out test; 'warm-up', "
-            "'fit' and 'calibrate' rows are seasons the model learned from or "
-            "was tuned on; 'unassigned' rows are outside the published test."
+            "  Only 'test' rows are the live held-out test; 'warm-up' and "
+            "'tuning' rows are seasons the model learned from or was tuned "
+            "on; 'unassigned' rows are outside the test."
         )
         if stage1_predictor.unknown_cities or stage1_predictor.no_history:
             typer.echo("")
@@ -734,25 +734,30 @@ def backtest_cmd(
                 typer.echo(f"    {b.sentence()}")
 
 
-@app.command("fit-model")
-def fit_model_cmd() -> None:
-    """Choose the model's settings from past seasons and save them."""
+def _open_for_fitting():
+    """Shared read-only open + plain-English duckdb error handling for
+    fit-model and evaluate-model. Returns the connection, or exits 1."""
     import duckdb
 
     from predictor import db
-    from predictor.model import fit as fit_mod
-    from predictor.model import settings as model_settings
 
     try:
-        con = db.connect(read_only=True)
+        return db.connect(read_only=True)
     except duckdb.Error as exc:
         typer.echo(
             f"Could not open the database ({exc}). If another 'predictor' "
             "command is running, wait a moment and try again."
         )
         raise typer.Exit(code=1) from None
+
+
+def _run_evaluation(fit_mod, evaluate_mod, con, progress=None):
+    """Shared `evaluate()` call + plain-English error handling for
+    fit-model and evaluate-model."""
+    import duckdb
+
     try:
-        chosen = fit_mod.fit(con)
+        return evaluate_mod.evaluate(con, progress=progress)
     except fit_mod.FitError as exc:
         typer.echo(f"Cannot fit the model: {exc}.")
         raise typer.Exit(code=1) from None
@@ -763,17 +768,56 @@ def fit_model_cmd() -> None:
             "--season <season>' first."
         )
         raise typer.Exit(code=1) from None
+
+
+@app.command("fit-model")
+def fit_model_cmd() -> None:
+    """Pick settings by walk-forward evaluation and save the winner's."""
+    from predictor.model import evaluate as evaluate_mod
+    from predictor.model import fit as fit_mod
+    from predictor.model import settings as model_settings
+
+    def progress(message: str) -> None:
+        typer.echo(message, err=True)
+
+    con = _open_for_fitting()
+    try:
+        ev = _run_evaluation(fit_mod, evaluate_mod, con, progress=progress)
     finally:
         con.close()
     try:
-        model_settings.save(chosen, model_settings.SETTINGS_PATH)
+        model_settings.save(ev.final, model_settings.SETTINGS_PATH)
     except OSError as exc:
         typer.echo(
             f"Could not save the fitted settings to {model_settings.SETTINGS_PATH} ({exc})."
         )
         raise typer.Exit(code=1) from None
-    typer.echo(fit_mod.describe(chosen))
+    typer.echo(fit_mod.describe(ev.final))
+    for v in ev.variants:
+        typer.echo(
+            f"  walk-forward: {evaluate_mod.variant_label(v.half_life)}: log loss "
+            f"{v.log_loss:.4f}, Brier {v.brier:.4f}, accuracy {v.accuracy * 100:.1f}%"
+        )
+    typer.echo(f"Chosen: {evaluate_mod.variant_label(ev.winner.half_life)}")
     typer.echo(f"Saved to {model_settings.SETTINGS_PATH}.")
+
+
+@app.command("evaluate-model")
+def evaluate_model_cmd() -> None:
+    """Walk-forward evaluate every recency variant and print the result
+    (does not save anything -- see 'predictor fit-model' for that)."""
+    from predictor.model import evaluate as evaluate_mod
+    from predictor.model import fit as fit_mod
+
+    def progress(message: str) -> None:
+        typer.echo(message, err=True)
+
+    con = _open_for_fitting()
+    try:
+        ev = _run_evaluation(fit_mod, evaluate_mod, con, progress=progress)
+    finally:
+        con.close()
+    typer.echo(evaluate_mod.format_evaluation(ev))
 
 
 if __name__ == "__main__":

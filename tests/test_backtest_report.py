@@ -694,7 +694,7 @@ def test_games_scored_line_states_the_test_season_count_separately_from_the_pool
     text = report.format_report(result)
     assert (
         "games scored        : 3 test-season games (30 replayed in total, "
-        "including warm-up, fit and calibrate seasons)" in text
+        "including warm-up and tuning seasons)" in text
     )
 
 
@@ -772,6 +772,43 @@ def test_season_table_by_hand():
 
 def _homefav(n, p_home, home_won, prefix, season):
     return [make(p_home, home_won, f"{prefix}{i}", season=season) for i in range(n)]
+
+
+def test_format_calibration_table_pins_one_rows_exact_text():
+    """Task 3 extracted this out of `format_report` so `evaluate.py` can
+    print the identical rows for its own walk-forward predictions -- pin
+    the exact text of one row directly against `format_calibration_table`,
+    not only indirectly through `format_report`."""
+    preds = [make(0.65, i < 65, f"a{i}") for i in range(100)]
+    text = report.format_calibration_table(metrics.calibration_bins(preds))
+    assert "  Calibration -- when it said X%, how often did that happen?" in text
+    assert " 60- 70%  said  65.0%  actual  65.0%  (100 games)" in text
+
+
+def test_format_publishing_bar_default_season_word_is_unchanged():
+    preds = _homefav(5, 0.9, True, "a", "2024-25") + _homefav(5, 0.1, False, "b", "2024-25")
+    bar = report.publishing_bar(preds)
+    text = report.format_publishing_bar(bar)
+    assert "Beats always-pick-home in every test season:  YES" in text
+    assert (
+        "Verdict: MET -- it beats always-pick-home in every test season and its "
+        "probabilities are within 5 points in every bucket of 50+ games."
+    ) in text
+
+
+def test_format_publishing_bar_season_word_is_configurable():
+    """Task 3's walk-forward evaluation beats always-pick-home on EVALUATED
+    seasons, not held-out TEST seasons -- `season_word` lets it say so
+    without a second copy of this function."""
+    preds = _homefav(5, 0.9, True, "a", "2024-25") + _homefav(5, 0.1, False, "b", "2024-25")
+    bar = report.publishing_bar(preds)
+    text = report.format_publishing_bar(bar, season_word="evaluated season")
+    assert "Beats always-pick-home in every evaluated season:  YES" in text
+    assert "test season" not in text
+    assert (
+        "Verdict: MET -- it beats always-pick-home in every evaluated season and its "
+        "probabilities are within 5 points in every bucket of 50+ games."
+    ) in text
 
 
 def test_publishing_bar_met_case():
@@ -889,6 +926,27 @@ def test_publishing_bar_not_met_when_a_50plus_bucket_is_off_by_6():
         "Verdict: NOT MET -- the accuracy result holds, but its stated probabilities "
         "are off by more than 5 points in at least one bucket. Publish the accuracy "
         "result; do not claim the probabilities are calibrated yet."
+    ) in text
+
+
+def test_publishing_bar_not_met_calibration_only_with_a_non_default_season_word():
+    """Task 3's walk-forward evaluation is not a clean test -- when
+    `season_word` is not the default "test season", the calibration-only
+    NOT MET verdict must not read as a green light to publish ("Publish the
+    accuracy result..."); it must say plainly this is not a clean test."""
+    preds = _homefav(12, 0.30, True, "a", "2023-24") + _homefav(38, 0.30, False, "b", "2023-24")
+    bar = report.publishing_bar(preds)
+    assert bar.all_seasons_beat is True
+    assert bar.calibration_met is False
+    assert bar.met is False
+
+    text = report.format_publishing_bar(bar, season_word="evaluated season")
+    assert "Publish the accuracy result" not in text
+    assert (
+        "Verdict: NOT MET -- the accuracy result holds, but its stated probabilities "
+        "are off by more than 5 points in at least one bucket. The accuracy result "
+        "holds on these seasons, but this is not a clean test; do not claim the "
+        "probabilities are calibrated."
     ) in text
 
 

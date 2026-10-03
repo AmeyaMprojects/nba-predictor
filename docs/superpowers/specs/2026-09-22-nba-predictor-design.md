@@ -317,6 +317,8 @@ would hide them at every historical cutoff.
 
 #### Seasons: fit, calibrate, test
 
+> **Superseded 2026-10-02** — season roles, the test, and how settings are chosen are now defined in **Calibration redesign — decided 2026-10-02** below. Kept as the record of the first delivery.
+
 | Role | Seasons | What happens |
 |---|---|---|
 | Warm-up | 2014-15 → 2018-19 | Results ingested; ratings update; nothing scored or fitted |
@@ -325,6 +327,8 @@ would hide them at every historical cutoff.
 | Test | 2023-24 → 2025-26 | Nothing tuned. The only publishable numbers |
 
 #### What the report adds
+
+> **Superseded 2026-10-02** — season roles, the test, and how settings are chosen are now defined in **Calibration redesign — decided 2026-10-02** below. Kept as the record of the first delivery.
 
 For the test seasons, pooled and per season:
 - accuracy against the always-pick-home baseline
@@ -351,6 +355,8 @@ says so plainly.
   existing path, counted, never dropped.
 
 #### Testing
+
+> **Superseded 2026-10-02** — season roles, the test, and how settings are chosen are now defined in **Calibration redesign — decided 2026-10-02** below. Kept as the record of the first delivery.
 
 1. **Leak safety.** The harness's adversarial tests run with the model
    plugged in. Output is invariant to future fixtures and not-yet-visible
@@ -393,6 +399,93 @@ committed in `src/predictor/model/stage1_settings.json`).
   being a test. Deferred to the owner.
 - **Publishable today:** the accuracy result and the explanations. **Not
   publishable yet:** any claim that the stated probabilities are calibrated.
+
+#### Recalibration — 2026-10-02 (second look)
+
+Rule change, chosen without re-scoring the test seasons: sigma is now fitted
+on all four tuning seasons pooled (2019-20 → 2022-23, 4,599 games) instead of
+2022-23 alone. Per-season optima were 12.7 / 13.3 / 12.85 / 13.9 — 2022-23 was
+the outlier — and the pooled value is **13.15**. Nothing else changed.
+
+Second-look result on the same test seasons (labelled as such in the report):
+- accuracy unchanged (67.3% vs 54.7%); Brier 0.2083 → 0.2079; log loss
+  0.6038 → 0.6027; average calibration gap 2.6 → 2.1 points.
+- The upper half is now calibrated (said 83.9% → 84.9%; said 92.1% → 92.5%).
+- **The bar is still NOT met** at the low end: said 16.4% → 6.4% (78 games);
+  said 35.5% → 29.5% (451 games). Strong road favourites won more often in
+  2023-26 than the model said.
+- On the tuning seasons, with the same settings, every bucket of 50+ games is
+  within 4.5 points. The low-end miss appears **only** in the test seasons, so
+  no further correction can be chosen from tuning data; fitting one now would
+  be fitting to the test. It is treated as out-of-sample drift.
+- **Decision:** stop adjusting. The clean judge is the 2026-27 season,
+  predicted live before tip-off. Any model change to address road favourites
+  (e.g. faster-moving ratings) is a design change for a later sub-project.
+  *Reversed the same day at the owner's request — see* **Calibration
+  redesign — decided 2026-10-02** *below.*
+
+#### Calibration redesign — decided 2026-10-02
+
+The second look showed the remaining miss is structural: after 2023 the
+league is more lopsided (rating-gap spread 6.5 vs 5.4) and slow ratings
+understate gaps (actual margin rises 1.12 points per rating point, against
+0.98 before), so strong road favourites win more than predicted. Fixing it
+requires studying 2023-26, so those seasons are **retired as the test**.
+
+- **Season roles:** warm-up 2014-15 → 2018-19; **tuning 2019-20 → 2025-26**;
+  **test 2026-27, predicted live**. The first-look 2023-26 accuracy result
+  stays on record as such and is not overwritten.
+- **Walk-forward evaluation** replaces the held-out test for design choices:
+  each season 2020-21 → 2025-26 is predicted with settings chosen only on the
+  tuning seasons before it. The publishing bar is judged on these
+  predictions. The method was designed after the first look at 2023-26, and
+  the report says so; the calibration claim still waits for 2026-27 live.
+- **Wider search:** rating speed 2–20%, summer pull-back 0–66%, blowout cap
+  15–40, home-court window unchanged; sigma chosen on the same seasons.
+- **Recency variants:** equal weight; half-life 3 seasons; half-life 1
+  season. Weights apply to every choice (grid, coefficients, sigma). The
+  variant with the lowest pooled walk-forward log loss wins; within 0.001,
+  the simpler variant (in that order) wins.
+- **Final settings for 2026-27** are chosen on all seven tuning seasons with
+  the winning variant. `predictor evaluate-model` prints the walk-forward
+  report; `predictor fit-model` saves the final settings; `backtest --model
+  stage1` reports only live 2026-27 games once they exist.
+- **No re-cutting:** if walk-forward still misses the bar, the report says
+  NOT MET and 2026-27 live decides.
+
+#### Walk-forward result — 2026-10-03
+
+`predictor evaluate-model` (7,230 games, 2020-21 → 2025-26, each season
+predicted with settings chosen only on earlier tuning seasons):
+
+| Recency variant | log loss | Brier | accuracy |
+|---|---|---|---|
+| equal weight (**chosen**) | 0.6205 | 0.2158 | 65.4% |
+| half-life 3 seasons | 0.6205 | 0.2157 | 65.4% |
+| half-life 1 season | 0.6207 | 0.2159 | 65.4% |
+
+The three variants scored within 0.0002 of each other; equal weight is kept
+because no later variant beat it by more than 0.001. Every fold still chose
+rating speed 4%, so faster ratings were not selected. Compared with the first
+delivery, the chosen blowout cap moved from 30 to 40 and sigma is chosen on
+more seasons; no experiment isolated which change matters, so this is an
+observation, not a measured cause. The chosen cap (40) and the final
+home-court window (1,230) sit at the top of their grids, so better values may
+lie beyond them.
+
+- **Beats always-pick-home in all six seasons** (62.0–69.0% vs 54.3–58.0%).
+- **Calibration within 5 points in every bucket of 50+ games**; worst
+  20–30% bucket said 25.8%, happened 22.1% (384 games).
+- **Publishing bar: MET on walk-forward** — not a clean test, because the
+  method was designed after the first look at 2023-26; the report says so.
+- **Final settings for 2026-27:** k 0.04, cap 40, regression 0.5, window
+  1,230, sigma 12.80 (all seven tuning seasons, equal weight).
+- **Before publishing any number:** run `uv run pytest -m slow` (it checks
+  that `evaluate-model` reproduces the committed settings from the archive)
+  and quote `predictor evaluate-model` output verbatim, caveat included.
+- **Publishable now:** the first-look accuracy result, the walk-forward
+  result *with its caveat*, and the explanations. **Calibration claims:**
+  2026-27 live remains the clean judge.
 
 ### Stage 1 — additive points model
 
