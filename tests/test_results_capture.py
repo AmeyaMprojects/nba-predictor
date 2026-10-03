@@ -21,8 +21,11 @@ from typer.testing import CliRunner
 
 from predictor import cli, config, db, raw_store
 from predictor.asof import AsOfView
+from predictor.backtest import replay
+from predictor.backtest.baselines import fixed_probability
 from predictor.config import Settings
 from predictor.sources import nba_stats, results
+from schedule_rows import insert_schedule_row
 
 runner = CliRunner()
 
@@ -46,6 +49,18 @@ def _game_df(game_id, game_date, home, away, home_pts, away_pts):
         [
             _row(game_id, game_date, home, f"{home} vs. {away}", home_pts),
             _row(game_id, game_date, away, f"{away} @ {home}", away_pts),
+        ]
+    )
+
+
+def _malformed_df(game_id, game_date):
+    """Three team-rows for one GAME_ID -- `pair_team_rows` cannot resolve a
+    home/away pairing from this and drops the group entirely."""
+    return pd.DataFrame(
+        [
+            _row(game_id, game_date, "PHI", "PHI vs. NYK", 119),
+            _row(game_id, game_date, "NYK", "NYK @ PHI", 110),
+            _row(game_id, game_date, "BOS", "BOS @ PHI", 100),
         ]
     )
 
@@ -116,6 +131,42 @@ def test_unplayed_game_is_not_in_downloaded_games(con):
     df = _game_df("0022600002", "2026-10-05", "BOS", "MIA", None, None)
     downloaded = results.download(SEASON, fetched_at=FETCHED, fetch=lambda s: df)
     assert downloaded.games == []
+
+
+# --- download(): unpairable (dropped) games are never silently lost -----
+
+
+def test_dropped_games_are_recorded_and_logged(con, capsys):
+    df = _malformed_df("0022600005", "2026-10-07")
+    downloaded = results.download(SEASON, fetched_at=FETCHED, fetch=lambda s: df)
+
+    assert downloaded.dropped == ["0022600005"]
+    assert downloaded.games == []
+    assert "nba_stats: DROPPED" in capsys.readouterr().out
+
+
+def test_dropped_games_survive_into_captureresult(con):
+    df = _malformed_df("0022600005", "2026-10-07")
+    downloaded = results.download(SEASON, fetched_at=FETCHED, fetch=lambda s: df)
+
+    result = results.load(con, downloaded)
+
+    assert result.dropped == ["0022600005"]
+    assert result.new_finals == 0
+
+
+# --- download(): a partial (one-sided) score is a loud anomaly, not a ---
+# --- silently-ignored "not yet played" game -----------------------------
+
+
+def test_partial_score_prints_a_loud_warning_and_is_excluded(con, capsys):
+    df = _game_df("0022600006", "2026-10-08", "BOS", "MIA", 100, None)
+    downloaded = results.download(SEASON, fetched_at=FETCHED, fetch=lambda s: df)
+
+    assert downloaded.games == []
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "0022600006" in out
 
 
 # --- load(): new finished game -------------------------------------------
@@ -219,7 +270,7 @@ def test_load_rolls_back_earlier_games_when_a_later_one_fails(con):
         status="FINAL",
     )
     downloaded = results.Downloaded(
-        season=SEASON, fetched_at=FETCHED, blob_key="k", games=[good, bad]
+        season=SEASON, fetched_at=FETCHED, blob_key="k", games=[good, bad], dropped=[]
     )
 
     with pytest.raises(duckdb.Error):
@@ -253,6 +304,31 @@ def test_asofview_does_not_see_the_final_before_its_capture_time(con):
     assert len(finals_at) == 1
 
 
+# --- replay integration: a captured result must actually be predicted ---
+# --- (the Fix-round-1 regression: a SCHEDULED stub stamped at capture    ---
+# --- time, i.e. after tip-off, made replay's earliest-SCHEDULED sanity   ---
+# --- bound fire backwards and skip every live-captured game) ------------
+
+
+def test_captured_result_is_predicted_by_replay(con):
+    game_id = "0022600007"
+    game_date = date(2026, 10, 9)
+    tip = datetime(2026, 10, 9, 23, 0, tzinfo=UTC)
+    insert_schedule_row(con, game_id, game_date, "PHI", "NYK", tip, season=SEASON)
+
+    df = _game_df(game_id, "2026-10-09", "PHI", "NYK", 119, 110)
+    captured_at = tip + timedelta(hours=3)  # the game ends, then capture runs
+    results.load(con, results.download(SEASON, fetched_at=captured_at, fetch=lambda s: df))
+
+    preds, stats = replay.replay(con, fixed_probability(0.6))
+
+    assert stats.predicted == 1
+    assert stats.skipped_buffer_too_early == 0
+    assert stats.skipped_result_visible == 0
+    assert len(preds) == 1
+    assert preds[0].game_id == game_id
+
+
 # --- CLI: capture-results ----------------------------------------------------
 
 
@@ -282,15 +358,22 @@ def test_cli_success_reports_counts(tmp_path, monkeypatch):
 
 def test_cli_default_season_is_the_current_one(tmp_path, monkeypatch):
     _point_settings_at_tmp(tmp_path, monkeypatch)
+    # Pinned, not the wall clock: cli._now() is the single indirection point
+    # the command uses to pick a default season.
+    fixed_now = datetime(2027, 3, 1, 12, 0, tzinfo=UTC)
+    monkeypatch.setattr(cli, "_now", lambda: fixed_now)
     seen = []
 
     def fake(season):
         seen.append(season)
-        return results.Downloaded(season=season, fetched_at=FETCHED, blob_key="k", games=[])
+        return results.Downloaded(
+            season=season, fetched_at=FETCHED, blob_key="k", games=[], dropped=[]
+        )
 
     monkeypatch.setattr(results, "download", fake)
-    runner.invoke(cli.app, ["capture-results"])
-    assert seen == [config.season_label(datetime.now(UTC))]
+    out = runner.invoke(cli.app, ["capture-results"])
+    assert out.exit_code == 0, out.output
+    assert seen == [config.season_label(fixed_now)]
 
 
 def test_cli_download_failure_is_plain_english_and_db_is_never_opened(tmp_path, monkeypatch):
@@ -316,7 +399,9 @@ def test_cli_database_error_while_loading_is_plain_english(tmp_path, monkeypatch
     _point_settings_at_tmp(tmp_path, monkeypatch)
 
     def fake(season):
-        return results.Downloaded(season=season, fetched_at=FETCHED, blob_key="k", games=[])
+        return results.Downloaded(
+            season=season, fetched_at=FETCHED, blob_key="k", games=[], dropped=[]
+        )
 
     def broken_load(con, downloaded):
         raise duckdb.ConstraintException("NOT NULL constraint failed")
@@ -329,3 +414,36 @@ def test_cli_database_error_while_loading_is_plain_english(tmp_path, monkeypatch
     assert out.exit_code == 1
     assert f"Could not save the {SEASON} results to the database" in out.output
     assert "Traceback" not in out.output
+
+
+def test_cli_raw_store_conflict_is_plain_english(tmp_path, monkeypatch):
+    _point_settings_at_tmp(tmp_path, monkeypatch)
+
+    def conflict(season):
+        raise raw_store.RawStoreConflict(f"key {season}_x.json.gz already holds different bytes")
+
+    monkeypatch.setattr(results, "download", conflict)
+    out = runner.invoke(cli.app, ["capture-results", "--season", SEASON])
+
+    assert out.exit_code == 1
+    assert "already archived" in out.output
+    assert "Traceback" not in out.output
+
+
+def test_cli_exits_nonzero_and_warns_when_games_were_dropped(tmp_path, monkeypatch):
+    _point_settings_at_tmp(tmp_path, monkeypatch)
+    df = _malformed_df("0022600005", "2026-10-07")
+    original_download = results.download
+    monkeypatch.setattr(
+        results, "download",
+        lambda season: original_download(season, fetched_at=FETCHED, fetch=lambda s: df),
+    )
+
+    out = runner.invoke(cli.app, ["capture-results", "--season", SEASON])
+
+    assert out.exit_code == 1
+    assert "WARNING" in out.output
+    assert "0022600005" in out.output
+    # The success line (0 new results) still prints -- the WARNING is in
+    # addition to it, not instead of it.
+    assert f"results {SEASON}: 0 new game result(s) recorded (0 already known)" in out.output

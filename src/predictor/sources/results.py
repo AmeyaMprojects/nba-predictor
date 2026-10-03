@@ -20,7 +20,7 @@ import gzip
 import io
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pandas as pd
 
@@ -47,6 +47,10 @@ class Downloaded:
     fetched_at: datetime
     blob_key: str
     games: list[nba_stats.GameRow]
+    # game_ids `pair_team_rows` could not resolve into a GameRow at all
+    # (e.g. a GAME_ID group with other than 2 team-rows, or disagreeing
+    # home/away parses) -- never silently lost, see `download()` below.
+    dropped: list[str]
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,7 @@ class CaptureResult:
     new_finals: int
     already_known: int
     blob_key: str
+    dropped: list[str]
 
 
 def archive_key(season: str, fetched_at: datetime) -> str:
@@ -75,6 +80,19 @@ def download(
 
     Only FINAL games (both scores present) are kept in `.games` -- a
     scheduled-but-unplayed game carries nothing new for `load()` to record.
+    Two anomalies are never silently swallowed, only logged and surfaced on
+    the returned object for the caller (the CLI) to report loudly:
+
+    - A GAME_ID group `pair_team_rows` could not resolve at all (wrong row
+      count, unparseable/disagreeing MATCHUP text) -- collected in
+      `.dropped`, mirroring `nba_stats.ingest_season`'s own `dropped` list.
+    - A game with a score for only ONE team -- genuinely corrupt/partial
+      data, not an ordinary not-yet-played game (which has NEITHER score).
+      `pair_team_rows` cannot tell these apart itself (both come back
+      `status="SCHEDULED"`), so it is detected here and printed loudly;
+      the game is still excluded from `.games` (it is not a confirmed
+      FINAL), but silently treating it exactly like an unplayed game would
+      hide a real data problem.
     """
     fetched_at = db.require_utc(
         fetched_at if fetched_at is not None else datetime.now(UTC), "fetched_at"
@@ -90,23 +108,28 @@ def download(
         orient="split",
         dtype=_READ_DTYPE,
     )
-    games = [
-        game
-        for game in nba_stats.pair_team_rows(archived, season)
-        if game.status == "FINAL"
+    dropped: list[nba_stats.DroppedGame] = []
+    paired = nba_stats.pair_team_rows(archived, season, dropped=dropped)
+
+    partial_score = [
+        g for g in paired if (g.home_points is None) != (g.away_points is None)
     ]
-    return Downloaded(season=season, fetched_at=fetched_at, blob_key=key, games=games)
+    if partial_score:
+        ids = ", ".join(g.game_id for g in partial_score)
+        print(
+            f"results: WARNING -- {len(partial_score)} game(s) have a score "
+            f"for only one team (partial/corrupt data), NOT treated as "
+            f"final: {ids}"
+        )
 
-
-# See the long comment in `load()` below: a brand-new game (no row at all
-# yet) gets a SCHEDULED stub alongside its FINAL row so that
-# `backtest.replay`'s earliest-SCHEDULED sanity bound has something to find.
-# Both rows would otherwise collide on the games table's PRIMARY KEY
-# (game_id, observed_at) if stamped with the exact same instant, so the stub
-# is stamped one microsecond earlier -- functionally the same capture moment
-# for every real purpose (nothing reads observed_at at sub-second
-# granularity), but a distinct primary key.
-_STUB_LEAD = timedelta(microseconds=1)
+    games = [game for game in paired if game.status == "FINAL"]
+    return Downloaded(
+        season=season,
+        fetched_at=fetched_at,
+        blob_key=key,
+        games=games,
+        dropped=[d.game_id for d in dropped],
+    )
 
 
 def load(con, downloaded: Downloaded) -> CaptureResult:
@@ -120,18 +143,26 @@ def load(con, downloaded: Downloaded) -> CaptureResult:
     reconstructed by the historical `nba_stats.ingest_season` backfill) is
     counted in `already_known` and never inserted again.
 
-    A game with NO row at all yet (the schedule ingest never saw it --
-    expected to be rare) also gets a SCHEDULED stub (NULL points) alongside
-    its FINAL row, so `backtest.replay`'s earliest-SCHEDULED sanity check
-    (see replay.py's FIX 7/21) finds something instead of silently skipping
-    its bound for this game; see `_STUB_LEAD` above for why the stub's
-    timestamp is one microsecond earlier rather than identical.
+    No companion SCHEDULED row is written for a game with no row at all.
+    An earlier draft of this function added one (stamped at the same
+    capture instant) so that `backtest.replay`'s earliest-SCHEDULED sanity
+    bound (see replay.py's FIX 7/21) would have something to find -- but
+    that stub is stamped AFTER tip-off (capture happens once a game is
+    already final), so it made the sanity bound itself backwards: every
+    live-captured game's cutoff (tip - buffer) would then fall BEFORE this
+    "earliest SCHEDULED" timestamp, and replay would skip the game as
+    "buffer too early" -- mislabelling it an OBSERVED schedule timestamp
+    besides, which it is not. `replay.py` already handles a game with NO
+    SCHEDULED row in the games table correctly: `earliest_scheduled` comes
+    back `None` and that particular sanity bound is simply not applied for it
+    (the real leak guard -- "is this game's own FINAL row already visible
+    at the cutoff" -- does not depend on a SCHEDULED row at all). See
+    `tests/test_results_capture.py::test_captured_result_is_predicted_by_replay`.
 
     Rolls back and re-raises on any error -- nothing is left half-written.
     """
     table = db.POINT_IN_TIME_TABLES["games"]
     observed_at = db.require_utc(downloaded.fetched_at, "fetched_at")
-    stub_at = observed_at - _STUB_LEAD
     new_finals = 0
     already_known = 0
     con.execute("BEGIN")
@@ -144,25 +175,6 @@ def load(con, downloaded: Downloaded) -> CaptureResult:
             if has_final is not None:
                 already_known += 1
                 continue
-
-            has_any_row = con.execute(
-                f"SELECT 1 FROM {table} WHERE game_id = ? LIMIT 1",
-                [game.game_id],
-            ).fetchone()
-            if has_any_row is None:
-                con.execute(
-                    f"INSERT INTO {table} (game_id, season, game_date, home_team,"
-                    " away_team, home_points, away_points, status, reconstructed,"
-                    " observed_at) VALUES (?,?,?,?,?,NULL,NULL,'SCHEDULED',FALSE,?)",
-                    [
-                        game.game_id,
-                        game.season,
-                        game.game_date,
-                        game.home_team,
-                        game.away_team,
-                        stub_at,
-                    ],
-                )
 
             con.execute(
                 f"INSERT INTO {table} (game_id, season, game_date, home_team,"
@@ -190,4 +202,5 @@ def load(con, downloaded: Downloaded) -> CaptureResult:
         new_finals=new_finals,
         already_known=already_known,
         blob_key=downloaded.blob_key,
+        dropped=downloaded.dropped,
     )

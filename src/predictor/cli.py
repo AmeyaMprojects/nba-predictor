@@ -7,6 +7,16 @@ from predictor.backtest.replay import DEFAULT_BUFFER_MINUTES
 app = typer.Typer(help="NBA prediction data spine and pipeline.")
 
 
+def _now():
+    """The current UTC instant -- a single indirection point so a command's
+    "now" (used, e.g., to pick a default season) can be monkeypatched in
+    tests instead of depending on the wall clock. Shared across commands
+    that need it (capture-results today; predict-today will reuse it)."""
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC)
+
+
 @app.callback()
 def main() -> None:
     """NBA prediction data spine and pipeline."""
@@ -366,17 +376,15 @@ def capture_results_cmd(
     ),
 ) -> None:
     """Fetch NBA results, archive them, and record newly finished games."""
-    from datetime import UTC, datetime
-
     import duckdb
     import requests
 
-    from predictor import db
+    from predictor import db, raw_store
     from predictor.config import season_label, settings
     from predictor.sources import results
 
     settings.ensure_dirs()
-    target = season or season_label(datetime.now(UTC))
+    target = season or season_label(_now())
 
     # Raw-first, and the download happens entirely before the database is
     # opened -- same discipline as ingest-schedule: a slow or retried
@@ -388,6 +396,13 @@ def capture_results_cmd(
         typer.echo(
             f"Could not download results for {target} ({exc}); nothing was saved. "
             "The next scheduled run will try again."
+        )
+        raise typer.Exit(code=1) from None
+    except raw_store.RawStoreConflict as exc:
+        typer.echo(
+            f"The {target} results download clashes with a copy already "
+            f"archived under the same name ({exc}). Nothing was overwritten "
+            "or loaded; the next scheduled run will try again."
         )
         raise typer.Exit(code=1) from None
 
@@ -413,6 +428,17 @@ def capture_results_cmd(
         f"results {result.season}: {result.new_finals} new game result(s) recorded "
         f"({result.already_known} already known)"
     )
+
+    if result.dropped:
+        ids = ", ".join(result.dropped)
+        typer.echo(
+            f"WARNING: {len(result.dropped)} game(s) for the {target} season "
+            "could NOT be captured, because this tool could not figure out "
+            "which team was home and which was away for them. The affected "
+            f"game ID(s): {ids}. See the lines above starting with "
+            "'nba_stats: DROPPED' for the reason for each one."
+        )
+        raise typer.Exit(code=1)
 
 
 @app.command("ingest-odds")
