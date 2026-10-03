@@ -91,6 +91,11 @@ class Stage1Predictor:
         self._ratings = Ratings(self.settings.ratings)
         self._applied: set[str] = set()
         self._last_applied_key = None
+        # The latest season explain() has entered. Ratings regress the first
+        # time a new season is entered, so a result from an EARLIER season
+        # applied after that would switch Ratings back and forward again,
+        # regressing twice more; _needs_rebuild treats it as out of order.
+        self._season_entered: str | None = None
         self._as_of = None
 
     def __call__(self, game: GameToPredict, view) -> float:
@@ -99,6 +104,8 @@ class Stage1Predictor:
     def explain(self, game: GameToPredict, view) -> Breakdown:
         self._catch_up(view)
         self._ratings.enter_season(game.season)
+        if self._season_entered is None or game.season > self._season_entered:
+            self._season_entered = game.season
 
         venue = self.venues.venue(game.game_id)
         city = venue.city if venue else None
@@ -184,6 +191,15 @@ class Stage1Predictor:
         is safe to apply incrementally: a fresh rebuild would place it
         after everything already applied too, in the same relative order.
         """
+        # A result from a season earlier than one explain() has already
+        # entered must also rebuild, even when its key sorts after everything
+        # applied (a late-observed playoff result, for example): applying it
+        # incrementally would make Ratings re-enter the old season and then
+        # regress again on the next explain().
+        if self._season_entered is not None and any(
+            season < self._season_entered for _gid, season, *_rest in new_rows
+        ):
+            return True
         if self._last_applied_key is None:
             return False
         for gid, _season, gd, *_rest in new_rows:
