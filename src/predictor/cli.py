@@ -359,6 +359,62 @@ def ingest_schedule_cmd(
         raise typer.Exit(code=1)
 
 
+@app.command("capture-results")
+def capture_results_cmd(
+    season: str = typer.Option(
+        None, help="Season to capture, e.g. 2024-25. Defaults to the current season."
+    ),
+) -> None:
+    """Fetch NBA results, archive them, and record newly finished games."""
+    from datetime import UTC, datetime
+
+    import duckdb
+    import requests
+
+    from predictor import db
+    from predictor.config import season_label, settings
+    from predictor.sources import results
+
+    settings.ensure_dirs()
+    target = season or season_label(datetime.now(UTC))
+
+    # Raw-first, and the download happens entirely before the database is
+    # opened -- same discipline as ingest-schedule: a slow or retried
+    # download must never hold the DuckDB write lock the unattended news
+    # job also needs.
+    try:
+        downloaded = results.download(target)
+    except requests.RequestException as exc:
+        typer.echo(
+            f"Could not download results for {target} ({exc}); nothing was saved. "
+            "The next scheduled run will try again."
+        )
+        raise typer.Exit(code=1) from None
+
+    try:
+        con = db.connect_with_retry()
+    except duckdb.Error as exc:
+        typer.echo(
+            f"Could not open the database to save results ({exc}). The download "
+            "is archived on disk; the next scheduled run will try again."
+        )
+        raise typer.Exit(code=1) from None
+    try:
+        db.migrate(con)
+        result = results.load(con, downloaded)
+    except duckdb.Error as exc:
+        typer.echo(
+            f"Could not save the {target} results to the database ({exc}). The "
+            "download is archived on disk; the next scheduled run will try again."
+        )
+        raise typer.Exit(code=1) from None
+
+    typer.echo(
+        f"results {result.season}: {result.new_finals} new game result(s) recorded "
+        f"({result.already_known} already known)"
+    )
+
+
 @app.command("ingest-odds")
 def ingest_odds_cmd() -> None:
     """Fetch and store one odds snapshot. Budgeted to one call per run."""
