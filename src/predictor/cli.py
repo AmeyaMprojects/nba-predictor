@@ -17,6 +17,16 @@ def _now():
     return datetime.now(UTC)
 
 
+def _repo_dir():
+    """The git checkout `predict-today` reads/writes `predictions/*.jsonl`
+    in and publishes from -- a single indirection point so tests can point
+    it at a throwaway repo instead of the real one (see
+    global-constraints.md: tests must NEVER touch the real repository)."""
+    from predictor.config import PROJECT_ROOT
+
+    return PROJECT_ROOT
+
+
 @app.callback()
 def main() -> None:
     """NBA prediction data spine and pipeline."""
@@ -439,6 +449,96 @@ def capture_results_cmd(
             "'nba_stats: DROPPED' for the reason for each one."
         )
         raise typer.Exit(code=1)
+
+
+@app.command("predict-today")
+def predict_today_cmd(
+    no_push: bool = typer.Option(
+        False, "--no-push", help="Write and commit the log locally, but do not push it."
+    ),
+) -> None:
+    """Predict today's NBA slate, grade finished games, and publish the log.
+
+    Reads the database read-only (prediction never writes to it); the only
+    writes this command makes are appends to `predictions/*.jsonl` and, if
+    the checkout is on `main`, a git commit (and push) of exactly those
+    files.
+    """
+    import duckdb
+
+    from predictor import db
+    from predictor.config import season_label
+    from predictor.model import publish
+    from predictor.model import settings as model_settings
+    from predictor.model.live import (
+        EASTERN,
+        LogError,
+        grade,
+        grades_path,
+        log_path,
+        predict_today,
+        slate_for,
+    )
+
+    now = _now()
+    repo_dir = _repo_dir()
+
+    try:
+        loaded_settings = model_settings.load()
+    except model_settings.SettingsError as exc:
+        typer.echo(f"Cannot run predict-today: {exc}")
+        raise typer.Exit(code=1) from None
+
+    try:
+        con = db.connect(read_only=True)
+    except duckdb.Error as exc:
+        if "conflicting lock is held" in str(exc).lower():
+            typer.echo(
+                "Could not open the database -- another 'predictor' command "
+                "is using it right now. Wait a moment and try 'predictor "
+                "predict-today' again."
+            )
+        else:
+            typer.echo(
+                f"Could not open the database ({exc}). Run an ingest command "
+                "first (for example 'predictor ingest-schedule'), then try "
+                "'predictor predict-today' again."
+            )
+        raise typer.Exit(code=1) from None
+
+    try:
+        slate = slate_for(con, now)
+        season = slate[0].season if slate else season_label(now)
+        graded = grade(con, repo_dir, season, now)
+        result = predict_today(con, loaded_settings, repo_dir, now)
+    except LogError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1) from None
+    finally:
+        con.close()
+
+    date_str = now.astimezone(EASTERN).date().isoformat()
+    paths = [log_path(repo_dir, season), grades_path(repo_dir, season)]
+    publish_result = publish.commit_and_push(
+        repo_dir, paths, f"predictions: {date_str} slate", push=not no_push
+    )
+
+    typer.echo(
+        f"slate {date_str}: {result.predicted} predicted, "
+        f"{result.not_predicted} not predicted, "
+        f"{result.skipped_duplicates} duplicate(s) skipped"
+    )
+    if result.stale:
+        typer.echo(
+            "WARNING: recent results are missing -- today's predictions are "
+            "marked stale_results."
+        )
+    typer.echo(f"grades appended: {graded}")
+    typer.echo(publish_result.message)
+    # Exit 1 only on real failures (settings/database/log corruption, all
+    # handled above). A failed push is not one: the prediction and grading
+    # data is already safely on disk (and, if committed=True, in git) --
+    # only the push itself is retried, automatically, by the next run.
 
 
 @app.command("ingest-odds")
