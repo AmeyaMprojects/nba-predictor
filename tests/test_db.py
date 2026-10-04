@@ -301,3 +301,34 @@ def test_connect_with_retry_gives_up_after_the_last_attempt(monkeypatch):
     monkeypatch.setattr(db, "connect", locked)
     with pytest.raises(duckdb.IOException):
         db.connect_with_retry(attempts=3, wait_seconds=0, sleep=lambda s: None)
+
+
+def test_connect_with_retry_passes_read_only_through_on_every_attempt(tmp_path, monkeypatch):
+    import duckdb
+
+    real_connect = db.connect
+    seen: list[bool] = []
+
+    def flaky(path=None, *, read_only=False):
+        seen.append(read_only)
+        if len(seen) < 2:
+            raise duckdb.IOException("Conflicting lock is held in x")
+        return real_connect(tmp_path / "t.duckdb")
+
+    monkeypatch.setattr(db, "connect", flaky)
+    con = db.connect_with_retry(read_only=True, attempts=3, wait_seconds=0, sleep=lambda s: None)
+    assert con.execute("SELECT 1").fetchone() == (1,)
+    assert seen == [True, True]
+
+
+def test_connect_with_retry_defaults_to_read_write(tmp_path, monkeypatch):
+    seen: list[bool] = []
+    real_connect = db.connect
+
+    def spy(path=None, *, read_only=False):
+        seen.append(read_only)
+        return real_connect(tmp_path / "t.duckdb")
+
+    monkeypatch.setattr(db, "connect", spy)
+    db.connect_with_retry(attempts=1, sleep=lambda s: None)
+    assert seen == [False]

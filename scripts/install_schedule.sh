@@ -49,6 +49,10 @@ PYTHON_SCRIPT
 
 install_job com.predictor.daily
 install_job com.predictor.schedule
+install_job com.predictor.results
+install_job com.predictor.predict
 
 echo "The news archiver will run at 09:00, 14:00, and 19:00 daily."
 echo "The schedule archiver will run at 10:30 daily."
+echo "Live results will be captured at 17:00 daily."
+echo "Today's predictions will be published at 18:00 daily."

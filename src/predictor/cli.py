@@ -7,6 +7,26 @@ from predictor.backtest.replay import DEFAULT_BUFFER_MINUTES
 app = typer.Typer(help="NBA prediction data spine and pipeline.")
 
 
+def _now():
+    """The current UTC instant -- a single indirection point so a command's
+    "now" (used, e.g., to pick a default season) can be monkeypatched in
+    tests instead of depending on the wall clock. Shared across commands
+    that need it (capture-results today; predict-today will reuse it)."""
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC)
+
+
+def _repo_dir():
+    """The git checkout `predict-today` reads/writes `predictions/*.jsonl`
+    in and publishes from -- a single indirection point so tests can point
+    it at a throwaway repo instead of the real one (see
+    global-constraints.md: tests must NEVER touch the real repository)."""
+    from predictor.config import PROJECT_ROOT
+
+    return PROJECT_ROOT
+
+
 @app.callback()
 def main() -> None:
     """NBA prediction data spine and pipeline."""
@@ -359,6 +379,221 @@ def ingest_schedule_cmd(
         raise typer.Exit(code=1)
 
 
+@app.command("capture-results")
+def capture_results_cmd(
+    season: str = typer.Option(
+        None, help="Season to capture, e.g. 2024-25. Defaults to the current season."
+    ),
+) -> None:
+    """Fetch NBA results, archive them, and record newly finished games."""
+    import duckdb
+    import requests
+
+    from predictor import db, raw_store
+    from predictor.config import season_label, settings
+    from predictor.sources import results
+
+    settings.ensure_dirs()
+    target = season or season_label(_now())
+
+    # Raw-first, and the download happens entirely before the database is
+    # opened -- same discipline as ingest-schedule: a slow or retried
+    # download must never hold the DuckDB write lock the unattended news
+    # job also needs.
+    try:
+        downloaded = results.download(target)
+    except requests.RequestException as exc:
+        typer.echo(
+            f"Could not download results for {target} ({exc}); nothing was saved. "
+            "The next scheduled run will try again."
+        )
+        raise typer.Exit(code=1) from None
+    except raw_store.RawStoreConflict as exc:
+        typer.echo(
+            f"The {target} results download clashes with a copy already "
+            f"archived under the same name ({exc}). Nothing was overwritten "
+            "or loaded; the next scheduled run will try again."
+        )
+        raise typer.Exit(code=1) from None
+
+    try:
+        con = db.connect_with_retry()
+    except duckdb.Error as exc:
+        typer.echo(
+            f"Could not open the database to save results ({exc}). The download "
+            "is archived on disk; the next scheduled run will try again."
+        )
+        raise typer.Exit(code=1) from None
+    try:
+        db.migrate(con)
+        result = results.load(con, downloaded)
+    except duckdb.Error as exc:
+        typer.echo(
+            f"Could not save the {target} results to the database ({exc}). The "
+            "download is archived on disk; the next scheduled run will try again."
+        )
+        raise typer.Exit(code=1) from None
+
+    typer.echo(
+        f"results {result.season}: {result.new_finals} new game result(s) recorded "
+        f"({result.already_known} already known)"
+    )
+    if result.in_progress:
+        # Informational, not a problem: these games are not provably over
+        # yet (still being played, or only just finished), so they were
+        # not recorded -- the next run picks them up.
+        typer.echo(
+            f"{result.in_progress} game(s) not finished yet (or only just "
+            "finished) -- not recorded this run; a later run will record them."
+        )
+
+    if result.dropped:
+        ids = ", ".join(result.dropped)
+        typer.echo(
+            f"WARNING: {len(result.dropped)} game(s) for the {target} season "
+            "could NOT be captured, because this tool could not figure out "
+            "which team was home and which was away for them. The affected "
+            f"game ID(s): {ids}. See the lines above starting with "
+            "'nba_stats: DROPPED' for the reason for each one."
+        )
+        raise typer.Exit(code=1)
+
+
+@app.command("predict-today")
+def predict_today_cmd(
+    no_push: bool = typer.Option(
+        False, "--no-push", help="Write and commit the log locally, but do not push it."
+    ),
+) -> None:
+    """Predict today's NBA slate, grade finished games, and publish the log.
+
+    Reads the database read-only (prediction never writes to it); the only
+    writes this command makes are appends to `predictions/*.jsonl` and, if
+    the checkout is on `main`, a git commit (and push) of exactly those
+    files.
+    """
+    import duckdb
+
+    from predictor import db
+    from predictor.config import previous_season_label, season_label
+    from predictor.model import publish
+    from predictor.model import settings as model_settings
+    from predictor.model.live import (
+        LogError,
+        grade,
+        grades_path,
+        log_path,
+        predict_today,
+        slate_date,
+        slate_for,
+    )
+
+    now = _now()
+    repo_dir = _repo_dir()
+
+    try:
+        loaded_settings = model_settings.load()
+    except model_settings.SettingsError as exc:
+        typer.echo(f"Cannot run predict-today: {exc}")
+        raise typer.Exit(code=1) from None
+
+    try:
+        # Read-only, but a read-only open still conflicts with another
+        # process's write lock (e.g. capture-results or poll-news firing on
+        # wake at the same moment) -- wait that out like every other job.
+        con = db.connect_with_retry(read_only=True)
+    except duckdb.Error as exc:
+        if "conflicting lock is held" in str(exc).lower():
+            typer.echo(
+                "Could not open the database -- another 'predictor' command "
+                "is using it right now (still, after waiting). Try 'predictor "
+                "predict-today' again in a few minutes."
+            )
+        else:
+            typer.echo(
+                f"Could not open the database ({exc}). Run an ingest command "
+                "first (for example 'predictor ingest-schedule'), then try "
+                "'predictor predict-today' again."
+            )
+        raise typer.Exit(code=1) from None
+
+    try:
+        slate = slate_for(con, now)
+        season = slate[0].season if slate else season_label(now)
+
+        # A season boundary can leave predictions from the PREVIOUS season
+        # still ungraded (its games' results arrive after today's slate has
+        # already rolled over to a new season label) -- grade that log too,
+        # whenever it exists, so those predictions are not stranded
+        # ungraded forever. grade() is a no-op (appends nothing) once
+        # everything in it is already graded, so this is always safe to run.
+        graded = 0
+        seasons_touched = {season}
+        previous_season = previous_season_label(season)
+        if log_path(repo_dir, previous_season).exists():
+            graded += grade(con, repo_dir, previous_season, now)
+            seasons_touched.add(previous_season)
+
+        graded += grade(con, repo_dir, season, now)
+        result = predict_today(con, loaded_settings, repo_dir, now)
+    except LogError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1) from None
+    except duckdb.Error as exc:
+        typer.echo(
+            f"The database could not be read while predicting today's slate "
+            f"({exc}). Nothing was published."
+        )
+        raise typer.Exit(code=1) from None
+    finally:
+        con.close()
+
+    # Back-filled lines for missed days can belong to another season's log
+    # than today's slate -- publish every log this run actually appended to.
+    seasons_touched |= {line["season"] for line in result.lines_written}
+    date_str = slate_date(now).isoformat()
+    paths = [
+        p
+        for s in sorted(seasons_touched)
+        for p in (log_path(repo_dir, s), grades_path(repo_dir, s))
+    ]
+    publish_result = publish.commit_and_push(
+        repo_dir, paths, f"predictions: {date_str} slate", push=not no_push
+    )
+
+    typer.echo(
+        f"slate {date_str}: {result.predicted} predicted, "
+        f"{result.not_predicted} not predicted, "
+        f"{result.skipped_duplicates} duplicate(s) skipped"
+    )
+    if result.backfilled:
+        typer.echo(
+            f"NOTE: {result.backfilled} back-filled for missed days -- games from "
+            "the last few days that no run predicted before tip-off are now "
+            "logged as not predicted (included in the count above)."
+        )
+    if result.stale:
+        typer.echo(
+            "WARNING: recent results are missing -- today's predictions are "
+            "marked stale_results."
+        )
+    typer.echo(f"grades appended: {graded}")
+
+    # A genuine git failure (a bad path, or `git add`/`commit` erroring) is a
+    # real failure -- exit 1. Every other outcome (not on main, nothing to
+    # commit, a merge/rebase in progress, a declined or failed push, or an
+    # intentional --no-push) means the prediction/grading data is already
+    # safely saved, so it is reported and this command still exits 0 -- a
+    # push, in particular, is simply retried automatically by the next run.
+    if publish_result.error:
+        typer.echo(publish_result.message)
+        raise typer.Exit(code=1)
+    if no_push or (publish_result.committed and publish_result.pushed):
+        typer.echo(publish_result.message)
+    else:
+        typer.echo(f"WARNING: {publish_result.message}")
+
+
 @app.command("ingest-odds")
 def ingest_odds_cmd() -> None:
     """Fetch and store one odds snapshot. Budgeted to one call per run."""
@@ -389,7 +624,15 @@ def status() -> None:
     settings.ensure_dirs()
     con = db.connect()
     db.migrate(con)
-    health = status_mod.check_sources(con)
+    now = _now()
+    repo_dir = _repo_dir()
+    health = status_mod.check_sources(con, now)
+    # check_live reports the three live-operation pieces check_sources
+    # cannot see: whether results are actually being captured, whether
+    # today's predictions are actually being logged, and whether the log is
+    # actually reaching GitHub. Appended to the same report so a human sees
+    # the whole pipeline's health in one glance.
+    health = health + status_mod.check_live(con, repo_dir, now)
     typer.echo(status_mod.format_report(health))
     # I5: every OTHER command in this CLI exits 1 on a problem; `status`
     # (the one command whose whole purpose is health reporting) did not,
