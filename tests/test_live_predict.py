@@ -767,3 +767,44 @@ def test_code_version_is_null_outside_a_git_checkout(tmp_path):
     (line,) = predict_today(con, S, tmp_path / "repo", now).lines_written
     assert line["code_version"] is None
     assert line["code_dirty"] is False
+
+
+# --- minors (final fix wave) -------------------------------------------------
+
+
+def test_grade_lines_carry_the_score_and_teams(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    tip = now + timedelta(hours=2)
+    insert_schedule_row(con, "0022600990", date(2026, 11, 10), "PHI", "NYK", tip, season=SEASON)
+    _append_raw_line(log_path(repo_dir, SEASON),
+                      _hand_predicted_line("0022600990", "PHI", "NYK", tip, 0.4, now))
+    later = tip + timedelta(hours=4)
+    _insert_final(con, "0022600990", SEASON, date(2026, 11, 10), "PHI", "NYK",
+                  98, 104, observed_at=later, reconstructed=False)
+
+    assert grade(con, repo_dir, SEASON, later) == 1
+    (g,) = read_log(grades_path(repo_dir, SEASON))
+    assert (g["home_team"], g["away_team"]) == ("PHI", "NYK")
+    assert (g["home_points"], g["away_points"]) == (98, 104)
+    assert g["home_won"] is False
+    assert g["correct"] is True  # p_home 0.4 picked the away team, who won
+
+
+def test_negative_zero_never_reaches_the_log(tmp_path):
+    # Zero history: the rest/travel terms come out as -0.0 (a negative
+    # coefficient times zero). The public log must say 0.0, not -0.0.
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    insert_schedule_row(con, "0022600991", date(2026, 11, 10), "PHI", "NYK",
+                         now + timedelta(hours=2), season=SEASON)
+
+    predict_today(con, S, repo_dir, now)
+
+    raw = log_path(repo_dir, SEASON).read_text(encoding="utf-8")
+    assert "-0.0" not in raw
+    (line,) = read_log(log_path(repo_dir, SEASON))
+    for value in [line["spread"], line["p_home"], *line["terms"].values()]:
+        assert not (value == 0 and str(value).startswith("-"))

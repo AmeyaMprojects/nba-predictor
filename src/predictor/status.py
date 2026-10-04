@@ -220,32 +220,70 @@ def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceH
         if stale_results
         else ""
     )
+    if cap is None:
+        detail_results = "no live results captured yet"
+        if missing:
+            detail_results += f", {len(missing)} game(s) missing results"
+    else:
+        when = "in the future" if age < 0 else f"{_format_age(age)} ago"
+        missing_text = (
+            f"{len(missing)} game(s) missing results" if missing else "no games missing results"
+        )
+        detail_results = f"{missing_text}, last capture {when}"
     out.append(
-        SourceHealth("live_results", cap, len(missing), age, stale_results, advice_results)
+        SourceHealth(
+            "live_results", cap, len(missing), age, stale_results, advice_results,
+            detail=detail_results,
+        )
     )
 
     # --- prediction_log --------------------------------------------------
     season = season_label(now)
-    log = live.read_log(live.log_path(repo_dir, season))
-    latest_pred = max(
-        (datetime.fromisoformat(line["predicted_at"]) for line in log), default=None
-    )
-    has_recent_games = bool(live.slate_for(con, now)) or bool(
-        live.slate_for(con, now - timedelta(days=1))
-    )
-    stale_log = False
-    if live.in_season(con, now) and has_recent_games:
-        if latest_pred is None or (now - latest_pred) > timedelta(hours=PREDICTION_LOG_STALE_HOURS):
-            stale_log = True
-    age_log = (now - latest_pred).total_seconds() / 3600 if latest_pred is not None else None
-    advice_log = (
-        "Run: predictor predict-today, and confirm com.predictor.predict is loaded."
-        if stale_log
-        else ""
-    )
-    out.append(
-        SourceHealth("prediction_log", latest_pred, len(log), age_log, stale_log, advice_log)
-    )
+    log_file = live.log_path(repo_dir, season)
+    log_error = None
+    log: list[dict] = []
+    latest_pred = None
+    try:
+        log = live.read_log(log_file)
+        latest_pred = max(
+            (datetime.fromisoformat(line["predicted_at"]) for line in log), default=None
+        )
+    except live.LogError as exc:
+        log_error = str(exc)
+    except (KeyError, TypeError, ValueError) as exc:
+        log_error = (
+            f"the prediction log at {log_file} has a line without a valid "
+            f"predicted_at ({exc!r}); inspect and repair it by hand"
+        )
+    if log_error is not None:
+        # predict-today refuses to append to a log it cannot read, so this
+        # is a stopped pipeline, not a cosmetic problem.
+        out.append(
+            SourceHealth(
+                "prediction_log", None, 0, None, True,
+                f"{log_error}. predict-today will not run until it is repaired.",
+                detail="the log could not be read",
+            )
+        )
+    else:
+        has_recent_games = bool(live.slate_for(con, now)) or bool(
+            live.slate_for(con, now - timedelta(days=1))
+        )
+        stale_log = False
+        if live.in_season(con, now) and has_recent_games:
+            if latest_pred is None or (now - latest_pred) > timedelta(
+                hours=PREDICTION_LOG_STALE_HOURS
+            ):
+                stale_log = True
+        age_log = (now - latest_pred).total_seconds() / 3600 if latest_pred is not None else None
+        advice_log = (
+            "Run: predictor predict-today, and confirm com.predictor.predict is loaded."
+            if stale_log
+            else ""
+        )
+        out.append(
+            SourceHealth("prediction_log", latest_pred, len(log), age_log, stale_log, advice_log)
+        )
 
     # --- prediction_files ---------------------------------------------------
     # Never OK while predictions are written but stranded locally: off main
@@ -358,12 +396,16 @@ def format_report(health: list[SourceHealth]) -> str:
                 detail = "nothing waiting to be pushed"
         elif h.latest is None:
             # Existing table sources (check_sources) always treat latest=None
-            # as stale (an empty table). The only check_live entry that can
-            # still reach this branch is prediction_log with an empty/missing
-            # log file -- `stale` there also depends on whether there are
-            # recent games at all (see check_live), so `latest is None` and
-            # `stale is False` both commonly hold together in the off-season
-            # ("n/a": nothing predicted yet, and nothing is wrong).
+            # as stale (an empty table). Of check_live's entries,
+            # live_results and prediction_files always carry their own
+            # `detail` (handled above) and log_published has its own branch,
+            # so the only one that can reach this branch is prediction_log
+            # with an empty/missing log file -- `stale` there also depends
+            # on whether there are recent games at all (see check_live), so
+            # `latest is None` and `stale is False` both commonly hold
+            # together in the off-season ("n/a": nothing predicted yet, and
+            # nothing is wrong). A prediction_log that could not be read at
+            # all carries its own `detail` too.
             detail = "no data at all" if h.stale else "n/a"
         else:
             detail = (

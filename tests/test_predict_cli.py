@@ -364,3 +364,114 @@ def test_predict_today_lock_still_held_after_retries_is_a_plain_message(tmp_path
     assert result.exit_code == 1
     assert "another 'predictor' command is using it" in result.output
     assert "Traceback" not in result.output
+
+
+# --- CLI failure paths and previous-season grading (final fix wave) ---------
+
+
+def _predicted_line(game_id, season, game_date, tip, predicted_at, p_home=0.6):
+    return {
+        "predicted_at": predicted_at.isoformat(), "game_id": game_id, "season": season,
+        "game_date": game_date, "tip_off_utc": tip.isoformat(), "home_team": "PHI",
+        "away_team": "NYK", "status": "predicted", "reason": None, "spread": 0.0,
+        "p_home": p_home, "sentence": None, "terms": None,
+        "settings": {"k": 0.1, "margin_cap": 20.0, "season_regression": 0.5,
+                     "hca_window": 100, "sigma": 13.0, "half_life": None},
+        "stale_results": False, "last_result_capture": None,
+    }
+
+
+def test_failed_git_commit_exits_1_with_the_git_message(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    insert_schedule_row(con, "0022600881", date(2026, 11, 10), "PHI", "NYK",
+                         now + timedelta(hours=2), season=SEASON)
+    con.close()
+    hook = repo_dir / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\necho 'hook says no' >&2\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    result = runner.invoke(cli.app, ["predict-today"])
+
+    assert result.exit_code == 1
+    assert "git commit failed" in result.output
+    assert "hook says no" in result.output
+    assert "Traceback" not in result.output
+    # The prediction itself is safely on disk for the next run to commit.
+    assert len(read_log(log_path(repo_dir, SEASON))) == 1
+
+
+def test_previous_seasons_predictions_are_still_graded_and_published(tmp_path, monkeypatch):
+    import json
+
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)  # 2026-27 season
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    prev = "2025-26"
+    tip = datetime(2026, 6, 10, 0, 30, tzinfo=UTC)
+    insert_schedule_row(con, "0042500401", date(2026, 6, 9), "PHI", "NYK", tip, season=prev)
+    table = db.POINT_IN_TIME_TABLES["games"]
+    con.execute(
+        f"INSERT INTO {table} (game_id, season, game_date, home_team, away_team,"
+        " home_points, away_points, status, reconstructed, observed_at)"
+        " VALUES (?,?,?,?,?,?,?,'FINAL',FALSE,?)",
+        ["0042500401", prev, date(2026, 6, 9), "PHI", "NYK", 101, 99, tip + timedelta(hours=5)],
+    )
+    con.close()
+    path = log_path(repo_dir, prev)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(_predicted_line("0042500401", prev, "2026-06-09", tip,
+                                   tip - timedelta(hours=6)), sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(cli.app, ["predict-today"])
+
+    assert result.exit_code == 0, result.output
+    assert "grades appended: 1" in result.output
+    (g,) = read_log(grades_path(repo_dir, prev))
+    assert g["game_id"] == "0042500401" and g["correct"] is True
+    tracked = _git(repo_dir, "ls-files", "predictions").stdout.split()
+    assert "predictions/2025-26-grades.jsonl" in tracked
+
+
+def test_corrupt_log_line_is_a_plain_message_and_exit_1(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    insert_schedule_row(con, "0022600882", date(2026, 11, 10), "PHI", "NYK",
+                         now + timedelta(hours=2), season=SEASON)
+    con.close()
+    path = log_path(repo_dir, SEASON)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{this is not json\n", encoding="utf-8")
+    before = path.read_bytes()
+
+    result = runner.invoke(cli.app, ["predict-today"])
+
+    assert result.exit_code == 1
+    assert "has a corrupt line" in result.output
+    assert "repair it by hand" in result.output
+    assert "Traceback" not in result.output
+    assert path.read_bytes() == before
+
+
+def test_database_error_mid_query_is_a_plain_message_and_exit_1(tmp_path, monkeypatch):
+    import duckdb
+
+    from predictor.model import live
+
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    con.close()
+
+    def broken(*args, **kwargs):
+        raise duckdb.IOException("IO Error: read failed")
+
+    monkeypatch.setattr(live, "predict_today", broken)
+    result = runner.invoke(cli.app, ["predict-today"])
+
+    assert result.exit_code == 1
+    assert "The database could not be read while predicting" in result.output
+    assert "Nothing was published." in result.output
+    assert "Traceback" not in result.output
+    assert _git(repo_dir, "rev-list", "--count", "HEAD").stdout.strip() == "1"

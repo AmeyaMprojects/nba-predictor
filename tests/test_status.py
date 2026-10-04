@@ -392,3 +392,57 @@ def test_prediction_files_stale_mid_merge(con, tmp_path):
     files = {h.name: h for h in status.check_live(con, repo, NOW)}["prediction_files"]
     assert files.stale is True
     assert "MERGE_HEAD" in files.advice
+
+
+# --- minors (final fix wave) -------------------------------------------------
+
+
+def test_corrupt_prediction_log_is_reported_stale_not_a_crash(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    from predictor.model.live import log_path
+
+    path = log_path(repo, SEASON)
+    path.parent.mkdir(parents=True)
+    path.write_text('{"predicted_at": "2025-01-15T10:00:00+00:00"}\n{not json\n', encoding="utf-8")
+
+    prediction_log = {h.name: h for h in status.check_live(con, repo, NOW)}["prediction_log"]
+
+    assert prediction_log.stale is True
+    assert "corrupt line" in prediction_log.advice
+    assert str(path) in prediction_log.advice
+
+
+def test_prediction_log_line_missing_predicted_at_is_reported_stale(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    from predictor.model.live import log_path
+
+    path = log_path(repo, SEASON)
+    path.parent.mkdir(parents=True)
+    path.write_text('{"game_id": "x"}\n', encoding="utf-8")
+
+    prediction_log = {h.name: h for h in status.check_live(con, repo, NOW)}["prediction_log"]
+
+    assert prediction_log.stale is True
+    assert str(path) in prediction_log.advice
+
+
+def test_live_results_detail_counts_games_not_rows(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    _insert_final(con, "0022400030", NOW.date(), NOW - timedelta(hours=5))
+    insert_schedule_row(con, "0022400031", NOW.date(), "PHI", "NYK",
+                         NOW - timedelta(hours=20), season=SEASON)
+    text = status.format_report(status.check_live(con, repo, NOW))
+    assert "live_results: 1 game(s) missing results, last capture 5h ago" in text
+
+
+def test_live_results_detail_with_nothing_missing(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    _insert_final(con, "0022400032", NOW.date(), NOW - timedelta(hours=3))
+    text = status.format_report(status.check_live(con, repo, NOW))
+    assert "live_results: no games missing results, last capture 3h ago" in text
+
+
+def test_live_results_detail_before_any_capture(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    text = status.format_report(status.check_live(con, repo, NOW))
+    assert "live_results: no live results captured yet" in text

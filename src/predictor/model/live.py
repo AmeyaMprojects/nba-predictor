@@ -320,6 +320,13 @@ def _settings_dict(settings: ModelSettings) -> dict:
     }
 
 
+def _r6(value: float) -> float:
+    """Round to 6 decimals for the public log, normalising -0.0 to 0.0
+    (``-0.0 + 0.0 == 0.0``) -- a "-0.0" in a published number is noise a
+    reader would rightly ask about."""
+    return round(value, 6) + 0.0
+
+
 def _append_line(path: Path, line: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
@@ -448,10 +455,10 @@ def predict_today(con, settings: ModelSettings, repo_dir: Path, now: datetime) -
                 **base_line(g),
                 "status": "predicted",
                 "reason": None,
-                "spread": round(breakdown.spread, 6),
-                "p_home": round(breakdown.p_home, 6),
+                "spread": _r6(breakdown.spread),
+                "p_home": _r6(breakdown.p_home),
                 "sentence": breakdown.sentence(),
-                "terms": {name: round(value, 6) for name, value in breakdown.terms()},
+                "terms": {name: _r6(value) for name, value in breakdown.terms()},
             }
             predicted += 1
         write(g, line)
@@ -481,6 +488,13 @@ def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
     the line's own ``game_date``: a FINAL row for the same ``game_id`` under
     a DIFFERENT date (the game itself was rescheduled, not just corrected)
     is not this prediction's result and is not used to grade it.
+
+    ``correct`` scores the line's pick: home when ``p_home >= 0.5``, away
+    otherwise -- so an exact coin-flip ``p_home == 0.5`` (e.g. two teams
+    with no history and no adjustments) counts as picking the HOME team.
+    That tie-break is deliberate and fixed; it is stated here because it
+    is part of how the public record is scored. Each grade line also
+    carries the final score and teams, so it can be checked on its own.
     """
     log = read_log(log_path(repo_dir, season))
     latest_predicted: dict[str, dict] = {}
@@ -521,6 +535,10 @@ def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
         p_home = line["p_home"]
         grade_line = {
             "game_id": game_id,
+            "home_team": line["home_team"],
+            "away_team": line["away_team"],
+            "home_points": home_points,
+            "away_points": away_points,
             "predicted_at": line["predicted_at"],
             "p_home": p_home,
             "home_won": home_won,
