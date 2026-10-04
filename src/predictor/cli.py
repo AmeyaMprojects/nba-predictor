@@ -438,6 +438,14 @@ def capture_results_cmd(
         f"results {result.season}: {result.new_finals} new game result(s) recorded "
         f"({result.already_known} already known)"
     )
+    if result.in_progress:
+        # Informational, not a problem: these games are not provably over
+        # yet (still being played, or only just finished), so they were
+        # not recorded -- the next run picks them up.
+        typer.echo(
+            f"{result.in_progress} game(s) not finished yet (or only just "
+            "finished) -- not recorded this run; a later run will record them."
+        )
 
     if result.dropped:
         ids = ", ".join(result.dropped)

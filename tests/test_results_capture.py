@@ -33,22 +33,37 @@ FETCHED = datetime(2026, 10, 4, 13, 0, tzinfo=UTC)
 SEASON = "2026-27"
 
 
-def _row(game_id, game_date, team, matchup, pts):
+def _row(game_id, game_date, team, matchup, pts, wl=None):
     return {
         "GAME_ID": game_id,
         "GAME_DATE": game_date,
         "MATCHUP": matchup,
         "TEAM_ABBREVIATION": team,
         "PTS": pts,
+        "WL": wl,
     }
 
 
-def _game_df(game_id, game_date, home, away, home_pts, away_pts):
-    """Two LeagueGameFinder-shaped rows (home + away) for one game."""
+_AUTO = object()
+
+
+def _game_df(game_id, game_date, home, away, home_pts, away_pts, wl=_AUTO):
+    """Two LeagueGameFinder-shaped rows (home + away) for one game.
+
+    ``wl`` is the (home, away) WL pair. By default a game with both scores
+    is a FINISHED game (WL "W"/"L" from the scores) and an unplayed one has
+    no WL -- pass ``wl=(None, None)`` for an in-progress game (scores
+    present, WL still empty, exactly as LeagueGameFinder lists it live).
+    """
+    if wl is _AUTO:
+        if home_pts is not None and away_pts is not None:
+            wl = ("W", "L") if home_pts > away_pts else ("L", "W")
+        else:
+            wl = (None, None)
     return pd.DataFrame(
         [
-            _row(game_id, game_date, home, f"{home} vs. {away}", home_pts),
-            _row(game_id, game_date, away, f"{away} @ {home}", away_pts),
+            _row(game_id, game_date, home, f"{home} vs. {away}", home_pts, wl[0]),
+            _row(game_id, game_date, away, f"{away} @ {home}", away_pts, wl[1]),
         ]
     )
 
@@ -203,6 +218,145 @@ def test_unplayed_game_adds_nothing(con):
     assert con.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
 
 
+# --- in-progress games are never captured as FINAL (Critical 1) ----------
+# LeagueGameFinder lists a game that is still being played with its
+# running points and an EMPTY WL. Recording that as FINAL would publish a
+# wrong result forever (a game with any FINAL row is never inserted again).
+
+TIP = datetime(2026, 10, 3, 23, 0, tzinfo=UTC)
+
+
+def test_game_with_points_but_no_wl_is_not_recorded(con):
+    df = _game_df("0022600001", "2026-10-03", "PHI", "NYK", 61, 58, wl=(None, None))
+    downloaded = results.download(SEASON, fetched_at=FETCHED, fetch=lambda s: df)
+
+    result = results.load(con, downloaded)
+
+    assert downloaded.games == []
+    assert result.new_finals == 0
+    assert result.in_progress == 1
+    table = db.POINT_IN_TIME_TABLES["games"]
+    assert con.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
+
+
+def test_game_with_wl_on_only_one_row_is_not_recorded(con):
+    df = _game_df("0022600001", "2026-10-03", "PHI", "NYK", 61, 58, wl=("W", ""))
+    result = results.load(con, results.download(SEASON, fetched_at=FETCHED, fetch=lambda s: df))
+    assert result.new_finals == 0
+    assert result.in_progress == 1
+
+
+def test_game_with_wl_but_captured_too_soon_after_tip_is_not_recorded(con):
+    insert_schedule_row(con, "0022600001", date(2026, 10, 3), "PHI", "NYK", TIP, season=SEASON)
+    df = _game_df("0022600001", "2026-10-03", "PHI", "NYK", 119, 110)
+    captured_at = TIP + timedelta(hours=3, minutes=29)
+
+    result = results.load(con, results.download(SEASON, fetched_at=captured_at, fetch=lambda s: df))
+
+    assert result.new_finals == 0
+    assert result.in_progress == 1
+    table = db.POINT_IN_TIME_TABLES["games"]
+    assert con.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
+
+
+def test_tip_check_uses_the_latest_schedule_vintage(con):
+    # An older vintage said 19:00Z (so 3.5h would have passed), but the
+    # latest vintage moved tip-off to 23:00Z -- the game cannot be over.
+    insert_schedule_row(
+        con, "0022600001", date(2026, 10, 3), "PHI", "NYK", TIP - timedelta(hours=4),
+        observed_at=TIP - timedelta(days=30), season=SEASON,
+    )
+    insert_schedule_row(
+        con, "0022600001", date(2026, 10, 3), "PHI", "NYK", TIP,
+        observed_at=TIP - timedelta(days=1), season=SEASON,
+    )
+    df = _game_df("0022600001", "2026-10-03", "PHI", "NYK", 119, 110)
+    captured_at = TIP + timedelta(hours=1)
+
+    result = results.load(con, results.download(SEASON, fetched_at=captured_at, fetch=lambda s: df))
+
+    assert result.new_finals == 0
+    assert result.in_progress == 1
+
+
+def test_game_with_wl_and_enough_time_after_tip_is_recorded(con):
+    insert_schedule_row(con, "0022600001", date(2026, 10, 3), "PHI", "NYK", TIP, season=SEASON)
+    df = _game_df("0022600001", "2026-10-03", "PHI", "NYK", 119, 110)
+    captured_at = TIP + timedelta(hours=3, minutes=30)
+
+    result = results.load(con, results.download(SEASON, fetched_at=captured_at, fetch=lambda s: df))
+
+    assert result.new_finals == 1
+    assert result.in_progress == 0
+
+
+def test_in_progress_game_is_recorded_by_a_later_run_once_finished(con):
+    insert_schedule_row(con, "0022600001", date(2026, 10, 3), "PHI", "NYK", TIP, season=SEASON)
+    live_df = _game_df("0022600001", "2026-10-03", "PHI", "NYK", 61, 58, wl=(None, None))
+    first = results.load(
+        con, results.download(SEASON, fetched_at=TIP + timedelta(hours=1), fetch=lambda s: live_df)
+    )
+    assert first.new_finals == 0
+    assert first.in_progress == 1
+
+    done_df = _game_df("0022600001", "2026-10-03", "PHI", "NYK", 119, 110)
+    later = TIP + timedelta(hours=12)
+    second = results.load(con, results.download(SEASON, fetched_at=later, fetch=lambda s: done_df))
+
+    assert second.new_finals == 1
+    assert second.in_progress == 0
+    table = db.POINT_IN_TIME_TABLES["games"]
+    rows = con.execute(
+        f"SELECT home_points, away_points, observed_at FROM {table} "
+        "WHERE game_id = ? AND status = 'FINAL'",
+        ["0022600001"],
+    ).fetchall()
+    assert rows == [(119, 110, later)]
+
+
+def test_fetched_at_is_stamped_after_the_fetch_returns(con, monkeypatch):
+    # Minor 11: the capture time must not precede the moment the data was
+    # actually in hand.
+    stamps = iter(
+        [datetime(2026, 10, 4, 13, 0, tzinfo=UTC), datetime(2026, 10, 4, 13, 5, tzinfo=UTC)]
+    )
+    order = []
+
+    class FakeDatetime:
+        @staticmethod
+        def now(tz):
+            order.append("now")
+            return next(stamps)
+
+    monkeypatch.setattr(results, "datetime", FakeDatetime)
+    df = _game_df("0022600001", "2026-10-03", "PHI", "NYK", 119, 110)
+
+    def fetch(season):
+        order.append("fetch")
+        return df
+
+    downloaded = results.download(SEASON, fetch=fetch)
+
+    assert order == ["fetch", "now"]
+    assert downloaded.fetched_at == datetime(2026, 10, 4, 13, 0, tzinfo=UTC)
+
+
+def test_cli_reports_in_progress_games_as_information_not_failure(tmp_path, monkeypatch):
+    _point_settings_at_tmp(tmp_path, monkeypatch)
+    df = _game_df("0022600001", "2026-10-03", "PHI", "NYK", 61, 58, wl=(None, None))
+    original_download = results.download
+    monkeypatch.setattr(
+        results, "download",
+        lambda season: original_download(season, fetched_at=FETCHED, fetch=lambda s: df),
+    )
+
+    out = runner.invoke(cli.app, ["capture-results", "--season", SEASON])
+
+    assert out.exit_code == 0, out.output
+    assert "1 game(s) not finished yet" in out.output
+    assert "WARNING" not in out.output
+
+
 # --- load(): idempotency ---------------------------------------------------
 
 
@@ -317,7 +471,7 @@ def test_captured_result_is_predicted_by_replay(con):
     insert_schedule_row(con, game_id, game_date, "PHI", "NYK", tip, season=SEASON)
 
     df = _game_df(game_id, "2026-10-09", "PHI", "NYK", 119, 110)
-    captured_at = tip + timedelta(hours=3)  # the game ends, then capture runs
+    captured_at = tip + timedelta(hours=4)  # the game ends, then capture runs
     results.load(con, results.download(SEASON, fetched_at=captured_at, fetch=lambda s: df))
 
     preds, stats = replay.replay(con, fixed_probability(0.6))

@@ -19,8 +19,8 @@ from __future__ import annotations
 import gzip
 import io
 from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 
 import pandas as pd
 
@@ -40,6 +40,22 @@ SOURCE = "results"
 # equivalent in meaning, not just in appearance.
 _READ_DTYPE = {"GAME_ID": str}
 
+# A game is only ever recorded as FINAL once it is provably over -- a FINAL
+# row is permanent (a game with any FINAL row is never inserted again), so
+# capturing a game mid-play would publish a wrong result forever.
+# LeagueGameFinder lists a game that is still being played WITH its running
+# points but with an empty WL column, so "both scores present" (which is
+# all `nba_stats.pair_team_rows` checks, correctly for its historical
+# backfill) is NOT enough here. Two independent checks, both required:
+#   1. both team-rows carry a WL of "W" or "L" (the NBA has decided it), and
+#   2. when the schedule knows the game's tip-off (latest vintage), at least
+#      FINISHED_AFTER_TIP has passed since it at capture time -- a guard
+#      against a feed that fills WL early or wrongly.
+# A game failing either is simply skipped this run (`in_progress`) and is
+# picked up by a later run once it qualifies -- never locked out.
+FINISHED_AFTER_TIP = timedelta(hours=3, minutes=30)
+_FINISHED_WL = frozenset({"W", "L"})
+
 
 @dataclass(frozen=True)
 class Downloaded:
@@ -51,6 +67,9 @@ class Downloaded:
     # (e.g. a GAME_ID group with other than 2 team-rows, or disagreeing
     # home/away parses) -- never silently lost, see `download()` below.
     dropped: list[str]
+    # game_ids with both scores but no final WL on both team-rows yet --
+    # games still being played; skipped this run, see FINISHED_AFTER_TIP.
+    in_progress: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -60,6 +79,10 @@ class CaptureResult:
     already_known: int
     blob_key: str
     dropped: list[str]
+    # Games not recorded this run because they are not provably over yet
+    # (no final WL, or too soon after tip-off) -- informational, not an
+    # error: a later run records them.
+    in_progress: int = 0
 
 
 def archive_key(season: str, fetched_at: datetime) -> str:
@@ -78,8 +101,12 @@ def download(
     returns is provably what got archived, not merely what was fetched (a
     parser bug stays re-parsable instead of losing the original payload).
 
-    Only FINAL games (both scores present) are kept in `.games` -- a
-    scheduled-but-unplayed game carries nothing new for `load()` to record.
+    Only FINISHED games are kept in `.games`: both scores present AND both
+    team-rows' WL is "W" or "L" (see FINISHED_AFTER_TIP). A game with both
+    scores but no final WL is still being played -- its id goes to
+    `.in_progress` instead. A scheduled-but-unplayed game carries nothing
+    new for `load()` to record. `fetched_at`, when not given, is stamped
+    AFTER the fetch returns -- the moment the data was actually in hand.
     Two anomalies are never silently swallowed, only logged and surfaced on
     the returned object for the caller (the CLI) to report loudly:
 
@@ -94,10 +121,10 @@ def download(
       FINAL), but silently treating it exactly like an unplayed game would
       hide a real data problem.
     """
+    df = fetch(season)
     fetched_at = db.require_utc(
         fetched_at if fetched_at is not None else datetime.now(UTC), "fetched_at"
     )
-    df = fetch(season)
     key = archive_key(season, fetched_at)
     payload = df.to_json(orient="split", date_format="iso").encode()
     raw_store.store(
@@ -122,14 +149,50 @@ def download(
             f"final: {ids}"
         )
 
-    games = [game for game in paired if game.status == "FINAL"]
+    finished_ids = _finished_game_ids(archived)
+    games = []
+    in_progress = []
+    for game in paired:
+        if game.status != "FINAL":
+            continue
+        if game.game_id in finished_ids:
+            games.append(game)
+        else:
+            in_progress.append(game.game_id)
     return Downloaded(
         season=season,
         fetched_at=fetched_at,
         blob_key=key,
         games=games,
         dropped=[d.game_id for d in dropped],
+        in_progress=in_progress,
     )
+
+
+def _finished_game_ids(archived: pd.DataFrame) -> set[str]:
+    """game_ids whose EVERY team-row carries a final WL ("W"/"L") -- read
+    from the archived rows themselves. A frame with no WL column at all
+    yields nothing: without WL nothing is provably over."""
+    if "WL" not in archived.columns:
+        return set()
+    finished: set[str] = set()
+    for game_id, group in archived.groupby("GAME_ID"):
+        wls = [str(v).strip() if isinstance(v, str) else "" for v in group["WL"]]
+        if wls and all(wl in _FINISHED_WL for wl in wls):
+            finished.add(str(game_id))
+    return finished
+
+
+def _latest_tip(con, game_id: str) -> datetime | None:
+    """The latest schedule vintage's tip-off for one game, or None (no
+    schedule row, or a TBD tip)."""
+    table = db.POINT_IN_TIME_TABLES["schedule"]
+    row = con.execute(
+        f"SELECT tip_off_utc FROM {table} WHERE game_id = ? "
+        "ORDER BY observed_at DESC LIMIT 1",
+        [game_id],
+    ).fetchone()
+    return row[0] if row is not None else None
 
 
 def load(con, downloaded: Downloaded) -> CaptureResult:
@@ -141,7 +204,10 @@ def load(con, downloaded: Downloaded) -> CaptureResult:
     result, not a derived one. A game that already has ANY FINAL row
     (whether captured live by an earlier run of this command, or
     reconstructed by the historical `nba_stats.ingest_season` backfill) is
-    counted in `already_known` and never inserted again.
+    counted in `already_known` and never inserted again. A game whose
+    latest schedule vintage tipped off less than FINISHED_AFTER_TIP before
+    the capture time is not inserted either (counted in `in_progress`,
+    with download()'s no-final-WL games) -- a later run records it.
 
     No companion SCHEDULED row is written for a game with no row at all.
     An earlier draft of this function added one (stamped at the same
@@ -165,6 +231,7 @@ def load(con, downloaded: Downloaded) -> CaptureResult:
     observed_at = db.require_utc(downloaded.fetched_at, "fetched_at")
     new_finals = 0
     already_known = 0
+    in_progress = len(downloaded.in_progress)
     con.execute("BEGIN")
     try:
         for game in downloaded.games:
@@ -174,6 +241,11 @@ def load(con, downloaded: Downloaded) -> CaptureResult:
             ).fetchone()
             if has_final is not None:
                 already_known += 1
+                continue
+
+            tip = _latest_tip(con, game.game_id)
+            if tip is not None and observed_at < tip + FINISHED_AFTER_TIP:
+                in_progress += 1
                 continue
 
             con.execute(
@@ -203,4 +275,5 @@ def load(con, downloaded: Downloaded) -> CaptureResult:
         already_known=already_known,
         blob_key=downloaded.blob_key,
         dropped=downloaded.dropped,
+        in_progress=in_progress,
     )

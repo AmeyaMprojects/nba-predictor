@@ -14,7 +14,7 @@
     <string>PROJECT_DIR</string>
     <key>StartCalendarInterval</key>
     <array>
-        <dict><key>Hour</key><integer>11</integer><key>Minute</key><integer>0</integer></dict>
+        <dict><key>Hour</key><integer>17</integer><key>Minute</key><integer>0</integer></dict>
     </array>
     <key>StandardOutPath</key>
     <string>PROJECT_DIR/data/logs/results.out.log</string>
