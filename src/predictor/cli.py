@@ -467,7 +467,7 @@ def predict_today_cmd(
     import duckdb
 
     from predictor import db
-    from predictor.config import season_label
+    from predictor.config import previous_season_label, season_label
     from predictor.model import publish
     from predictor.model import settings as model_settings
     from predictor.model.live import (
@@ -509,16 +509,36 @@ def predict_today_cmd(
     try:
         slate = slate_for(con, now)
         season = slate[0].season if slate else season_label(now)
-        graded = grade(con, repo_dir, season, now)
+
+        # A season boundary can leave predictions from the PREVIOUS season
+        # still ungraded (its games' results arrive after today's slate has
+        # already rolled over to a new season label) -- grade that log too,
+        # whenever it exists, so those predictions are not stranded
+        # ungraded forever. grade() is a no-op (appends nothing) once
+        # everything in it is already graded, so this is always safe to run.
+        graded = 0
+        seasons_touched = {season}
+        previous_season = previous_season_label(season)
+        if log_path(repo_dir, previous_season).exists():
+            graded += grade(con, repo_dir, previous_season, now)
+            seasons_touched.add(previous_season)
+
+        graded += grade(con, repo_dir, season, now)
         result = predict_today(con, loaded_settings, repo_dir, now)
     except LogError as exc:
         typer.echo(str(exc))
+        raise typer.Exit(code=1) from None
+    except duckdb.Error as exc:
+        typer.echo(
+            f"The database could not be read while predicting today's slate "
+            f"({exc}). Nothing was published."
+        )
         raise typer.Exit(code=1) from None
     finally:
         con.close()
 
     date_str = now.astimezone(EASTERN).date().isoformat()
-    paths = [log_path(repo_dir, season), grades_path(repo_dir, season)]
+    paths = [p for s in seasons_touched for p in (log_path(repo_dir, s), grades_path(repo_dir, s))]
     publish_result = publish.commit_and_push(
         repo_dir, paths, f"predictions: {date_str} slate", push=not no_push
     )
@@ -534,11 +554,20 @@ def predict_today_cmd(
             "marked stale_results."
         )
     typer.echo(f"grades appended: {graded}")
-    typer.echo(publish_result.message)
-    # Exit 1 only on real failures (settings/database/log corruption, all
-    # handled above). A failed push is not one: the prediction and grading
-    # data is already safely on disk (and, if committed=True, in git) --
-    # only the push itself is retried, automatically, by the next run.
+
+    # A genuine git failure (a bad path, or `git add`/`commit` erroring) is a
+    # real failure -- exit 1. Every other outcome (not on main, nothing to
+    # commit, a merge/rebase in progress, a declined or failed push, or an
+    # intentional --no-push) means the prediction/grading data is already
+    # safely saved, so it is reported and this command still exits 0 -- a
+    # push, in particular, is simply retried automatically by the next run.
+    if publish_result.error:
+        typer.echo(publish_result.message)
+        raise typer.Exit(code=1)
+    if no_push or (publish_result.committed and publish_result.pushed):
+        typer.echo(publish_result.message)
+    else:
+        typer.echo(f"WARNING: {publish_result.message}")
 
 
 @app.command("ingest-odds")

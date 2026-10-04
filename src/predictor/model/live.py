@@ -234,7 +234,18 @@ def read_log(path: Path) -> list[dict]:
             f"the prediction log at {path} ends with an incomplete line; "
             "it was not modified -- inspect and repair it by hand"
         )
-    return [json.loads(line) for line in text.splitlines() if line.strip()]
+    lines = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            lines.append(json.loads(line))
+        except json.JSONDecodeError as exc:
+            raise LogError(
+                f"the prediction log at {path} has a corrupt line ({exc}); "
+                "it was not modified -- inspect and repair it by hand"
+            ) from None
+    return lines
 
 
 def _settings_dict(settings: ModelSettings) -> dict:

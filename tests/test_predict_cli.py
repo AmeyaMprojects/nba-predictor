@@ -5,6 +5,12 @@ database, and tests/test_publish.py's throwaway-git-repo pattern for
 `repo_dir` -- a bare temp remote stands in for GitHub. This command must
 NEVER be exercised against the real predictor repository or a real remote;
 see global-constraints.md.
+
+Fix round 1: `commit_and_push` now refuses the very first push (no
+`origin/main` yet) and leaves it to a human -- `_wire`'s `with_remote=True`
+therefore does that first push itself (`_establish_remote`), exactly as the
+real controller does, so these tests exercise the AUTOMATIC push path that
+runs on every subsequent `predict-today` invocation.
 """
 
 from __future__ import annotations
@@ -68,10 +74,21 @@ def _git_repo(tmp_path: Path, monkeypatch, name: str = "repo") -> Path:
     return repo_dir
 
 
+def _establish_remote(repo_dir: Path, remote_dir: Path) -> None:
+    """Add `origin` and push the seed commit by hand -- what the real
+    controller does for the very first push; `commit_and_push` itself
+    refuses to do this (see test_publish.py's fix-round-1 tests)."""
+    remote_dir.mkdir()
+    assert _git(remote_dir, "init", "--bare", "-b", "main").returncode == 0
+    assert _git(repo_dir, "remote", "add", "origin", str(remote_dir)).returncode == 0
+    assert _git(repo_dir, "push", "origin", "main").returncode == 0
+
+
 def _wire(tmp_path, monkeypatch, now, *, with_remote=True):
     """Common setup: a migrated temp DB, a throwaway git repo (on main, with
-    a bare remote unless `with_remote=False`), and every indirection point
-    (`cli._now`, `cli._repo_dir`, `model_settings.load`) pinned."""
+    a bare remote already carrying the seed commit unless
+    `with_remote=False`), and every indirection point (`cli._now`,
+    `cli._repo_dir`, `model_settings.load`) pinned."""
     s = _point_settings_at_tmp(tmp_path, monkeypatch)
     con = db.connect(s.db_path)
     db.migrate(con)
@@ -80,9 +97,7 @@ def _wire(tmp_path, monkeypatch, now, *, with_remote=True):
     remote_dir = None
     if with_remote:
         remote_dir = tmp_path / "remote.git"
-        remote_dir.mkdir()
-        assert _git(remote_dir, "init", "--bare", "-b", "main").returncode == 0
-        assert _git(repo_dir, "remote", "add", "origin", str(remote_dir)).returncode == 0
+        _establish_remote(repo_dir, remote_dir)
 
     monkeypatch.setattr(cli, "_now", lambda: now)
     monkeypatch.setattr(cli, "_repo_dir", lambda: repo_dir)
@@ -131,11 +146,12 @@ def test_no_push_flag_commits_locally_but_does_not_push(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert "push skipped" in result.output
+    assert "WARNING" not in result.output  # an intentional skip, not a problem
 
     local_log = _git(repo_dir, "log", "--oneline", "main")
     assert "predictions" in local_log.stdout
-    remote_log = _git(remote_dir, "log", "--oneline", "main")
-    assert remote_log.returncode != 0 or remote_log.stdout.strip() == ""
+    remote_log = _git(remote_dir, "log", "--format=%s", "main")
+    assert "predictions:" not in remote_log.stdout
 
 
 def test_rerun_same_day_is_a_duplicate_and_nothing_new_to_commit(tmp_path, monkeypatch):
@@ -154,6 +170,7 @@ def test_rerun_same_day_is_a_duplicate_and_nothing_new_to_commit(tmp_path, monke
     assert second.exit_code == 0, second.output
     assert "1 duplicate(s) skipped" in second.output
     assert "nothing to commit" in second.output
+    assert "WARNING" in second.output  # benign, but still surfaced
 
 
 def test_missing_settings_file_gives_a_plain_message_and_exits_1(tmp_path, monkeypatch):
@@ -179,3 +196,91 @@ def test_missing_settings_file_gives_a_plain_message_and_exits_1(tmp_path, monke
     assert "Traceback" not in result.output
     # Nothing was written -- the database was never even opened.
     assert not (repo_dir / "predictions").exists()
+
+
+def test_empty_slate_still_commits_newly_graded_predictions(tmp_path, monkeypatch):
+    """No game is scheduled "today", but an earlier prediction in the SAME
+    season's log just became gradable -- the grades file must still be
+    written and published even though the predictions log itself gets no
+    new line this run (minor 'empty slate with grades appended')."""
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+
+    tip = now - timedelta(hours=3)
+    insert_schedule_row(con, "0022600777", date(2026, 11, 10), "PHI", "NYK", tip, season=SEASON)
+    table = db.POINT_IN_TIME_TABLES["games"]
+    con.execute(
+        f"INSERT INTO {table} (game_id, season, game_date, home_team, away_team,"
+        " home_points, away_points, status, reconstructed, observed_at)"
+        " VALUES (?,?,?,?,?,?,?,'FINAL',FALSE,?)",
+        ["0022600777", SEASON, date(2026, 11, 10), "PHI", "NYK", 110, 100, now - timedelta(hours=1)],
+    )
+    import json
+
+    log_path(repo_dir, SEASON).parent.mkdir(parents=True, exist_ok=True)
+    predicted_at = tip - timedelta(hours=1)
+    line = {
+        "predicted_at": predicted_at.isoformat(), "game_id": "0022600777", "season": SEASON,
+        "game_date": "2026-11-10", "tip_off_utc": tip.isoformat(), "home_team": "PHI",
+        "away_team": "NYK", "status": "predicted", "reason": None, "spread": 0.0, "p_home": 0.6,
+        "sentence": None, "terms": None,
+        "settings": {"k": 0.1, "margin_cap": 20.0, "season_regression": 0.5, "hca_window": 100,
+                     "sigma": 13.0, "half_life": None},
+        "stale_results": False, "last_result_capture": None,
+    }
+    with log_path(repo_dir, SEASON).open("a", encoding="utf-8") as f:
+        f.write(json.dumps(line, sort_keys=True) + "\n")
+    con.close()
+
+    result = runner.invoke(cli.app, ["predict-today"])
+
+    assert result.exit_code == 0, result.output
+    assert "0 predicted" in result.output
+    assert "grades appended: 1" in result.output
+    assert "committed and pushed" in result.output
+    assert not grades_path(repo_dir, SEASON).read_text(encoding="utf-8") == ""
+    remote_log = _git(remote_dir, "log", "--format=%s", "main")
+    assert "predictions: 2026-11-10 slate" in remote_log.stdout
+
+
+def test_stale_warning_is_printed_when_a_recent_result_is_missing(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    # Tipped 20 hours ago -- inside results_missing's window -- with no
+    # FINAL row recorded: triggers `stale`.
+    insert_schedule_row(
+        con, "0022600778", date(2026, 11, 9), "BOS", "MIA",
+        now - timedelta(hours=20), season=SEASON,
+    )
+    insert_schedule_row(
+        con, "0022600779", date(2026, 11, 10), "PHI", "NYK",
+        now + timedelta(hours=2), season=SEASON,
+    )
+    con.close()
+
+    result = runner.invoke(cli.app, ["predict-today"])
+
+    assert result.exit_code == 0, result.output
+    assert "WARNING: recent results are missing" in result.output
+
+
+def test_failed_push_exits_zero_with_a_warning(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    insert_schedule_row(
+        con, "0022600780", date(2026, 11, 10), "PHI", "NYK",
+        now + timedelta(hours=2), season=SEASON,
+    )
+    con.close()
+    # Break the remote AFTER the first (human) push that established
+    # origin/main, so the safety checks pass and only the actual `git push`
+    # network call fails.
+    assert _git(
+        repo_dir, "remote", "set-url", "origin", str(tmp_path / "does-not-exist")
+    ).returncode == 0
+
+    result = runner.invoke(cli.app, ["predict-today"])
+
+    assert result.exit_code == 0, result.output
+    assert "WARNING" in result.output
+    assert "next run will push it" in result.output
