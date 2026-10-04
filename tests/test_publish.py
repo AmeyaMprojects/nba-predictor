@@ -426,3 +426,162 @@ def test_git_call_timeout_becomes_a_plain_result_not_an_exception(tmp_path, monk
     # current_branch must not raise -- it degrades to None, same as any
     # other git failure.
     assert current_branch(repo) is None
+
+
+# --- final fix wave --------------------------------------------------------
+
+from predictor.model import publish  # noqa: E402
+
+
+def test_sequencer_in_progress_is_refused(tmp_path):
+    # A multi-commit cherry-pick/revert stopped between commits leaves only
+    # .git/sequencer behind (no CHERRY_PICK_HEAD) -- still someone's
+    # unfinished operation.
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    (repo / ".git" / "sequencer").mkdir()
+    log_path = _write_log(repo)
+
+    result = commit_and_push(repo, [log_path], "predictions: 2026-10-21 slate")
+
+    assert result.committed is False
+    assert "sequencer" in result.message
+    assert _git(repo, "rev-list", "--count", "HEAD").stdout.strip() == "1"
+
+
+def test_push_refused_when_unpushed_commits_cannot_be_listed(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    log_path = _write_log(repo)
+
+    real_git = publish._git
+    pushes = []
+
+    def failing_rev_list(repo_dir, args, timeout=publish._GIT_TIMEOUT):
+        if args[:1] == ["rev-list"]:
+            return subprocess.CompletedProcess(["git", *args], 128, "", "fatal: bad revision")
+        if args[:1] == ["push"]:
+            pushes.append(args)
+        return real_git(repo_dir, args, timeout)
+
+    monkeypatch.setattr(publish, "_git", failing_rev_list)
+    result = commit_and_push(repo, [log_path], "predictions: 2026-10-21 slate")
+
+    assert result.committed is True
+    assert result.pushed is False
+    assert result.error is False
+    assert "could not list" in result.message
+    assert pushes == []
+
+
+def test_rejected_push_says_github_has_commits_this_checkout_lacks(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+
+    # Someone pushes to GitHub from elsewhere.
+    other = tmp_path / "other"
+    assert _git(tmp_path, "clone", str(remote), str(other)).returncode == 0
+    (other / "NOTES.md").write_text("from elsewhere\n", encoding="utf-8")
+    assert _git(other, "add", "NOTES.md").returncode == 0
+    assert _git(other, "commit", "-m", "notes").returncode == 0
+    assert _git(other, "push", "origin", "main").returncode == 0
+
+    log_path = _write_log(repo)
+    result = commit_and_push(repo, [log_path], "predictions: 2026-10-21 slate")
+
+    assert result.committed is True
+    assert result.pushed is False
+    assert result.error is False
+    assert result.message == (
+        "GitHub has commits this checkout doesn't — the push was rejected and "
+        "will keep failing until they are pulled by hand (git pull --ff-only "
+        "origin main), then the next run publishes"
+    )
+
+
+def test_code_version_of_a_clean_checkout(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    short = _git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
+    assert publish.code_version(repo) == (short, False)
+
+
+def test_code_version_ignores_changes_under_predictions(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    _write_log(repo)  # untracked prediction file
+    assert publish.code_version(repo)[1] is False
+
+
+def test_code_version_is_dirty_with_a_modified_tracked_file(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    (repo / "README.md").write_text("edited\n", encoding="utf-8")
+    assert publish.code_version(repo)[1] is True
+
+
+def test_code_version_is_dirty_with_an_untracked_file_outside_predictions(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    (repo / "new_module.py").write_text("x = 1\n", encoding="utf-8")
+    assert publish.code_version(repo)[1] is True
+
+
+def test_code_version_outside_a_git_repo(tmp_path):
+    assert publish.code_version(tmp_path / "nowhere") == (None, False)
+
+
+def test_unpushed_non_prediction_commits_counts_only_foreign_commits(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    assert publish.unpushed_non_prediction_commits(repo) == 0
+
+    commit_and_push(repo, [_write_log(repo)], "predictions: 2026-10-21 slate", push=False)
+    (repo / "README.md").write_text("edited\n", encoding="utf-8")
+    assert _git(repo, "commit", "-am", "chore: edit").returncode == 0
+
+    assert publish.unpushed_non_prediction_commits(repo) == 1
+
+
+def test_prediction_files_problem_is_none_on_a_clean_main(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    commit_and_push(repo, [_write_log(repo)], "predictions: 2026-10-21 slate", push=False)
+    assert publish.prediction_files_problem(repo) is None
+
+
+def test_prediction_files_problem_off_main(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    assert _git(repo, "checkout", "-b", "feature").returncode == 0
+    assert publish.prediction_files_problem(repo) == (
+        "the checkout is on 'feature' — predictions written here are not being "
+        "published; switch back to main"
+    )
+
+
+def test_prediction_files_problem_with_uncommitted_predictions(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    _write_log(repo)
+    assert publish.prediction_files_problem(repo) == (
+        "prediction files have uncommitted changes — the last publish failed; "
+        "run predictor predict-today again or check the message in "
+        "data/logs/predict.err.log"
+    )
+
+
+def test_prediction_files_problem_mid_operation(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / ".git" / "MERGE_HEAD").write_text(head + "\n", encoding="utf-8")
+    problem = publish.prediction_files_problem(repo)
+    assert problem is not None
+    assert "MERGE_HEAD" in problem

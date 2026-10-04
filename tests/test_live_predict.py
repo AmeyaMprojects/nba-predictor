@@ -688,3 +688,82 @@ def test_grade_cutoff_uses_the_earlier_of_logged_and_current_tip(tmp_path):
     # and predicted_at is AFTER that -- never graded.
     assert grade(con, repo_dir, SEASON, later) == 0
     assert read_log(grades_path(repo_dir, SEASON)) == []
+
+
+# --- code version on every line (final fix wave) ---------------------------
+
+import subprocess  # noqa: E402
+
+
+def _git_repo(path, monkeypatch):
+    for var, value in (("GIT_AUTHOR_NAME", "Bot"), ("GIT_AUTHOR_EMAIL", "bot@example.invalid"),
+                       ("GIT_COMMITTER_NAME", "Bot"), ("GIT_COMMITTER_EMAIL", "bot@example.invalid")):
+        monkeypatch.setenv(var, value)
+    path.mkdir(parents=True)
+
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=path, capture_output=True, text=True, timeout=30)
+
+    assert git("init", "-b", "main").returncode == 0
+    (path / "README.md").write_text("seed\n", encoding="utf-8")
+    assert git("add", "README.md").returncode == 0
+    assert git("commit", "-m", "seed").returncode == 0
+    return git("rev-parse", "--short", "HEAD").stdout.strip()
+
+
+def test_every_line_records_the_code_version(tmp_path, monkeypatch):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    sha = _git_repo(repo_dir, monkeypatch)
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    insert_schedule_row(con, "0022600960", date(2026, 11, 10), "PHI", "NYK",
+                         now + timedelta(hours=2), season=SEASON)      # predicted
+    insert_schedule_row(con, "0022600961", date(2026, 11, 10), "BOS", "MIA",
+                         now - timedelta(minutes=5), season=SEASON)    # too late
+    insert_schedule_row(con, "0022600962", date(2026, 11, 9), "DEN", "LAL",
+                         now - timedelta(hours=20), season=SEASON)     # back-filled
+
+    result = predict_today(con, S, repo_dir, now)
+
+    assert len(result.lines_written) == 3
+    for line in result.lines_written:
+        assert line["code_version"] == sha
+        assert line["code_dirty"] is False
+
+    # The code is edited (uncommitted) before the next run.
+    (repo_dir / "README.md").write_text("edited\n", encoding="utf-8")
+    insert_schedule_row(con, "0022600963", date(2026, 11, 10), "UTA", "OKC",
+                         now + timedelta(hours=3), season=SEASON)
+    second = predict_today(con, S, repo_dir, now)
+    (line,) = second.lines_written
+    assert line["code_version"] == sha
+    assert line["code_dirty"] is True
+
+
+def test_grade_lines_record_the_code_version(tmp_path, monkeypatch):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    sha = _git_repo(repo_dir, monkeypatch)
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    tip = now + timedelta(hours=2)
+    insert_schedule_row(con, "0022600970", date(2026, 11, 10), "PHI", "NYK", tip, season=SEASON)
+    _append_raw_line(log_path(repo_dir, SEASON),
+                      _hand_predicted_line("0022600970", "PHI", "NYK", tip, 0.6, now))
+    later = tip + timedelta(hours=4)
+    _insert_final(con, "0022600970", SEASON, date(2026, 11, 10), "PHI", "NYK",
+                  110, 100, observed_at=later, reconstructed=False)
+
+    assert grade(con, repo_dir, SEASON, later) == 1
+    (g,) = read_log(grades_path(repo_dir, SEASON))
+    assert g["code_version"] == sha
+    assert g["code_dirty"] is False
+
+
+def test_code_version_is_null_outside_a_git_checkout(tmp_path):
+    con = fixture_con(tmp_path)
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    insert_schedule_row(con, "0022600980", date(2026, 11, 10), "PHI", "NYK",
+                         now + timedelta(hours=2), season=SEASON)
+    (line,) = predict_today(con, S, tmp_path / "repo", now).lines_written
+    assert line["code_version"] is None
+    assert line["code_dirty"] is False

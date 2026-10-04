@@ -28,6 +28,7 @@ from zoneinfo import ZoneInfo
 from predictor import db
 from predictor.asof import AsOfView
 from predictor.backtest.baselines import GameToPredict
+from predictor.model import publish
 from predictor.model.settings import ModelSettings
 from predictor.model.stage1 import Stage1Predictor
 from predictor.model.venues import COMPETITIVE_PREFIXES
@@ -355,6 +356,8 @@ def predict_today(con, settings: ModelSettings, repo_dir: Path, now: datetime) -
     last_cap = last_capture(con)
     stale_flag = bool(results_missing(con, now))
     settings_dict = _settings_dict(settings)
+    # Which code made these lines -- see publish.code_version.
+    code_sha, code_dirty = publish.code_version(repo_dir)
     predictor = Stage1Predictor(con, settings)
 
     predicted = not_predicted = skipped_duplicates = backfilled = 0
@@ -387,6 +390,8 @@ def predict_today(con, settings: ModelSettings, repo_dir: Path, now: datetime) -
             "settings": settings_dict,
             "stale_results": stale_flag,
             "last_result_capture": last_cap.isoformat() if last_cap is not None else None,
+            "code_version": code_sha,
+            "code_dirty": code_dirty,
         }
 
     def not_predicted_line(g: SlateGame, reason: str) -> dict:
@@ -496,6 +501,7 @@ def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
     already_graded = {g["game_id"] for g in read_log(gpath)}
     games_table = db.POINT_IN_TIME_TABLES["games"]
 
+    code_sha, code_dirty = publish.code_version(repo_dir)
     appended = 0
     for game_id in sorted(latest_predicted):
         if game_id in already_graded:
@@ -520,6 +526,8 @@ def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
             "home_won": home_won,
             "correct": (p_home >= 0.5) == home_won,
             "graded_at": now.isoformat(),
+            "code_version": code_sha,
+            "code_dirty": code_dirty,
         }
         _append_line(gpath, grade_line)
         appended += 1

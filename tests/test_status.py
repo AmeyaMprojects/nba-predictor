@@ -256,13 +256,37 @@ def test_prediction_log_not_stale_with_a_recent_line(con, tmp_path):
     assert health["prediction_log"].stale is False
 
 
-def test_log_published_stale_with_unpushed_commits(con, tmp_path):
-    repo = _repo_with_remote(tmp_path / "repo", ahead_commits=1)
+def _commit_prediction(repo, n):
+    # Not the season log itself (prediction_log would parse it) -- any file
+    # under predictions/ makes this a prediction commit.
+    path = repo / "predictions" / "scratch.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(f'{{"n": {n}}}\n')
+    assert _git(repo, "add", "predictions/scratch.jsonl").returncode == 0
+    assert _git(repo, "commit", "-m", f"predictions: day {n}").returncode == 0
+
+
+def test_log_published_stale_with_unpushed_prediction_commits(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    _commit_prediction(repo, 1)
     health = {h.name: h for h in status.check_live(con, repo, NOW)}
     log_published = health["log_published"]
     assert log_published.stale is True
     assert "git push origin main" in log_published.advice
     assert "gh auth status" in log_published.advice
+
+
+def test_log_published_warns_that_foreign_unpushed_commits_would_go_public(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo", ahead_commits=2)
+    _commit_prediction(repo, 1)
+    health = {h.name: h for h in status.check_live(con, repo, NOW)}
+    log_published = health["log_published"]
+    assert log_published.stale is True
+    assert log_published.advice == (
+        "2 of the unpushed commits are not prediction commits — pushing would "
+        "make them PUBLIC; review them before running git push origin main"
+    )
 
 
 def test_log_published_stale_with_no_remote(con, tmp_path):
@@ -314,7 +338,57 @@ def test_report_detail_says_no_remote_when_unpushed_commits_is_none(con, tmp_pat
     assert "no data at all" not in text
 
 
-def test_check_live_returns_all_three_names(con, tmp_path):
+def test_check_live_returns_all_four_names(con, tmp_path):
     repo = _repo_with_remote(tmp_path / "repo")
     names = {h.name for h in status.check_live(con, repo, NOW)}
-    assert names == {"live_results", "prediction_log", "log_published"}
+    assert names == {"live_results", "prediction_log", "prediction_files", "log_published"}
+
+
+# --- prediction_files: never OK while predictions are stranded -------------
+
+
+def test_prediction_files_ok_on_a_clean_main(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    health = {h.name: h for h in status.check_live(con, repo, NOW)}
+    assert health["prediction_files"].stale is False
+    text = status.format_report(status.check_live(con, repo, NOW))
+    assert "prediction_files: committed on main" in text
+
+
+def test_prediction_files_stale_off_main(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    assert _git(repo, "checkout", "-b", "experiment").returncode == 0
+    health = {h.name: h for h in status.check_live(con, repo, NOW)}
+    files = health["prediction_files"]
+    assert files.stale is True
+    assert files.advice == (
+        "the checkout is on 'experiment' — predictions written here are not "
+        "being published; switch back to main"
+    )
+
+
+def test_prediction_files_stale_with_uncommitted_predictions(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    path = repo / "predictions" / "scratch.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"a": 1}\n', encoding="utf-8")
+    health = {h.name: h for h in status.check_live(con, repo, NOW)}
+    files = health["prediction_files"]
+    assert files.stale is True
+    assert files.advice == (
+        "prediction files have uncommitted changes — the last publish failed; "
+        "run predictor predict-today again or check the message in "
+        "data/logs/predict.err.log"
+    )
+    # Everything else is fine, yet the report must not say ALL OK.
+    text = status.format_report(status.check_live(con, repo, NOW))
+    assert not text.startswith("ALL OK")
+
+
+def test_prediction_files_stale_mid_merge(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / ".git" / "MERGE_HEAD").write_text(head + "\n", encoding="utf-8")
+    files = {h.name: h for h in status.check_live(con, repo, NOW)}["prediction_files"]
+    assert files.stale is True
+    assert "MERGE_HEAD" in files.advice

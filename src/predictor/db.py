@@ -210,6 +210,7 @@ def connect(
 def connect_with_retry(
     path: Path | None = None,
     *,
+    read_only: bool = False,
     attempts: int = 6,
     wait_seconds: float = 20.0,
     sleep=time.sleep,
@@ -221,10 +222,12 @@ def connect_with_retry(
     them routinely finds the other holding the lock for a few seconds.
     Only that specific error is retried (matched on DuckDB's own message,
     as the backtest command does); anything else raises immediately.
+    ``read_only`` is passed to every attempt (a read-only open still
+    conflicts with another process's write lock).
     """
     for attempt in range(1, attempts + 1):
         try:
-            return connect(path)
+            return connect(path, read_only=read_only)
         except duckdb.Error as exc:
             if "conflicting lock is held" not in str(exc).lower() or attempt == attempts:
                 raise

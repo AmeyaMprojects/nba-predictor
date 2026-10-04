@@ -498,13 +498,16 @@ def predict_today_cmd(
         raise typer.Exit(code=1) from None
 
     try:
-        con = db.connect(read_only=True)
+        # Read-only, but a read-only open still conflicts with another
+        # process's write lock (e.g. capture-results or poll-news firing on
+        # wake at the same moment) -- wait that out like every other job.
+        con = db.connect_with_retry(read_only=True)
     except duckdb.Error as exc:
         if "conflicting lock is held" in str(exc).lower():
             typer.echo(
                 "Could not open the database -- another 'predictor' command "
-                "is using it right now. Wait a moment and try 'predictor "
-                "predict-today' again."
+                "is using it right now (still, after waiting). Try 'predictor "
+                "predict-today' again in a few minutes."
             )
         else:
             typer.echo(

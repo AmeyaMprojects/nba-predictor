@@ -327,3 +327,40 @@ def test_backfilled_lines_are_reported_and_published_for_their_own_season(tmp_pa
     assert line["game_id"] == "0022500791"
     tracked = _git(repo_dir, "ls-files", "predictions").stdout.split()
     assert "predictions/2025-26.jsonl" in tracked
+
+
+def test_predict_today_opens_the_database_read_only_with_lock_retry(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    con.close()
+    real = db.connect_with_retry
+    calls = []
+
+    def spy(*args, **kwargs):
+        calls.append(kwargs)
+        return real(*args, **{**kwargs, "attempts": 1})
+
+    monkeypatch.setattr(db, "connect_with_retry", spy)
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+    assert calls[0].get("read_only") is True
+
+
+def test_predict_today_lock_still_held_after_retries_is_a_plain_message(tmp_path, monkeypatch):
+    import duckdb
+
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    con.close()
+
+    def locked(*args, **kwargs):
+        raise duckdb.IOException("Could not set lock on file: Conflicting lock is held in x")
+
+    monkeypatch.setattr(db, "connect_with_retry", locked)
+    result = runner.invoke(cli.app, ["predict-today"])
+
+    assert result.exit_code == 1
+    assert "another 'predictor' command is using it" in result.output
+    assert "Traceback" not in result.output

@@ -66,6 +66,18 @@ _IN_PROGRESS_MARKERS = (
     "REVERT_HEAD",
     "rebase-merge",
     "rebase-apply",
+    # A multi-commit cherry-pick/revert stopped BETWEEN commits leaves only
+    # this directory (no *_HEAD file) -- still an unfinished operation.
+    "sequencer",
+)
+
+# `git push` stderr fragments meaning the remote has commits this checkout
+# lacks -- retrying will never help until a human pulls them.
+_REJECTED_MARKERS = ("rejected", "non-fast-forward", "fetch first")
+_REJECTED_MESSAGE = (
+    "GitHub has commits this checkout doesn't — the push was rejected and "
+    "will keep failing until they are pulled by hand (git pull --ff-only "
+    "origin main), then the next run publishes"
 )
 
 
@@ -284,6 +296,18 @@ def commit_and_push(
         )
 
     unpushed = _git(repo_dir, ["rev-list", "origin/main..main"])
+    if unpushed.returncode != 0:
+        # Without the list there is no way to prove every unpushed commit
+        # is our own -- so nothing is pushed.
+        return PublishResult(
+            committed=True,
+            pushed=False,
+            message=(
+                "committed, but the push was refused because git could not "
+                f"list the unpushed commits ({unpushed.stderr.strip()}); "
+                "inspect the checkout by hand (git status, git log origin/main..main)"
+            ),
+        )
     shas = [s.strip() for s in unpushed.stdout.splitlines() if s.strip()]
     offending = [
         _commit_subject(repo_dir, sha) for sha in shas if not _is_safe_prediction_commit(repo_dir, sha)
@@ -301,6 +325,9 @@ def commit_and_push(
 
     push_result = _git(repo_dir, ["push", "origin", "main"], timeout=_PUSH_TIMEOUT)
     if push_result.returncode != 0:
+        stderr = push_result.stderr.lower()
+        if any(marker in stderr for marker in _REJECTED_MARKERS):
+            return PublishResult(committed=True, pushed=False, message=_REJECTED_MESSAGE)
         return PublishResult(
             committed=True,
             pushed=False,
@@ -325,3 +352,69 @@ def unpushed_commits(repo_dir: Path) -> int | None:
         return int(result.stdout.strip())
     except ValueError:
         return None
+
+
+def unpushed_non_prediction_commits(repo_dir: Path) -> int | None:
+    """How many commits on ``main`` not yet on ``origin/main`` are NOT
+    automated prediction commits (the same predicate ``commit_and_push``
+    uses to refuse a push), or None if it cannot be determined."""
+    if not _has_remote(repo_dir):
+        return None
+    result = _git(repo_dir, ["rev-list", "origin/main..main"])
+    if result.returncode != 0:
+        return None
+    shas = [s.strip() for s in result.stdout.splitlines() if s.strip()]
+    return sum(1 for sha in shas if not _is_safe_prediction_commit(repo_dir, sha))
+
+
+def code_version(repo_dir: Path) -> tuple[str | None, bool]:
+    """``(HEAD short sha, dirty)`` for the code that is making predictions.
+
+    ``dirty`` is True when anything outside ``predictions/`` differs from
+    HEAD (modified, staged or untracked-and-not-ignored) -- i.e. the
+    predictions were NOT made by exactly the committed code. The
+    prediction files themselves are excluded: writing them is the run's
+    own job. Never raises: outside a git repository (or on any git
+    failure reading HEAD) this is ``(None, False)``; if HEAD is readable
+    but the working tree is not, it is reported dirty (unverifiable).
+    """
+    head = _git(repo_dir, ["rev-parse", "--short", "HEAD"])
+    if head.returncode != 0 or not head.stdout.strip():
+        return None, False
+    status = _git(
+        repo_dir,
+        ["status", "--porcelain", "--", ".", f":(exclude){_PREDICTIONS_DIRNAME}"],
+    )
+    if status.returncode != 0:
+        return head.stdout.strip(), True
+    return head.stdout.strip(), bool(status.stdout.strip())
+
+
+def prediction_files_problem(repo_dir: Path) -> str | None:
+    """Plain-English reason the prediction files are NOT being published
+    from this checkout, or None if nothing is wrong with them locally:
+    the checkout is off ``main``, a git operation is in progress, or
+    ``predictions/`` has uncommitted changes (a failed publish)."""
+    branch = current_branch(repo_dir)
+    if branch != "main":
+        where = f"'{branch}'" if branch is not None else "a detached HEAD (or is not a git checkout)"
+        return (
+            f"the checkout is on {where} — predictions written here are not "
+            "being published; switch back to main"
+        )
+    in_progress = _operation_in_progress(repo_dir)
+    if in_progress is not None:
+        return (
+            f"a git operation ({in_progress}) is in progress — predictions "
+            "cannot be committed until it is finished or aborted by hand"
+        )
+    status = _git(repo_dir, ["status", "--porcelain", "--", f"{_PREDICTIONS_DIRNAME}/"])
+    if status.returncode != 0:
+        return f"git could not read the prediction files' state ({status.stderr.strip()})"
+    if status.stdout.strip():
+        return (
+            "prediction files have uncommitted changes — the last publish "
+            "failed; run predictor predict-today again or check the message "
+            "in data/logs/predict.err.log"
+        )
+    return None

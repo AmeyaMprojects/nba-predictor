@@ -87,6 +87,10 @@ class SourceHealth:
     age_hours: float | None
     stale: bool
     advice: str
+    # When set, format_report prints this as the entry's detail text instead
+    # of deriving one from latest/row_count (check_live's entries, whose
+    # "rows" are not table rows).
+    detail: str | None = None
 
 
 def _advice(name: str, latest: datetime | None, now: datetime) -> str:
@@ -243,6 +247,28 @@ def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceH
         SourceHealth("prediction_log", latest_pred, len(log), age_log, stale_log, advice_log)
     )
 
+    # --- prediction_files ---------------------------------------------------
+    # Never OK while predictions are written but stranded locally: off main
+    # (never committed), mid-operation, or left uncommitted by a failed
+    # publish -- log_published alone cannot see any of these (it only
+    # counts commits that exist).
+    files_problem = publish.prediction_files_problem(repo_dir)
+    out.append(
+        SourceHealth(
+            "prediction_files",
+            None,
+            0,
+            None,
+            files_problem is not None,
+            files_problem or "",
+            detail=(
+                "NOT being published from this checkout"
+                if files_problem is not None
+                else "committed on main, nothing left uncommitted"
+            ),
+        )
+    )
+
     # --- log_published -----------------------------------------------------
     unpushed = publish.unpushed_commits(repo_dir)
     if unpushed is None:
@@ -261,11 +287,24 @@ def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceH
     elif unpushed > 0:
         stale_pub = True
         row_count_pub = unpushed
-        advice_pub = (
-            f"{unpushed} commit(s) are committed locally but not pushed -- "
-            "run: git push origin main, or check the GitHub login: gh auth "
-            "status."
-        )
+        # Same predicate predict-today's own push uses: a commit that is not
+        # an automated prediction commit is never pushed automatically, and
+        # a human told to "just push" would make it public.
+        foreign = publish.unpushed_non_prediction_commits(repo_dir)
+        if foreign:
+            advice_pub = (
+                f"{foreign} of the unpushed commits are not prediction commits "
+                "— pushing would make them PUBLIC; review them before running "
+                "git push origin main"
+            )
+        else:
+            advice_pub = (
+                f"{unpushed} commit(s) are committed locally but not pushed -- "
+                "run: git push origin main, or check the GitHub login: gh auth "
+                "status. If the push is rejected because GitHub has commits "
+                "this checkout doesn't, pull them by hand first: git pull "
+                "--ff-only origin main."
+            )
     else:
         stale_pub = False
         row_count_pub = 0
@@ -302,7 +341,9 @@ def format_report(health: list[SourceHealth]) -> str:
 
     for h in health:
         mark = "STALE" if h.stale else "OK"
-        if h.name == "log_published":
+        if h.detail is not None:
+            detail = h.detail
+        elif h.name == "log_published":
             # log_published has no natural timestamp at all (a commit count,
             # not a freshness clock), so it never goes through the
             # `latest is None` branch below -- it gets its own wording keyed
