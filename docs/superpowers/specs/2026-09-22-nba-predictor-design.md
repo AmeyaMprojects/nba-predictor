@@ -696,3 +696,23 @@ retried on the next run; `status` reports "log not published since …".
 `predictor status` adds: live results (stale after 36 hours *while games are
 being played*; quiet in the off-season), prediction log (last run), and
 publication (unpushed commits).
+
+### Go-live — 2026-10-04
+
+- Public repo: https://github.com/AmeyaMprojects/nba-predictor (first push by
+  hand; later pushes only by `predict-today`, and only of `predictions:`
+  commits touching `predictions/`).
+- The scheduled jobs run from a dedicated live copy,
+  `~/projects/predictor-live`, which stays on `main`; its `data/` is a link
+  to the development copy's `data/`. Development happens in
+  `~/projects/predictor`. To deploy merged changes:
+  `git -C ~/projects/predictor-live pull --ff-only && (cd ~/projects/predictor-live && uv sync)`.
+  The development copy must `git pull --ff-only` before pushing, because the
+  live copy pushes prediction commits daily.
+- Jobs (IST): news 09:00/14:00/19:00, schedule 10:30, results 17:00,
+  predictions 18:00. Results are recorded only when both teams' W/L are set
+  and capture is at least 3h30m after tip-off. The slate is the ET date of
+  (now − 7h); IST has no DST.
+- Verified under launchd: capture recorded a finished preseason game with
+  its real capture time; predict-today ran on an empty slate; a bare-
+  environment `git push --dry-run` authenticates via the gh credential helper.
