@@ -247,7 +247,11 @@ def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceH
     unpushed = publish.unpushed_commits(repo_dir)
     if unpushed is None:
         stale_pub = True
-        row_count_pub = 0
+        # -1 is a sentinel, not a count: `unpushed_commits` returned None
+        # (no remote configured, or any other git error), so there is no
+        # count to report -- see format_report's log_published special
+        # case, which reads this sentinel to pick the right detail line.
+        row_count_pub = -1
         advice_pub = (
             "no GitHub remote configured for this checkout -- add one with: "
             "git remote add origin <url>, then push; if a remote IS "
@@ -298,11 +302,27 @@ def format_report(health: list[SourceHealth]) -> str:
 
     for h in health:
         mark = "STALE" if h.stale else "OK"
-        if h.latest is None:
+        if h.name == "log_published":
+            # log_published has no natural timestamp at all (a commit count,
+            # not a freshness clock), so it never goes through the
+            # `latest is None` branch below -- it gets its own wording keyed
+            # off `row_count`: the actual unpushed count when known, or the
+            # -1 sentinel `check_live` uses for "unpushed_commits() returned
+            # None" (no remote configured, or any other git error).
+            if h.row_count < 0:
+                detail = "no GitHub remote configured (or git could not be read)"
+            elif h.row_count > 0:
+                detail = f"{h.row_count} commit(s) waiting to be pushed"
+            else:
+                detail = "nothing waiting to be pushed"
+        elif h.latest is None:
             # Existing table sources (check_sources) always treat latest=None
-            # as stale -- this branch only triggers for check_live entries
-            # with no natural timestamp (e.g. log_published), where
-            # latest=None and healthy both just mean "nothing to report".
+            # as stale (an empty table). The only check_live entry that can
+            # still reach this branch is prediction_log with an empty/missing
+            # log file -- `stale` there also depends on whether there are
+            # recent games at all (see check_live), so `latest is None` and
+            # `stale is False` both commonly hold together in the off-season
+            # ("n/a": nothing predicted yet, and nothing is wrong).
             detail = "no data at all" if h.stale else "n/a"
         else:
             detail = (

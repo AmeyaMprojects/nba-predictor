@@ -279,6 +279,41 @@ def test_log_published_not_stale_when_fully_pushed(con, tmp_path):
     assert health["log_published"].stale is False
 
 
+# --- format_report's log_published detail line (fix round 1) --------------
+#
+# `log_published` has no natural timestamp (latest is always None by
+# construction), so format_report's generic "latest is None" branch used to
+# swallow it into a blanket "no data at all" -- even while commits were
+# genuinely waiting to be pushed, directly contradicting the advice line
+# printed right under it. These three tests pin the exact wording for each
+# of the three `log_published` states, via the real `format_report(check_live(...))`
+# path (not the dataclass fields directly), since the defect was specifically
+# in the report's rendering, not in `check_live`'s data.
+
+
+def test_report_detail_says_how_many_commits_are_waiting(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo", ahead_commits=3)
+    text = status.format_report(status.check_live(con, repo, NOW))
+    assert "log_published: 3 commit(s) waiting to be pushed" in text
+    assert "no data at all" not in text
+
+
+def test_report_detail_says_nothing_waiting_when_fully_pushed(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo", ahead_commits=0)
+    text = status.format_report(status.check_live(con, repo, NOW))
+    assert "log_published: nothing waiting to be pushed" in text
+
+
+def test_report_detail_says_no_remote_when_unpushed_commits_is_none(con, tmp_path):
+    repo = _repo_without_remote(tmp_path / "repo")
+    text = status.format_report(status.check_live(con, repo, NOW))
+    assert (
+        "log_published: no GitHub remote configured (or git could not be read)"
+        in text
+    )
+    assert "no data at all" not in text
+
+
 def test_check_live_returns_all_three_names(con, tmp_path):
     repo = _repo_with_remote(tmp_path / "repo")
     names = {h.name for h in status.check_live(con, repo, NOW)}
