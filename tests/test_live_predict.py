@@ -19,6 +19,7 @@ from predictor.model.live import (
     predict_today,
     read_log,
     results_missing,
+    slate_date,
     slate_for,
 )
 from predictor.model.ratings import RatingParams
@@ -145,6 +146,118 @@ def test_non_competitive_prefix_and_tbd_tipoff_are_excluded(tmp_path):
     insert_schedule_row(con, "0022600004", date(2026, 10, 21), "BOS", "MIA", None,
                          observed_at=datetime(2026, 10, 1, tzinfo=UTC), season=SEASON)
     assert slate_for(con, now) == []
+
+
+# --- 1b. the slate date, back-fill of missed days, TBD tip-offs ---------
+
+def test_slate_date_is_the_et_date_a_few_hours_ago():
+    # The 18:00 IST run (08:30 EDT) handles today.
+    assert slate_date(datetime(2026, 10, 21, 12, 30, tzinfo=UTC)) == date(2026, 10, 21)
+    # A catch-up run just after ET midnight (00:30 EDT) still handles the
+    # previous ET day.
+    assert slate_date(datetime(2026, 10, 22, 4, 30, tzinfo=UTC)) == date(2026, 10, 21)
+    assert slate_date(datetime(2026, 10, 22, 13, 0, tzinfo=UTC)) == date(2026, 10, 22)
+
+
+def test_slate_date_of_the_scheduled_run_is_today_in_winter_too():
+    # 18:00 IST is 07:30 EST once the US leaves daylight saving time (IST has
+    # none) -- it must STILL handle today, not yesterday, or every game from
+    # November to March would go unpredicted.
+    assert slate_date(datetime(2026, 11, 5, 12, 30, tzinfo=UTC)) == date(2026, 11, 5)
+    assert slate_date(datetime(2027, 1, 15, 12, 30, tzinfo=UTC)) == date(2027, 1, 15)
+
+
+_MISSED_REASON = (
+    "no prediction was made before tip-off (the daily prediction run did not "
+    "happen in time)"
+)
+_TBD_REASON = "tip-off time not announced when the prediction run happened"
+
+
+def test_missed_days_are_backfilled_as_not_predicted(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)  # slate 2026-11-10
+
+    def sched(gid, day):
+        insert_schedule_row(con, gid, date(2026, 11, day), "PHI", "NYK",
+                             datetime(2026, 11, day, 23, 0, tzinfo=UTC), season=SEASON)
+
+    sched("0022600401", 6)   # 4 days before: outside the window
+    sched("0022600402", 7)   # 3 days before: back-filled
+    sched("0022600403", 9)   # 1 day before: back-filled
+    sched("0022600404", 9)   # 1 day before, but already logged: left alone
+    insert_schedule_row(con, "0012600405", date(2026, 11, 9), "BOS", "MIA",
+                         datetime(2026, 11, 9, 23, 0, tzinfo=UTC), season=SEASON)  # preseason
+    _append_raw_line(
+        log_path(repo_dir, SEASON),
+        _hand_predicted_line("0022600404", "PHI", "NYK",
+                             datetime(2026, 11, 9, 23, 0, tzinfo=UTC), 0.6,
+                             datetime(2026, 11, 9, 12, 30, tzinfo=UTC), game_date="2026-11-09"),
+    )
+
+    result = predict_today(con, S, repo_dir, now)
+
+    assert result.backfilled == 2
+    backfilled = [l for l in result.lines_written if l["reason"] == _MISSED_REASON]
+    assert [(l["game_id"], l["game_date"]) for l in backfilled] == [
+        ("0022600402", "2026-11-07"),
+        ("0022600403", "2026-11-09"),
+    ]
+    for line in backfilled:
+        assert line["status"] == "not_predicted"
+        assert line["spread"] is None and line["p_home"] is None
+        assert line["terms"] is None and line["sentence"] is None
+        assert line["predicted_at"] == now.isoformat()
+
+    # Idempotent: the next run adds no second back-fill line.
+    again = predict_today(con, S, repo_dir, now + timedelta(minutes=5))
+    assert again.backfilled == 0
+    assert again.lines_written == []
+
+
+def test_backfill_never_claims_a_game_that_has_not_tipped_off(tmp_path):
+    # A game still dated yesterday whose (latest) tip-off is in the future
+    # has not been missed -- nothing is written for it.
+    con = fixture_con(tmp_path)
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    insert_schedule_row(con, "0022600410", date(2026, 11, 9), "PHI", "NYK",
+                         now + timedelta(hours=2), season=SEASON)
+    result = predict_today(con, S, tmp_path / "repo", now)
+    assert result.backfilled == 0
+    assert result.lines_written == []
+
+
+def test_tbd_tipoff_on_the_slate_is_logged_but_does_not_block_a_later_prediction(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 11, 10, 13, 0, tzinfo=UTC)
+    insert_schedule_row(con, "0022600420", date(2026, 11, 10), "PHI", "NYK", None,
+                         observed_at=now - timedelta(days=2), season=SEASON)
+
+    first = predict_today(con, S, repo_dir, now)
+    assert first.not_predicted == 1 and first.predicted == 0
+    (tbd,) = first.lines_written
+    assert tbd["status"] == "not_predicted"
+    assert tbd["reason"] == _TBD_REASON
+    assert tbd["tip_off_utc"] is None
+    assert tbd["spread"] is None and tbd["p_home"] is None
+
+    # Re-running while still TBD writes nothing new.
+    rerun = predict_today(con, S, repo_dir, now + timedelta(minutes=10))
+    assert rerun.lines_written == []
+    assert rerun.skipped_duplicates == 1
+
+    # The tip-off gets announced; the next run predicts the game.
+    insert_schedule_row(con, "0022600420", date(2026, 11, 10), "PHI", "NYK",
+                         datetime(2026, 11, 11, 0, 0, tzinfo=UTC),
+                         observed_at=now + timedelta(hours=1), season=SEASON)
+    later = predict_today(con, S, repo_dir, now + timedelta(hours=2))
+    assert later.predicted == 1
+    assert later.lines_written[0]["status"] == "predicted"
+
+    log = read_log(log_path(repo_dir, SEASON))
+    assert [l["status"] for l in log] == ["not_predicted", "predicted"]
 
 
 # --- 2. a predicted line matches a fresh Stage1Predictor call ----------
@@ -296,8 +409,10 @@ def test_stale_when_a_recent_game_has_no_final_result(tmp_path):
 
     result = predict_today(con, S, tmp_path / "repo", now)
     assert result.stale is True
-    assert len(result.lines_written) == 1
-    assert result.lines_written[0]["stale_results"] is True
+    # Yesterday's game is back-filled as not predicted; today's is predicted.
+    assert result.backfilled == 1
+    (line,) = [l for l in result.lines_written if l["game_id"] == "0022600812"]
+    assert line["stale_results"] is True
 
 
 def test_not_stale_once_the_missing_games_final_is_captured(tmp_path):
@@ -317,8 +432,7 @@ def test_not_stale_once_the_missing_games_final_is_captured(tmp_path):
 
     result = predict_today(con, S, tmp_path / "repo", now)
     assert result.stale is False
-    assert len(result.lines_written) == 1
-    line = result.lines_written[0]
+    (line,) = [l for l in result.lines_written if l["game_id"] == "0022600814"]
     assert line["stale_results"] is False
     assert line["last_result_capture"] is None
 
@@ -411,8 +525,8 @@ def test_a_future_captured_result_does_not_change_the_prediction(tmp_path):
     con_with = _build(tmp_path / "with", with_future_leak=True)
     result_with = predict_today(con_with, S, tmp_path / "repo_with", now)
 
-    line_without = result_without.lines_written[0]
-    line_with = result_with.lines_written[0]
+    (line_without,) = [l for l in result_without.lines_written if l["game_id"] == "0022600610"]
+    (line_with,) = [l for l in result_with.lines_written if l["game_id"] == "0022600610"]
     assert line_without["spread"] == line_with["spread"]
     assert line_without["p_home"] == line_with["p_home"]
 

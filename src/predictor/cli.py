@@ -479,12 +479,12 @@ def predict_today_cmd(
     from predictor.model import publish
     from predictor.model import settings as model_settings
     from predictor.model.live import (
-        EASTERN,
         LogError,
         grade,
         grades_path,
         log_path,
         predict_today,
+        slate_date,
         slate_for,
     )
 
@@ -545,8 +545,15 @@ def predict_today_cmd(
     finally:
         con.close()
 
-    date_str = now.astimezone(EASTERN).date().isoformat()
-    paths = [p for s in seasons_touched for p in (log_path(repo_dir, s), grades_path(repo_dir, s))]
+    # Back-filled lines for missed days can belong to another season's log
+    # than today's slate -- publish every log this run actually appended to.
+    seasons_touched |= {line["season"] for line in result.lines_written}
+    date_str = slate_date(now).isoformat()
+    paths = [
+        p
+        for s in sorted(seasons_touched)
+        for p in (log_path(repo_dir, s), grades_path(repo_dir, s))
+    ]
     publish_result = publish.commit_and_push(
         repo_dir, paths, f"predictions: {date_str} slate", push=not no_push
     )
@@ -556,6 +563,12 @@ def predict_today_cmd(
         f"{result.not_predicted} not predicted, "
         f"{result.skipped_duplicates} duplicate(s) skipped"
     )
+    if result.backfilled:
+        typer.echo(
+            f"NOTE: {result.backfilled} back-filled for missed days -- games from "
+            "the last few days that no run predicted before tip-off are now "
+            "logged as not predicted (included in the count above)."
+        )
     if result.stale:
         typer.echo(
             "WARNING: recent results are missing -- today's predictions are "

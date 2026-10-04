@@ -284,3 +284,46 @@ def test_failed_push_exits_zero_with_a_warning(tmp_path, monkeypatch):
     assert result.exit_code == 0, result.output
     assert "WARNING" in result.output
     assert "next run will push it" in result.output
+
+
+# --- final fix wave: slate date, back-fill ---------------------------------
+
+
+def test_catch_up_run_after_et_midnight_handles_the_previous_et_day(tmp_path, monkeypatch):
+    # 04:30 UTC on 10-22 is 00:30 EDT on 10-22: the run still belongs to the
+    # 10-21 slate (whose games have all started by now -> not predicted).
+    now = datetime(2026, 10, 22, 4, 30, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    insert_schedule_row(
+        con, "0022600790", date(2026, 10, 21), "PHI", "NYK",
+        datetime(2026, 10, 21, 23, 0, tzinfo=UTC), season=SEASON,
+    )
+    con.close()
+
+    result = runner.invoke(cli.app, ["predict-today"])
+
+    assert result.exit_code == 0, result.output
+    assert "slate 2026-10-21: 0 predicted, 1 not predicted" in result.output
+    remote_log = _git(remote_dir, "log", "--format=%s", "main")
+    assert "predictions: 2026-10-21 slate" in remote_log.stdout
+
+
+def test_backfilled_lines_are_reported_and_published_for_their_own_season(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    # A missed game from 2 days ago, filed under a different season's log.
+    insert_schedule_row(
+        con, "0022500791", date(2026, 11, 8), "PHI", "NYK",
+        datetime(2026, 11, 8, 23, 0, tzinfo=UTC), season="2025-26",
+    )
+    con.close()
+
+    result = runner.invoke(cli.app, ["predict-today"])
+
+    assert result.exit_code == 0, result.output
+    assert "1 back-filled for missed days" in result.output
+    assert "committed and pushed" in result.output
+    (line,) = read_log(log_path(repo_dir, "2025-26"))
+    assert line["game_id"] == "0022500791"
+    tracked = _git(repo_dir, "ls-files", "predictions").stdout.split()
+    assert "predictions/2025-26.jsonl" in tracked
