@@ -43,9 +43,11 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from predictor.config import season_label
 from predictor.db import POINT_IN_TIME_TABLES
+from predictor.model import live, publish
 
 # Hours after which each source's newest `observed_at` counts as stale.
 # See the module docstring for why each value was chosen; none of these
@@ -175,6 +177,102 @@ def check_sources(con, now: datetime | None = None) -> list[SourceHealth]:
     return out
 
 
+# `prediction_log`: the longest acceptable gap between "there are games
+# today or yesterday (ET)" and the newest logged prediction -- see
+# `check_live`.
+PREDICTION_LOG_STALE_HOURS = 30
+
+
+def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceHealth]:
+    """Health of the three live-operation pieces that `check_sources` (table
+    freshness) cannot see: whether results are actually being captured,
+    whether today's predictions are actually being logged, and whether the
+    log is actually reaching GitHub. Appended after the table sources by the
+    `status` command so a human sees the whole pipeline in one report.
+
+    `live_results` staleness is driven entirely by
+    `predictor.model.live.results_missing` (any competitive game that tipped
+    off between 12h and 3 days ago with no FINAL row at all) -- NOT by the
+    age of the last capture. A long-idle but otherwise healthy capture job
+    (e.g. a multi-day All-Star break with no games) must not be flagged just
+    because `last_capture` is old; `results_missing` already returns empty
+    in that case. `latest` still reports the true last capture time (via
+    `last_capture`) for visibility, completely independent of the stale
+    verdict.
+    """
+    if now is None:
+        now = datetime.now(UTC)
+
+    out: list[SourceHealth] = []
+
+    # --- live_results --------------------------------------------------
+    cap = live.last_capture(con)
+    missing = live.results_missing(con, now)
+    stale_results = bool(missing)
+    age = (now - cap).total_seconds() / 3600 if cap is not None else None
+    advice_results = (
+        "Run: predictor capture-results, and confirm the launchd agent "
+        "com.predictor.results is loaded."
+        if stale_results
+        else ""
+    )
+    out.append(
+        SourceHealth("live_results", cap, len(missing), age, stale_results, advice_results)
+    )
+
+    # --- prediction_log --------------------------------------------------
+    season = season_label(now)
+    log = live.read_log(live.log_path(repo_dir, season))
+    latest_pred = max(
+        (datetime.fromisoformat(line["predicted_at"]) for line in log), default=None
+    )
+    has_recent_games = bool(live.slate_for(con, now)) or bool(
+        live.slate_for(con, now - timedelta(days=1))
+    )
+    stale_log = False
+    if live.in_season(con, now) and has_recent_games:
+        if latest_pred is None or (now - latest_pred) > timedelta(hours=PREDICTION_LOG_STALE_HOURS):
+            stale_log = True
+    age_log = (now - latest_pred).total_seconds() / 3600 if latest_pred is not None else None
+    advice_log = (
+        "Run: predictor predict-today, and confirm com.predictor.predict is loaded."
+        if stale_log
+        else ""
+    )
+    out.append(
+        SourceHealth("prediction_log", latest_pred, len(log), age_log, stale_log, advice_log)
+    )
+
+    # --- log_published -----------------------------------------------------
+    unpushed = publish.unpushed_commits(repo_dir)
+    if unpushed is None:
+        stale_pub = True
+        row_count_pub = 0
+        advice_pub = (
+            "no GitHub remote configured for this checkout -- add one with: "
+            "git remote add origin <url>, then push; if a remote IS "
+            "configured, inspect the repository by hand (git status, "
+            "git remote -v)."
+        )
+    elif unpushed > 0:
+        stale_pub = True
+        row_count_pub = unpushed
+        advice_pub = (
+            f"{unpushed} commit(s) are committed locally but not pushed -- "
+            "run: git push origin main, or check the GitHub login: gh auth "
+            "status."
+        )
+    else:
+        stale_pub = False
+        row_count_pub = 0
+        advice_pub = ""
+    out.append(
+        SourceHealth("log_published", None, row_count_pub, None, stale_pub, advice_pub)
+    )
+
+    return out
+
+
 def _format_age(hours: float) -> str:
     if hours < 0:
         # A derived/fixture observed_at can legitimately land in the
@@ -201,7 +299,11 @@ def format_report(health: list[SourceHealth]) -> str:
     for h in health:
         mark = "STALE" if h.stale else "OK"
         if h.latest is None:
-            detail = "no data at all"
+            # Existing table sources (check_sources) always treat latest=None
+            # as stale -- this branch only triggers for check_live entries
+            # with no natural timestamp (e.g. log_published), where
+            # latest=None and healthy both just mean "nothing to report".
+            detail = "no data at all" if h.stale else "n/a"
         else:
             detail = (
                 f"{h.row_count:,} rows, newest {_format_age(h.age_hours)} old "
