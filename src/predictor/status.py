@@ -24,8 +24,8 @@ the REAL refresh cadence of each source, not a single generic number:
   injury data to whatever consumes this table, which is exactly what the
   project's governing rule forbids. The advice text explains why blindly
   re-running may not help, instead of pretending it will.
-- odds_snapshots: zero rows today because there is no ODDS_API_KEY, not
-  because a feed broke. That is a different failure mode from "the feed
+- odds_snapshots: zero rows until the owner saves an Odds API key in
+  ~/.config/predictor/odds_api_key -- not because a feed broke. That is a different failure mode from "the feed
   stopped working" and gets different advice (get a key, vs. debug the
   feed) -- see `_advice`.
 - news_items: the one source polled continuously (three times a day) and
@@ -40,12 +40,11 @@ the REAL refresh cadence of each source, not a single generic number:
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from predictor.config import season_label
+from predictor.config import odds_api_key_path, season_label
 from predictor.db import POINT_IN_TIME_TABLES
 from predictor.model import live, publish
 
@@ -63,11 +62,10 @@ STALENESS_HOURS: dict[str, float] = {
     "games": 24 * 150,
     # Daily cadence (one backfill slot/day) plus one missed day of slack.
     "injury_status": 36,
-    # No scheduled job exists for odds yet; kept at the same "at least
-    # daily" cadence as injury_status as a placeholder for once ingest-odds
-    # is actually scheduled. In practice this rarely matters: row_count is
-    # 0 today, and an empty table is always reported stale regardless of
-    # this threshold (see check_sources).
+    # Fetched once a day at 17:30 local (scripts/com.predictor.odds.plist)
+    # once a key exists; one missed run of slack, same as injury_status.
+    # An empty table is always reported stale regardless of this threshold
+    # (see check_sources).
     "odds_snapshots": 36,
     # Polled at 09:00/14:00/19:00 local (scripts/com.predictor.daily.plist);
     # the longest normal gap between runs is ~14h (19:00 -> next 09:00).
@@ -113,18 +111,15 @@ def _advice(name: str, latest: datetime | None, now: datetime) -> str:
 
     if name == "odds_snapshots":
         # A missing key and a broken feed need different advice -- see
-        # module docstring.
-        if os.environ.get("ODDS_API_KEY"):
-            return (
-                "ODDS_API_KEY is set but odds_snapshots is still "
-                "empty/stale -- run: predictor ingest-odds directly and "
-                "read the error (quota exceeded, invalid key, transient "
-                "failure, etc.)."
-            )
+        # module docstring. The key file is never read here (status only
+        # names it), so both cases are covered in one sentence.
+        key_path = odds_api_key_path()
         return (
-            "No ODDS_API_KEY set -- get a free key at "
-            "https://the-odds-api.com, export ODDS_API_KEY, then run: "
-            "predictor ingest-odds"
+            "If there is no Odds API key yet: get a free key at "
+            f"https://the-odds-api.com and save it in {key_path} "
+            f"(then chmod 600 {key_path}). If the key is there: run "
+            "predictor ingest-odds directly and read its message (quota "
+            "used up, invalid key, network failure, etc.)."
         )
 
     if name == "news_items":

@@ -1,22 +1,44 @@
+"""Live odds from The Odds API, linked to schedule games.
+
+Spec section 8. One fetch per run (the free tier allows 500 requests a
+month). The flow is split so the network call never holds the database:
+
+    download()  fetch -> stamp observed_at -> archive the response bytes
+    ingest_current(con, fetch=...)  parse the ARCHIVED bytes -> link -> store
+
+`predictor ingest-odds` runs them in that order with `connect_with_retry`
+in between. The API key is never printed, logged, archived or stored:
+request errors are re-raised as `OddsFetchError` without the URL (which
+carries the key as a query parameter).
+"""
+
 from __future__ import annotations
 
 import hashlib
 import json
-import os
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import requests
 
-from predictor import db, raw_store
+from predictor import config, db, raw_store
+from predictor.model.venues import COMPETITIVE_PREFIXES
+from predictor.teams import team_abbr
 
 API_URL = "https://api.the-odds-api.com/v4/sports/basketball_nba/odds"
+SOURCE = "theoddsapi"
+RAW_SOURCE = "odds"
+EASTERN = ZoneInfo("America/New_York")
+
+_COMPETITIVE_SQL = ", ".join(f"'{p}'" for p in COMPETITIVE_PREFIXES)
 
 
 class OddsQuotaExceeded(Exception):
     """The Odds API rejected the request for quota or auth reasons.
 
-    Raised only for a 401 (bad/expired key) or 429 (rate limit / monthly
-    quota exhausted) response -- both mean "this call did not get usable
+    Raised only for a 401 (bad/expired key, or monthly credits used up) or
+    429 (rate limit) response -- both mean "this call did not get usable
     data because of the account, not the market", and must be reported
     loudly and distinctly from a legitimate "no games right now" response
     (an empty payload with a 200 status), exactly as injury_report's
@@ -24,23 +46,95 @@ class OddsQuotaExceeded(Exception):
     403/404.
     """
 
+    def __init__(self, status_code: int, detail: str = "", requests_remaining: str | None = None):
+        super().__init__(f"HTTP {status_code}: {detail[:200]}")
+        self.status_code = status_code
+        self.requests_remaining = requests_remaining
 
-def fetch_current(api_key: str, session=None) -> list[dict]:
-    session = session or requests.Session()
-    response = session.get(
-        API_URL,
-        params={
-            "apiKey": api_key,
-            "regions": "us",
-            "markets": "h2h,spreads,totals",
-            "oddsFormat": "american",
-        },
-        timeout=30,
+
+class OddsFetchError(Exception):
+    """Any other failure to get a usable response. Never contains the key."""
+
+
+class MissingOddsKey(ValueError):
+    """No key in the key file or in env ODDS_API_KEY."""
+
+
+def missing_key_message() -> str:
+    path = config.odds_api_key_path()
+    return (
+        "No Odds API key found. Get a free key at https://the-odds-api.com, "
+        f"save it (just the key, one line) in the file {path}, then run: "
+        f"chmod 600 {path}"
     )
+
+
+@dataclass(frozen=True)
+class OddsResponse:
+    """One API response: the raw body bytes and the quota header, if sent."""
+
+    body: bytes
+    requests_remaining: str | None
+
+    @property
+    def payload(self) -> list[dict]:
+        return json.loads(self.body)
+
+
+@dataclass(frozen=True)
+class OddsDownload:
+    """A fetched-and-archived snapshot, ready to load into the database."""
+
+    archive_key: str
+    observed_at: datetime
+    requests_remaining: str | None
+
+
+@dataclass(frozen=True)
+class OddsIngestSummary:
+    rows: int
+    events: int
+    linked: int
+    # "AWAY@HOME YYYY-MM-DD" (ET date of commence_time) per event that
+    # matched no scheduled game; its rows are stored with game_id NULL.
+    unlinked: list[str] = field(default_factory=list)
+    # "AWAY@HOME odds-date -> schedule-date" per event linked through the
+    # +-1 day fallback.
+    shifted: list[str] = field(default_factory=list)
+    requests_remaining: str | None = None
+
+
+def fetch_current(api_key: str, session=None) -> OddsResponse:
+    session = session or requests.Session()
+    try:
+        response = session.get(
+            API_URL,
+            params={
+                "apiKey": api_key,
+                "regions": "us",
+                "markets": "h2h,spreads,totals",
+                "oddsFormat": "american",
+            },
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        # The exception text carries the request URL, key included.
+        raise OddsFetchError(
+            f"could not reach The Odds API ({type(exc).__name__})"
+        ) from None
+    remaining = (response.headers or {}).get("x-requests-remaining")
     if response.status_code in (401, 429):
-        raise OddsQuotaExceeded(f"{response.status_code}: {response.text[:200]}")
-    response.raise_for_status()
-    return response.json()
+        raise OddsQuotaExceeded(response.status_code, response.text or "", remaining)
+    if response.status_code != 200:
+        raise OddsFetchError(f"The Odds API returned HTTP {response.status_code}")
+    body = response.content
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        raise OddsFetchError("The Odds API returned a response that is not JSON") from None
+    if not isinstance(payload, list):
+        raise OddsFetchError("The Odds API returned an unexpected response (not a list of games)")
+    return OddsResponse(body, remaining)
 
 
 def parse_odds_payload(payload: list[dict], observed_at: datetime) -> list[dict]:
@@ -74,53 +168,147 @@ def parse_odds_payload(payload: list[dict], observed_at: datetime) -> list[dict]
     return rows
 
 
-def ingest_current(con, api_key: str | None = None, now=None, session=None) -> int:
-    api_key = api_key or os.environ.get("ODDS_API_KEY")
-    if not api_key:
-        raise ValueError(
-            "ODDS_API_KEY is not set. Get a free key at https://the-odds-api.com "
-            "and export it before running this command."
-        )
-    # observed_at is when this fact became knowable -- the moment we
-    # fetched the snapshot, not some later processing time. Runs through
-    # db.require_utc() before it touches either the raw archive or the
-    # database, mirroring injury_report.ingest_report and
-    # nba_stats.ingest_season (naive/non-UTC must be a hard error here too).
-    now = db.require_utc(now or datetime.now(UTC), "observed_at")
-    payload = fetch_current(api_key, session=session)
+def _utcnow() -> datetime:
+    return datetime.now(UTC)
 
-    # Archive before parsing, content-addressed by sha256 -- mirrors
-    # news_rss.archive_raw_feed. fetch_current's required return type is
-    # already-parsed JSON (list[dict]), not the raw wire bytes (the test
-    # suite monkeypatches fetch_current itself to return parsed payloads),
-    # so the bytes archived here are a deterministic re-serialization of
-    # that payload rather than the literal HTTP response body. It is still
-    # content-addressed: polling a quiet market repeatedly produces the
-    # same bytes and therefore the same key, so raw_store.store() is a
-    # no-op on the second call instead of piling up duplicate snapshots.
-    content = json.dumps(payload, sort_keys=True).encode()
-    digest = hashlib.sha256(content).hexdigest()[:16]
+
+def download(api_key: str, now: datetime | None = None, session=None) -> OddsDownload:
+    """Fetch one snapshot and archive its bytes. Touches no database.
+
+    ``observed_at`` is stamped after the fetch returns -- the moment the
+    lines became known to us -- and must be UTC (db.require_utc). The
+    archive key is content-addressed (sha256 of the body), so an identical
+    body is a raw_store no-op. Neither the key nor the URL is archived.
+    """
+    response = fetch_current(api_key, session=session)
+    observed_at = db.require_utc(now if now is not None else _utcnow(), "observed_at")
+    digest = hashlib.sha256(response.body).hexdigest()[:16]
+    archive_key = f"odds_{digest}.json"
     raw_store.store(
-        "odds",
-        f"odds_{digest}.json",
-        content,
-        now,
-        meta={"observed_at": now.isoformat()},
+        RAW_SOURCE,
+        archive_key,
+        response.body,
+        observed_at,
+        meta={"observed_at": observed_at.isoformat()},
     )
+    return OddsDownload(archive_key, observed_at, response.requests_remaining)
 
-    rows = parse_odds_payload(payload, now)
+
+def _eastern_date(commence_time: str | None) -> date | None:
+    if not commence_time:
+        return None
+    try:
+        moment = datetime.fromisoformat(commence_time.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        return None
+    return moment.astimezone(EASTERN).date()
+
+
+def _event_label(home: str | None, away: str | None, day: date | None) -> str:
+    home_text = team_abbr(home) or home or "?"
+    away_text = team_abbr(away) or away or "?"
+    return f"{away_text}@{home_text} {day.isoformat() if day else '?'}"
+
+
+def _schedule_index(con, days: set[date]) -> dict[tuple[date, str, str], list[str]]:
+    """(ET date, home, away) -> game_ids, from the LATEST schedule vintage of
+    each competitive game dated within a day of any of ``days``.
+
+    Read directly rather than through AsOfView, like model/live.py's slate:
+    linking a line to its game is bookkeeping, not a feature, and the
+    current listing is the right one to link against.
+    """
+    if not days:
+        return {}
+    table = db.POINT_IN_TIME_TABLES["schedule"]
+    rows = con.execute(
+        f"""
+        WITH latest AS (
+            SELECT game_id, game_date, home_team, away_team,
+                   row_number() OVER (
+                       PARTITION BY game_id ORDER BY observed_at DESC
+                   ) AS rn
+            FROM {table}
+        )
+        SELECT game_id, game_date, home_team, away_team
+        FROM latest
+        WHERE rn = 1
+          AND game_date BETWEEN ? AND ?
+          AND substr(game_id, 1, 3) IN ({_COMPETITIVE_SQL})
+        """,
+        [min(days) - timedelta(days=1), max(days) + timedelta(days=1)],
+    ).fetchall()
+    index: dict[tuple[date, str, str], list[str]] = {}
+    for game_id, game_date, home, away in rows:
+        index.setdefault((game_date, home, away), []).append(game_id)
+    return index
+
+
+def _link(index, day: date, home: str, away: str) -> tuple[str | None, date | None]:
+    """The one game this event is, as (game_id, matched schedule date).
+
+    Exact ET date first; failing that, the day before or after -- but only
+    if exactly one game fits, never a guess between two.
+    """
+    exact = index.get((day, home, away), [])
+    if len(exact) == 1:
+        return exact[0], day
+    if exact:
+        return None, None
+    candidates = [
+        (game_id, d)
+        for d in (day - timedelta(days=1), day + timedelta(days=1))
+        for game_id in index.get((d, home, away), [])
+    ]
+    if len(candidates) == 1:
+        return candidates[0]
+    return None, None
+
+
+def load(con, downloaded: OddsDownload) -> OddsIngestSummary:
+    """Parse the archived snapshot, link each event to a game, store rows."""
+    payload = json.loads(raw_store.load(RAW_SOURCE, downloaded.archive_key))
+    observed_at = downloaded.observed_at
+
+    events = []
+    for event in payload:
+        day = _eastern_date(event.get("commence_time"))
+        events.append(
+            (event, day, team_abbr(event.get("home_team")), team_abbr(event.get("away_team")))
+        )
+    index = _schedule_index(con, {day for _, day, _, _ in events if day is not None})
+
+    game_by_event: dict[str, str | None] = {}
+    linked = 0
+    unlinked: list[str] = []
+    shifted: list[str] = []
+    for event, day, home, away in events:
+        game_id = matched_day = None
+        if day is not None and home and away:
+            game_id, matched_day = _link(index, day, home, away)
+        game_by_event[event.get("id")] = game_id
+        label = _event_label(event.get("home_team"), event.get("away_team"), day)
+        if game_id is None:
+            unlinked.append(label)
+            continue
+        linked += 1
+        if matched_day != day:
+            shifted.append(f"{label} -> {matched_day.isoformat()}")
+
+    rows = parse_odds_payload(payload, observed_at)
 
     # Resolved through db.POINT_IN_TIME_TABLES rather than spelled as a
     # literal here -- the physical "_raw" table names are only allowed to
     # appear as string literals in db.py/asof.py (see
-    # test_no_physical_table_name_appears_outside_db_and_asof); this
-    # ingestion module must not name the physical table directly either.
-    # Mirrors the pattern already used by injury_report.py and nba_stats.py.
+    # test_no_physical_table_name_appears_outside_db_and_asof).
     table = db.POINT_IN_TIME_TABLES["odds_snapshots"]
     insert_sql = (
         f"INSERT OR REPLACE INTO {table} (game_key, book, home_team,"
-        " away_team, home_price, away_price, spread, total, observed_at)"
-        " VALUES (?,?,?,?,?,?,?,?,?)"
+        " away_team, home_price, away_price, spread, total, observed_at,"
+        " game_id, source, reconstructed)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,FALSE)"
     )
     for row in rows:
         con.execute(
@@ -128,7 +316,36 @@ def ingest_current(con, api_key: str | None = None, now=None, session=None) -> i
             [
                 row["game_key"], row["book"], row["home_team"], row["away_team"],
                 row["home_price"], row["away_price"], row["spread"], row["total"],
-                row["observed_at"],
+                row["observed_at"], game_by_event.get(row["game_key"]), SOURCE,
             ],
         )
-    return len(rows)
+    return OddsIngestSummary(
+        rows=len(rows),
+        events=len(payload),
+        linked=linked,
+        unlinked=unlinked,
+        shifted=shifted,
+        requests_remaining=downloaded.requests_remaining,
+    )
+
+
+def ingest_current(
+    con,
+    api_key: str | None = None,
+    now: datetime | None = None,
+    session=None,
+    fetch: OddsDownload | None = None,
+) -> OddsIngestSummary:
+    """Load one snapshot into ``con``.
+
+    ``fetch`` is an already-made `download()` (the CLI's path: it downloads
+    before opening the database). Without it, this downloads first, using
+    ``api_key`` or `config.odds_api_key()`; with no key anywhere it raises
+    `MissingOddsKey`, whose message names the key file to create.
+    """
+    if fetch is None:
+        api_key = api_key or config.odds_api_key()
+        if not api_key:
+            raise MissingOddsKey(missing_key_message())
+        fetch = download(api_key, now=now, session=session)
+    return load(con, fetch)

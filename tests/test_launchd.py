@@ -68,14 +68,18 @@ def test_predict_job_runs_predict_today_once_a_day():
     assert p["RunAtLoad"] is False
 
 
-def test_no_two_of_the_four_jobs_share_a_start_minute():
+ALL_JOBS = (
+    "com.predictor.daily.plist",
+    "com.predictor.schedule.plist",
+    "com.predictor.results.plist",
+    "com.predictor.predict.plist",
+    "com.predictor.odds.plist",
+)
+
+
+def test_no_two_jobs_share_a_start_minute():
     all_slots = []
-    for name in (
-        "com.predictor.daily.plist",
-        "com.predictor.schedule.plist",
-        "com.predictor.results.plist",
-        "com.predictor.predict.plist",
-    ):
+    for name in ALL_JOBS:
         all_slots.extend(_slots(_load(name)))
     assert len(all_slots) == len(set(all_slots))
 
@@ -86,8 +90,9 @@ def test_results_job_shares_no_start_minute_with_any_other_job():
         _slots(_load("com.predictor.daily.plist"))
         | _slots(_load("com.predictor.schedule.plist"))
         | _slots(_load("com.predictor.predict.plist"))
+        | _slots(_load("com.predictor.odds.plist"))
     )
-    assert others == {(9, 0), (14, 0), (19, 0), (10, 30), (18, 0)}
+    assert others == {(9, 0), (14, 0), (19, 0), (10, 30), (18, 0), (17, 30)}
     assert results_slots.isdisjoint(others)
 
 
@@ -102,4 +107,30 @@ def test_install_script_installs_all_four_jobs():
     text = script.read_text()
     assert "install_job com.predictor.results" in text
     assert "install_job com.predictor.predict" in text
+    subprocess.run(["bash", "-n", str(script)], check=True)
+
+
+# --- market odds: the daily ingest-odds job --------------------------------
+
+def test_odds_job_runs_ingest_odds_once_a_day_at_1730():
+    p = _load("com.predictor.odds.plist")
+    assert p["Label"] == "com.predictor.odds"
+    assert p["ProgramArguments"] == ["PROJECT_DIR/.venv/bin/predictor", "ingest-odds"]
+    # 17:30 IST: after capture-results (17:00), before predict-today (18:00),
+    # so the 18:00 log can carry the market line. One call/day stays far
+    # inside the free 500-requests/month quota.
+    assert _slots(p) == {(17, 30)}
+    assert p["WorkingDirectory"] == "PROJECT_DIR"
+    assert p["StandardOutPath"] == "PROJECT_DIR/data/logs/odds.out.log"
+    assert p["StandardErrorPath"] == "PROJECT_DIR/data/logs/odds.err.log"
+    assert p["RunAtLoad"] is False
+
+
+def test_install_script_installs_all_five_jobs():
+    script = SCRIPTS / "install_schedule.sh"
+    text = script.read_text()
+    for name in ALL_JOBS:
+        assert f"install_job {name.removesuffix('.plist')}" in text
+    assert text.count("\ninstall_job ") == 5
+    assert "Market odds will be fetched at 17:30 daily." in text
     subprocess.run(["bash", "-n", str(script)], check=True)

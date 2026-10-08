@@ -73,18 +73,13 @@ def test_report_names_every_source(con):
         assert name in text
 
 
-def test_odds_advice_mentions_api_key_when_unset(con, monkeypatch):
-    monkeypatch.delenv("ODDS_API_KEY", raising=False)
-    health = {h.name: h for h in status.check_sources(con, NOW)}
-    assert "ODDS_API_KEY" in health["odds_snapshots"].advice
-
-
-def test_odds_advice_differs_when_key_is_set_but_still_empty(con, monkeypatch):
-    monkeypatch.setenv("ODDS_API_KEY", "dummy-key-for-test")
+def test_odds_advice_names_the_key_file_not_an_env_export(con, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     health = {h.name: h for h in status.check_sources(con, NOW)}
     advice = health["odds_snapshots"].advice
-    assert advice
-    assert "get a free key" not in advice.lower()
+    assert str(tmp_path / "home" / ".config" / "predictor" / "odds_api_key") in advice
+    assert "export ODDS_API_KEY" not in advice
+    assert "predictor ingest-odds" in advice
 
 
 def test_stale_schedule_advice_names_the_command_and_the_launchd_job(con):

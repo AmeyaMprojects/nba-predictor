@@ -332,3 +332,67 @@ def test_connect_with_retry_defaults_to_read_write(tmp_path, monkeypatch):
     monkeypatch.setattr(db, "connect", spy)
     db.connect_with_retry(attempts=1, sleep=lambda s: None)
     assert seen == [False]
+
+
+# --- market odds: game_id / source / reconstructed on odds_snapshots_raw ---
+
+
+_OLD_ODDS_DDL = """
+CREATE TABLE odds_snapshots_raw (
+    game_key      VARCHAR NOT NULL,
+    book          VARCHAR NOT NULL,
+    home_team     VARCHAR NOT NULL,
+    away_team     VARCHAR NOT NULL,
+    home_price    INTEGER,
+    away_price    INTEGER,
+    spread        DOUBLE,
+    total         DOUBLE,
+    observed_at   TIMESTAMP WITH TIME ZONE NOT NULL,
+    PRIMARY KEY (game_key, book, observed_at)
+);
+"""
+
+
+def test_fresh_odds_table_has_link_columns(con):
+    cols = {r[0]: r[1] for r in con.execute("DESCRIBE odds_snapshots_raw").fetchall()}
+    assert cols["game_id"] == "VARCHAR"
+    assert cols["source"] == "VARCHAR"
+    assert cols["reconstructed"] == "BOOLEAN"
+
+
+def test_new_odds_columns_default_when_not_given(con):
+    moment = datetime(2025, 1, 15, 12, 0, tzinfo=UTC)
+    con.execute(
+        "INSERT INTO odds_snapshots_raw (game_key, book, home_team, away_team,"
+        " observed_at) VALUES (?,?,?,?,?)",
+        ["g1", "draftkings", "LAL", "BOS", moment],
+    )
+    row = con.execute(
+        "SELECT game_id, reconstructed FROM odds_snapshots_raw"
+    ).fetchone()
+    assert row == (None, False)
+
+
+def test_odds_link_migration_upgrades_an_old_table_and_is_idempotent(tmp_path):
+    c = db.connect(tmp_path / "old.duckdb")
+    c.execute(_OLD_ODDS_DDL)
+    moment = datetime(2025, 1, 15, 12, 0, tzinfo=UTC)
+    c.execute(
+        "INSERT INTO odds_snapshots_raw (game_key, book, home_team, away_team,"
+        " home_price, observed_at) VALUES (?,?,?,?,?,?)",
+        ["g1", "draftkings", "LAL", "BOS", -150, moment],
+    )
+
+    db.migrate(c)
+    db.migrate(c)
+
+    rows = c.execute(
+        "SELECT game_key, home_price, game_id, source, reconstructed"
+        " FROM odds_snapshots_raw"
+    ).fetchall()
+    assert rows == [("g1", -150, None, "theoddsapi", False)]
+    pk = c.execute(
+        "SELECT constraint_column_names FROM duckdb_constraints()"
+        " WHERE table_name = 'odds_snapshots_raw' AND constraint_type = 'PRIMARY KEY'"
+    ).fetchone()[0]
+    assert list(pk) == ["game_key", "book", "observed_at"]

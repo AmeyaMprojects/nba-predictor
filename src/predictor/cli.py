@@ -596,22 +596,58 @@ def predict_today_cmd(
 
 @app.command("ingest-odds")
 def ingest_odds_cmd() -> None:
-    """Fetch and store one odds snapshot. Budgeted to one call per run."""
-    from predictor import db
+    """Fetch and store one odds snapshot. Budgeted to one call per run.
+
+    Download (and archive) first, then open the database: the network call
+    never holds DuckDB's write lock. The key comes from
+    ~/.config/predictor/odds_api_key (or env ODDS_API_KEY) and is never
+    printed.
+    """
+    from predictor import config, db
     from predictor.config import settings
     from predictor.sources import odds
 
     settings.ensure_dirs()
-    con = db.connect()
-    db.migrate(con)
+    api_key = config.odds_api_key()
+    if not api_key:
+        typer.echo(odds.missing_key_message(), err=True)
+        raise typer.Exit(code=1)
+
+    def remaining_line(remaining: str | None) -> None:
+        if remaining is not None:
+            typer.echo(f"Odds API requests remaining this month: {remaining}")
+
     try:
-        typer.echo(f"stored {odds.ingest_current(con)} odds rows")
-    except ValueError as exc:
-        typer.echo(str(exc), err=True)
-        raise typer.Exit(code=1) from None
+        downloaded = odds.download(api_key)
     except odds.OddsQuotaExceeded as exc:
-        typer.echo(f"ODDS QUOTA EXCEEDED: {exc}", err=True)
+        typer.echo(
+            f"The Odds API refused the request (HTTP {exc.status_code}): the "
+            "monthly free quota is used up, or the key in "
+            f"{config.odds_api_key_path()} is wrong. Nothing was stored; "
+            "predictions carry on without market lines.",
+            err=True,
+        )
+        remaining_line(exc.requests_remaining)
         raise typer.Exit(code=1) from None
+    except odds.OddsFetchError as exc:
+        typer.echo(f"Odds not fetched: {exc}. Nothing was stored.", err=True)
+        raise typer.Exit(code=1) from None
+
+    con = db.connect_with_retry()
+    db.migrate(con)
+    summary = odds.ingest_current(con, fetch=downloaded)
+    typer.echo(
+        f"stored {summary.rows} odds rows for {summary.events} game(s); "
+        f"{summary.linked} linked to the schedule"
+    )
+    for note in summary.shifted:
+        typer.echo(f"note: linked to a game listed one day off: {note}")
+    if summary.unlinked:
+        typer.echo(
+            f"note: {len(summary.unlinked)} game(s) not matched to a scheduled "
+            f"game: {', '.join(summary.unlinked)} (stored without a game link)"
+        )
+    remaining_line(summary.requests_remaining)
 
 
 @app.command()

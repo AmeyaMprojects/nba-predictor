@@ -117,6 +117,12 @@ CREATE TABLE IF NOT EXISTS injury_status_raw (
     PRIMARY KEY (observed_at, team, player, game_date)
 );
 
+-- game_id links a line to the schedule (NULL when no schedule game matched
+-- -- such lines are kept and reported, never dropped). source names where
+-- the line came from ('theoddsapi' live, 'kaggle_sbr' historical);
+-- reconstructed is TRUE when observed_at is not a real fetch time (the
+-- historical closing lines are stamped at tip-off). See
+-- `_add_odds_link_columns` for databases created before these columns.
 CREATE TABLE IF NOT EXISTS odds_snapshots_raw (
     game_key      VARCHAR NOT NULL,
     book          VARCHAR NOT NULL,
@@ -127,6 +133,9 @@ CREATE TABLE IF NOT EXISTS odds_snapshots_raw (
     spread        DOUBLE,
     total         DOUBLE,
     observed_at   TIMESTAMP WITH TIME ZONE NOT NULL,
+    game_id       VARCHAR,
+    source        VARCHAR,
+    reconstructed BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (game_key, book, observed_at)
 );
 
@@ -239,6 +248,7 @@ def migrate(con: duckdb.DuckDBPyConnection) -> None:
     con.execute(_SCHEMA)
     _add_games_reconstructed_column(con)
     _add_injury_normalization_columns(con)
+    _add_odds_link_columns(con)
 
 
 def _add_games_reconstructed_column(con: duckdb.DuckDBPyConnection) -> None:
@@ -297,3 +307,24 @@ def _add_injury_normalization_columns(con: duckdb.DuckDBPyConnection) -> None:
     con.execute("ALTER TABLE injury_status_raw ADD COLUMN IF NOT EXISTS team_display VARCHAR")
     con.execute("ALTER TABLE injury_status_raw ADD COLUMN IF NOT EXISTS player_display VARCHAR")
     con.execute("ALTER TABLE injury_status_raw ADD COLUMN IF NOT EXISTS game_time VARCHAR")
+
+
+def _add_odds_link_columns(con: duckdb.DuckDBPyConnection) -> None:
+    """Idempotent upgrade for odds tables created before market-odds linking.
+
+    Adds ``game_id`` (the schedule game a line belongs to), ``source`` and
+    ``reconstructed``. Every row that predates these columns came from the
+    live Odds API fetch at its real fetch time, so the backfill is
+    ``source = 'theoddsapi'`` and ``reconstructed = FALSE``; ``game_id``
+    stays NULL (unlinked) for them. Same shape as
+    `_add_games_reconstructed_column`: every step is safe to repeat. The
+    primary key ``(game_key, book, observed_at)`` is untouched.
+    """
+    con.execute("ALTER TABLE odds_snapshots_raw ADD COLUMN IF NOT EXISTS game_id VARCHAR")
+    con.execute("ALTER TABLE odds_snapshots_raw ADD COLUMN IF NOT EXISTS source VARCHAR")
+    con.execute(
+        "ALTER TABLE odds_snapshots_raw ADD COLUMN IF NOT EXISTS reconstructed BOOLEAN DEFAULT FALSE"
+    )
+    con.execute("UPDATE odds_snapshots_raw SET reconstructed = FALSE WHERE reconstructed IS NULL")
+    con.execute("UPDATE odds_snapshots_raw SET source = 'theoddsapi' WHERE source IS NULL")
+    con.execute("ALTER TABLE odds_snapshots_raw ALTER COLUMN reconstructed SET NOT NULL")

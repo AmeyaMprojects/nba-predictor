@@ -15,6 +15,7 @@ import requests
 import tenacity
 
 from predictor import db, raw_store
+from predictor.teams import team_abbr
 
 BASE_URL = "https://ak-static.cms.nba.com/referee/injury"
 
@@ -729,48 +730,8 @@ class InjuryTeamMismatchError(Exception):
     """
 
 
-# Cached lazily (not at import time) so a test that never touches this path
-# never pays for the nba_api static-data load, and so a monkeypatch of
-# `nba_api.stats.static.teams` in a test still takes effect.
-_TEAM_ABBR_BY_NAME: dict[str, str] | None = None
-
-# The official NBA_API full_name for the LA Clippers is "Los Angeles
-# Clippers", but the injury report itself (both layouts, every era sampled)
-# renders it as "LA Clippers" / "LAClippers" -- never the full "Los
-# Angeles" form. Without this alias, every Clippers row would fail to
-# resolve to an abbreviation at all.
-_TEAM_NAME_ALIASES: dict[str, str] = {
-    "LACLIPPERS": "LAC",
-}
-
-
-def _team_abbreviations() -> dict[str, str]:
-    global _TEAM_ABBR_BY_NAME
-    if _TEAM_ABBR_BY_NAME is None:
-        from nba_api.stats.static import teams as nba_teams
-
-        by_name = {
-            team["full_name"].replace(" ", "").upper(): team["abbreviation"]
-            for team in nba_teams.get_teams()
-        }
-        by_name.update(_TEAM_NAME_ALIASES)
-        _TEAM_ABBR_BY_NAME = by_name
-    return _TEAM_ABBR_BY_NAME
-
-
-def team_abbr(team_name: str) -> str | None:
-    """Canonical 3-letter abbreviation for a raw injury-report TEAM cell.
-
-    Tolerates both PDF layout spellings ("Miami Heat" vs "MiamiHeat") by
-    normalizing away whitespace and case before lookup. Returns None for a
-    team name the official nba_api roster (plus the LA Clippers alias)
-    does not recognize at all -- callers must treat that as "cannot
-    canonicalize", never guess.
-    """
-    if not team_name:
-        return None
-    key = team_name.replace(" ", "").upper()
-    return _team_abbreviations().get(key)
+# `team_abbr` lives in predictor.teams (shared with the odds sources) and is
+# re-exported here: `injury_report.team_abbr` is part of this module's API.
 
 
 def _validate_team_matches_matchup(rows: list[InjuryRow]) -> None:
