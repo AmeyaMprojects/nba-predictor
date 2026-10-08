@@ -716,3 +716,51 @@ publication (unpushed commits).
 - Verified under launchd: capture recorded a finished preseason game with
   its real capture time; predict-today ran on an empty slate; a bare-
   environment `git push --dry-run` authenticates via the gh credential helper.
+
+---
+
+## 8. Market odds — decided 2026-10-08
+
+Measures success criterion 2 ("match the market"). Free sources only. The
+model never reads odds: the public record stays the model's own work; odds are
+used only for comparison.
+
+### Sources and storage
+
+- **Historical (closing lines, 2014-15 → 2025-26):** the free Kaggle dataset
+  "NBA Betting Data" (Sportsbook Review / ESPN), downloaded with the owner's
+  Kaggle token (`~/.kaggle/kaggle.json`). `predictor ingest-odds-history`
+  archives the raw file first, then matches each row to `game_id` by ET date
+  and teams; unmatched rows are counted and named, and coverage per season is
+  reported. Rows are stored with `observed_at` = the game's tip-off and
+  `reconstructed = TRUE` (publication time unknown).
+- **Live (from 2026-27):** The Odds API free tier (500 requests/month); the
+  key lives in `~/.config/predictor/odds_api_key` (mode 600), never inside the
+  repository. One fetch per day at **17:30 IST** via launchd, all bookmakers,
+  `observed_at` = real fetch time. These are *early* lines (taken ~13–16 h
+  before tip-off, because the laptop sleeps through US evenings) and are always
+  labelled "market line at 17:30 IST", never "closing".
+- A test fails if a key-shaped secret appears in any tracked file.
+
+### Market probability
+
+Moneylines → implied probabilities with the bookmaker margin removed
+(normalised so the two sides sum to 1); if no moneyline, the spread converted
+with the model's σ. Several bookmakers → the median.
+
+### Comparison (in `predictor evaluate-model`, walk-forward seasons, games with lines)
+
+- Model vs market: accuracy, Brier, log loss — per season and pooled.
+- Disagreement zone: games where model and market pick different winners or
+  differ by ≥ 10 percentage points; how often each side was right.
+- Beating the closing spread: share of games where the model's predicted
+  margin was on the right side of the closing spread (a plain rate — no
+  betting advice, no profit claims).
+
+### Daily log
+
+Each `predicted` line gains `market_p_home`, `market_spread`,
+`market_books`, `market_observed_at` (or nulls); grade lines gain
+`market_correct`. `status` adds an `odds` check: stale if no live fetch in 30 h
+while games are being played; quota exhaustion produces a plain message and
+predictions continue without market fields.
