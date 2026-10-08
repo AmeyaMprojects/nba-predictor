@@ -163,6 +163,8 @@ def test_quota_exhaustion_raises_named_error_with_remaining(status):
         odds.fetch_current("k", session=session)
     assert info.value.status_code == status
     assert info.value.requests_remaining == "0"
+    assert str(info.value) == f"HTTP {status}"
+    assert info.value.detail == "quota"
 
 
 def test_other_http_errors_never_echo_the_key():
@@ -439,4 +441,41 @@ def test_cli_fetch_error_is_a_plain_message_and_exit_1(cli_env, monkeypatch):
 
     assert result.exit_code == 1
     assert "could not reach The Odds API" in result.output
+    assert "Traceback" not in result.output
+
+
+@pytest.mark.parametrize("error", [ValueError("bad json"), KeyError("id")])
+def test_cli_load_failure_names_the_archive_key_and_exits_1(cli_env, monkeypatch, error):
+    _write_key(cli_env)
+    _fake_fetch(monkeypatch, PAYLOAD)
+
+    def broken_load(con, downloaded):
+        raise error
+
+    monkeypatch.setattr(odds, "load", broken_load)
+
+    result = runner.invoke(cli.app, ["ingest-odds"])
+
+    assert result.exit_code == 1
+    digest = __import__("hashlib").sha256(json.dumps(PAYLOAD).encode()).hexdigest()[:16]
+    assert f"odds_{digest}.json" in result.output
+    assert "archived" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_cli_database_error_names_the_archive_key_and_exits_1(cli_env, monkeypatch):
+    import duckdb
+
+    _write_key(cli_env)
+    _fake_fetch(monkeypatch, PAYLOAD)
+
+    def locked(*a, **k):
+        raise duckdb.IOException("Could not set lock on file: Conflicting lock is held")
+
+    monkeypatch.setattr(db, "connect_with_retry", locked)
+
+    result = runner.invoke(cli.app, ["ingest-odds"])
+
+    assert result.exit_code == 1
+    assert "odds_" in result.output and ".json" in result.output
     assert "Traceback" not in result.output

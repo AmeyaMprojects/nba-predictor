@@ -633,9 +633,23 @@ def ingest_odds_cmd() -> None:
         typer.echo(f"Odds not fetched: {exc}. Nothing was stored.", err=True)
         raise typer.Exit(code=1) from None
 
-    con = db.connect_with_retry()
-    db.migrate(con)
-    summary = odds.ingest_current(con, fetch=downloaded)
+    import duckdb
+
+    try:
+        con = db.connect_with_retry()
+        db.migrate(con)
+        summary = odds.ingest_current(con, fetch=downloaded)
+    except (duckdb.Error, KeyError, ValueError) as exc:
+        # The snapshot is already safely archived; only loading it failed.
+        typer.echo(
+            f"Odds were fetched and archived as {downloaded.archive_key} (raw "
+            f"store '{odds.RAW_SOURCE}'), but loading them into the database "
+            f"failed ({type(exc).__name__}: {exc}). Nothing was stored in the "
+            "database; the archived file can be loaded later without spending "
+            "another API request.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
     typer.echo(
         f"stored {summary.rows} odds rows for {summary.events} game(s); "
         f"{summary.linked} linked to the schedule"

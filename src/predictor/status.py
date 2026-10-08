@@ -25,9 +25,9 @@ the REAL refresh cadence of each source, not a single generic number:
   project's governing rule forbids. The advice text explains why blindly
   re-running may not help, instead of pretending it will.
 - odds_snapshots: zero rows until the owner saves an Odds API key in
-  ~/.config/predictor/odds_api_key -- not because a feed broke. That is a different failure mode from "the feed
-  stopped working" and gets different advice (get a key, vs. debug the
-  feed) -- see `_advice`.
+  ~/.config/predictor/odds_api_key -- not because a feed broke. That is
+  a different failure mode from "the feed stopped working" and gets
+  different advice (get a key, vs. debug the feed) -- see `_advice`.
 - news_items: the one source polled continuously (three times a day) and
   the one source that can NEVER be recovered retroactively once a poll is
   missed -- an outage here is the most urgent of the five, so it gets the

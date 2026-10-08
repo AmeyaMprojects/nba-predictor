@@ -14,7 +14,8 @@ import pytest
 from predictor import config
 from predictor.config import PROJECT_ROOT
 
-FAKE_KEY = "0123456789abcdef0123456789abcdef"
+# Built at runtime so no literal 32-hex run sits in a tracked file.
+FAKE_KEY = "0123456789abcdef" * 2
 
 
 @pytest.fixture
@@ -122,6 +123,10 @@ _KEY_ASSIGNMENT = re.compile(
     """
 )
 _KAGGLE_JSON = re.compile(r'"key"\s*:\s*"[0-9a-f]{32}"', re.IGNORECASE)
+# Any standalone 32-hex run at all (a bare key pasted alone in a file, or
+# assigned to a name the patterns above do not anticipate). The tree holds
+# no legitimate 32-hex run, so no allowlist is needed.
+_BARE_HEX32 = re.compile(r"(?<![0-9a-fA-F])[0-9a-fA-F]{32}(?![0-9a-fA-F])")
 
 
 def scan_tracked_files(repo: Path) -> list[str]:
@@ -139,7 +144,7 @@ def scan_tracked_files(repo: Path) -> list[str]:
         except (UnicodeDecodeError, OSError):
             continue
         for number, line in enumerate(text.splitlines(), 1):
-            if _KEY_ASSIGNMENT.search(line) or _KAGGLE_JSON.search(line):
+            if any(p.search(line) for p in (_KEY_ASSIGNMENT, _KAGGLE_JSON, _BARE_HEX32)):
                 hits.append(f"{name}:{number}")
     return hits
 
@@ -164,6 +169,9 @@ def test_scan_passes_on_a_clean_temp_repo(tmp_path):
         f"ODDS_API_KEY = '{FAKE_KEY}'\n",
         f"url = 'https://x.invalid/odds?apiKey={FAKE_KEY}'\n",
         json.dumps({"username": "u", "key": FAKE_KEY}) + "\n",
+        f"ODDS_KEY = '{FAKE_KEY}'\n",
+        f"{FAKE_KEY}\n",
+        f"{FAKE_KEY.upper()}\n",
     ],
 )
 def test_scan_fails_on_a_planted_key_in_a_tracked_file(tmp_path, planted):
@@ -183,3 +191,18 @@ def test_scan_ignores_untracked_files(tmp_path):
 def test_no_key_shaped_secret_in_any_tracked_file_of_this_repo():
     hits = scan_tracked_files(PROJECT_ROOT)
     assert hits == [], f"key-shaped secret in tracked file(s): {hits}"
+
+
+def test_scan_fails_on_a_bare_key_file_under_scripts(tmp_path):
+    repo = _temp_repo(tmp_path)
+    (repo / "scripts").mkdir()
+    (repo / "scripts" / "odds_api_key").write_text(f"{FAKE_KEY}\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    assert scan_tracked_files(repo) == ["scripts/odds_api_key:1"]
+
+
+def test_scan_ignores_longer_hex_runs_such_as_sha256(tmp_path):
+    repo = _temp_repo(tmp_path)
+    (repo / "digest.txt").write_text(("ab" * 32) + "\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    assert scan_tracked_files(repo) == []

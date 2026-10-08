@@ -47,8 +47,11 @@ class OddsQuotaExceeded(Exception):
     """
 
     def __init__(self, status_code: int, detail: str = "", requests_remaining: str | None = None):
-        super().__init__(f"HTTP {status_code}: {detail[:200]}")
+        # The message is the status alone; the API's response text is kept
+        # on `detail` for whoever needs it, never echoed by default.
+        super().__init__(f"HTTP {status_code}")
         self.status_code = status_code
+        self.detail = detail[:200]
         self.requests_remaining = requests_remaining
 
 
