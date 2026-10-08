@@ -90,15 +90,22 @@ Commit: `feat: live odds linked to games; key read from a private file; daily od
    - With no credentials: a plain message with the exact path `~/.kaggle/kaggle.json` and how to create it.
    - 401/403: a plain message saying the token is wrong or the dataset terms must be accepted on the dataset page.
 2. **Raw-first:** archive the zip bytes to `raw_store` source `odds_history`, key `kaggle_<sha16>.zip`. Then open the archived bytes. Same bytes means a no-op.
-3. **Parse.** First inspect the real file (the controller will have placed credentials; download once into a temp dir).
-   - Write the parser to the actual columns and document them in the module docstring: file name, date column and its time zone, home/away team columns and their naming scheme, closing moneylines, closing spread, total, and the source column if present.
-   - Map team names or abbreviations with `team_abbr`, plus an explicit alias map for historical names: NJN→BKN, NOH/NOK→NOP, SEA→OKC, CHA/CHO naming, PHO→PHX, GS→GSW, SA→SAS, NY→NYK, NO→NOP, UTAH→UTA, WSH→WAS, and others as found.
-   - Any team string that maps to nothing is an error listed in the summary, never silently skipped.
+3. **Parse.** The real file was inspected by the controller on 2026-10-08:
+   - The zip holds one file, `nba_2008-2026.csv` (24,440 rows, 2007-08..2025-26). Select the member by the `.csv` suffix, not by exact name, since the name changes with each update.
+   - Columns: `season,date,regular,playoffs,away,home,score_away,score_home,q1_away..ot_home,whos_favored,spread,total,moneyline_away,moneyline_home,h2_spread,h2_total,id_spread,id_total`.
+   - `season` is the END year: `2026` means `2025-26`.
+   - `date` is `YYYY-MM-DD`, the US local game date; treat it as the ET date.
+   - Team codes are lowercase: atl bkn bos cha chi cle dal den det gs hou ind lac lal mem mia mil min no ny okc orl phi phx por sa sac tor utah wsh. Map them with an explicit table to our abbreviations (gs GSW, no NOP, ny NYK, sa SAS, utah UTA, wsh WAS, the rest upper-cased). An unknown code is reported, never skipped silently.
+   - `spread` is UNSIGNED; `whos_favored` is `home` or `away`. The home spread (negative = home favoured) is `-spread` if `whos_favored == "home"`, else `+spread`. Blank spread means None (3 rows).
+   - `moneyline_home` / `moneyline_away` are American odds as ints, or blank. They are blank for every game from 2023-24 onward and half of 2022-23, so those seasons fall back to the spread. This is expected, not an error.
+   - `total`: float or None. Ignore `h2_*`, `id_*` and the quarter columns. Keep `regular`, `playoffs`, `score_home`, `score_away` for linking checks.
+   - The module docstring records all of the above.
 4. **Link and store:**
-   - Link each row to `game_id` by ET date + home + away (latest schedule vintage, competitive prefixes). Rows from before 2014-15 are ignored, since the schedule doesn't cover them.
-   - Store one row per game with `book='consensus'` (or the dataset's book name if given), `source='kaggle_sbr'` and `reconstructed=True`.
-   - `observed_at` = the game's `tip_off_utc` from the schedule. Skip rows with no tip.
-   - `game_key` = `f"kaggle:{game_id}"`. Use INSERT OR REPLACE so re-runs are idempotent.
+   - Link each row by ET date + home + away against the latest schedule vintage (competitive prefixes). Rows before 2014-15 are ignored.
+   - **Score check:** when the linked game has a FINAL result, the file's scores must equal ours. A mismatch is reported as unmatched, not stored.
+   - Store one row per game: `book='consensus'`, `source='kaggle_sbr'`, `reconstructed=True`, `home_price` = moneyline_home, `away_price` = moneyline_away, `spread` = the signed home spread, `total`.
+   - `observed_at` = the game's `tip_off_utc` from the schedule; skip rows with no tip, counted.
+   - `game_key = f"kaggle:{game_id}"`, written with INSERT OR REPLACE.
 5. **Coverage report** (returned and printed by the CLI): per season, the regular-season games in the schedule, games linked to a line, and coverage %, plus any unmatched rows (count and the first 10). Exit 1 if any season from 2019-20 to 2025-26 has coverage below 90%, with a plain message (the comparison would be unreliable). Otherwise exit 0.
 6. **Tests:**
    - the parser on a small in-test fixture shaped exactly like the real file's columns, copied from the inspected header
@@ -143,6 +150,7 @@ Commit: `feat: ingest historical closing odds from Kaggle and report coverage`.
    - disagreement-zone and closing-spread counts on a tiny constructed set
    - the section appears and contains the per-season rows when a fixture DB has odds
    - the no-odds message
+7. Per season, the report shows how many market probabilities came from moneylines and how many from the spread, and states plainly that spread-derived probabilities use the model's own sigma.
 
 Commit: `feat: compare the model with closing-market probabilities in evaluate-model`.
 
