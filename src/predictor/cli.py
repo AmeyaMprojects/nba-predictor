@@ -1194,12 +1194,25 @@ def evaluate_model_cmd() -> None:
     def progress(message: str) -> None:
         typer.echo(message, err=True)
 
+    import duckdb
+
     con = _open_for_fitting()
     try:
         ev = _run_evaluation(fit_mod, evaluate_mod, con, progress=progress)
+        try:
+            market_text = evaluate_mod.format_market_comparison(
+                evaluate_mod.market_games(con, ev.winner)
+            )
+        except duckdb.Error as exc:
+            market_text = (
+                "  Model vs market (closing lines)\n"
+                f"  Could not read the stored odds ({exc})."
+            )
     finally:
         con.close()
     typer.echo(evaluate_mod.format_evaluation(ev))
+    typer.echo("")
+    typer.echo(market_text)
 
 
 if __name__ == "__main__":
