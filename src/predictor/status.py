@@ -24,10 +24,13 @@ the REAL refresh cadence of each source, not a single generic number:
   injury data to whatever consumes this table, which is exactly what the
   project's governing rule forbids. The advice text explains why blindly
   re-running may not help, instead of pretending it will.
-- odds_snapshots: zero rows until the owner saves an Odds API key in
-  ~/.config/predictor/odds_api_key -- not because a feed broke. That is
-  a different failure mode from "the feed stopped working" and gets
-  different advice (get a key, vs. debug the feed) -- see `_advice`.
+- odds_snapshots: holds both historical closing lines (Kaggle, imported
+  once) and live lines (The Odds API, fetched daily). Table age says
+  nothing useful about either, so this entry only reports what is stored
+  and is never stale; live-odds freshness is judged once, by
+  `check_live`'s `odds` entry (no live line in 30h while in season). A
+  missing API key and a broken feed need different advice -- that entry's
+  advice covers both.
 - news_items: the one source polled continuously (three times a day) and
   the one source that can NEVER be recovered retroactively once a poll is
   missed -- an outage here is the most urgent of the five, so it gets the
@@ -47,6 +50,7 @@ from pathlib import Path
 from predictor.config import odds_api_key_path, season_label
 from predictor.db import POINT_IN_TIME_TABLES
 from predictor.model import live, publish
+from predictor.model.market import LIVE_SOURCE
 
 # Hours after which each source's newest `observed_at` counts as stale.
 # See the module docstring for why each value was chosen; none of these
@@ -62,11 +66,6 @@ STALENESS_HOURS: dict[str, float] = {
     "games": 24 * 150,
     # Daily cadence (one backfill slot/day) plus one missed day of slack.
     "injury_status": 36,
-    # Fetched once a day at 17:30 local (scripts/com.predictor.odds.plist)
-    # once a key exists; one missed run of slack, same as injury_status.
-    # An empty table is always reported stale regardless of this threshold
-    # (see check_sources).
-    "odds_snapshots": 36,
     # Polled at 09:00/14:00/19:00 local (scripts/com.predictor.daily.plist);
     # the longest normal gap between runs is ~14h (19:00 -> next 09:00).
     # 24h gives ~10h of slack for one delayed/missed run before alarming.
@@ -109,19 +108,6 @@ def _advice(name: str, latest: datetime | None, now: datetime) -> str:
             "many times; that is not fixable by retrying alone."
         )
 
-    if name == "odds_snapshots":
-        # A missing key and a broken feed need different advice -- see
-        # module docstring. The key file is never read here (status only
-        # names it), so both cases are covered in one sentence.
-        key_path = odds_api_key_path()
-        return (
-            "If there is no Odds API key yet: get a free key at "
-            f"https://the-odds-api.com and save it in {key_path} "
-            f"(then chmod 600 {key_path}). If the key is there: run "
-            "predictor ingest-odds directly and read its message (quota "
-            "used up, invalid key, network failure, etc.)."
-        )
-
     if name == "news_items":
         return (
             "Run: predictor poll-news, and confirm the launchd agent is "
@@ -161,6 +147,22 @@ def check_sources(con, now: datetime | None = None) -> list[SourceHealth]:
             f"SELECT count(*), max(observed_at) FROM {physical}"
         ).fetchone()
 
+        if name == "odds_snapshots":
+            # Never stale here: live-odds freshness is check_live's `odds`
+            # entry (see module docstring), so odds are reported once.
+            age = (now - latest).total_seconds() / 3600 if latest is not None else None
+            out.append(
+                SourceHealth(
+                    name, latest, count, age, False, "",
+                    detail=(
+                        "no odds stored yet (live odds are checked under 'odds')"
+                        if latest is None
+                        else None
+                    ),
+                )
+            )
+            continue
+
         if latest is None:
             out.append(
                 SourceHealth(name, None, 0, None, True, _advice(name, None, now))
@@ -176,6 +178,50 @@ def check_sources(con, now: datetime | None = None) -> list[SourceHealth]:
     return out
 
 
+# `odds`: in season, the longest acceptable gap since the newest live
+# (The Odds API) line -- one daily 17:30 run plus slack for a late one.
+LIVE_ODDS_STALE_HOURS = 30
+
+
+def _odds_advice() -> str:
+    # A missing key and a broken feed need different advice. The key file
+    # is never read here (status only names it), so both cases are covered
+    # in one message.
+    key_path = odds_api_key_path()
+    return (
+        "If there is no Odds API key yet: get a free key at "
+        f"https://the-odds-api.com and save it in {key_path} "
+        f"(then chmod 600 {key_path}). If the key is there: run "
+        "predictor ingest-odds directly and read its message (quota used "
+        "up, invalid key, network failure, etc.), and confirm the launchd "
+        "agent com.predictor.odds is loaded."
+    )
+
+
+def _check_live_odds(con, now: datetime) -> SourceHealth:
+    """Stale only while in season (`live.in_season`, as the other live
+    checks use) with no live line observed in the last
+    LIVE_ODDS_STALE_HOURS. Historical (Kaggle) rows never count."""
+    count, latest = con.execute(
+        f"SELECT count(*), max(observed_at) FROM {POINT_IN_TIME_TABLES['odds_snapshots']} "
+        "WHERE source = ?",
+        [LIVE_SOURCE],
+    ).fetchone()
+    age = (now - latest).total_seconds() / 3600 if latest is not None else None
+    season_on = live.in_season(con, now)
+    stale = season_on and (age is None or age > LIVE_ODDS_STALE_HOURS)
+    if latest is None:
+        detail = "no live odds collected yet"
+    else:
+        when = "in the future" if age < 0 else f"{_format_age(age)} ago"
+        detail = f"newest live line {when}"
+    if not season_on:
+        detail += " (off-season, not checked)"
+    return SourceHealth(
+        "odds", latest, count, age, stale, _odds_advice() if stale else "", detail=detail
+    )
+
+
 # `prediction_log`: the longest acceptable gap between "there are games
 # today or yesterday (ET)" and the newest logged prediction -- see
 # `check_live`.
@@ -183,10 +229,11 @@ PREDICTION_LOG_STALE_HOURS = 30
 
 
 def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceHealth]:
-    """Health of the three live-operation pieces that `check_sources` (table
+    """Health of the live-operation pieces that `check_sources` (table
     freshness) cannot see: whether results are actually being captured,
-    whether today's predictions are actually being logged, and whether the
-    log is actually reaching GitHub. Appended after the table sources by the
+    whether today's predictions are actually being logged, whether the
+    log is actually reaching GitHub, and whether live odds are arriving
+    (`odds`). Appended after the table sources by the
     `status` command so a human sees the whole pipeline in one report.
 
     `live_results` staleness is driven entirely by
@@ -345,6 +392,9 @@ def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceH
     out.append(
         SourceHealth("log_published", None, row_count_pub, None, stale_pub, advice_pub)
     )
+
+    # --- odds (live lines) ------------------------------------------------
+    out.append(_check_live_odds(con, now))
 
     return out
 

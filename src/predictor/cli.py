@@ -766,10 +766,10 @@ def status() -> None:
     now = _now()
     repo_dir = _repo_dir()
     health = status_mod.check_sources(con, now)
-    # check_live reports the three live-operation pieces check_sources
-    # cannot see: whether results are actually being captured, whether
-    # today's predictions are actually being logged, and whether the log is
-    # actually reaching GitHub. Appended to the same report so a human sees
+    # check_live reports the live-operation pieces check_sources cannot
+    # see: whether results are actually being captured, whether today's
+    # predictions are actually being logged, whether the log is actually
+    # reaching GitHub, and whether live odds are arriving. Appended to the same report so a human sees
     # the whole pipeline's health in one glance.
     health = health + status_mod.check_live(con, repo_dir, now)
     typer.echo(status_mod.format_report(health))

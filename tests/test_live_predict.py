@@ -808,3 +808,151 @@ def test_negative_zero_never_reaches_the_log(tmp_path):
     (line,) = read_log(log_path(repo_dir, SEASON))
     for value in [line["spread"], line["p_home"], *line["terms"].values()]:
         assert not (value == 0 and str(value).startswith("-"))
+
+
+# --- market line beside each prediction (market-odds task 4) ---------------
+
+_MARKET_FIELDS = ("market_p_home", "market_spread", "market_books", "market_observed_at",
+                  "market_label")
+
+
+def _insert_odds(con, game_id, book, observed_at, *, home=-200, away=170, spread=-5.5,
+                 source="theoddsapi"):
+    table = db.POINT_IN_TIME_TABLES["odds_snapshots"]
+    con.execute(
+        f"INSERT INTO {table} (game_key, book, home_team, away_team, home_price,"
+        " away_price, spread, total, observed_at, game_id, source, reconstructed)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        [f"ev-{game_id}", book, "PHI", "NYK", home, away, spread, 220.0, observed_at,
+         game_id, source, source == "kaggle_sbr"],
+    )
+
+
+def _market_game(db_dir, now, *, with_odds):
+    con = fixture_con(db_dir)
+    add_game(con, "0022601001", SEASON, date(2026, 11, 1), "PHI", "NYK", 110, 100,
+             city="Philadelphia")
+    add_game(con, "0022601002", SEASON, date(2026, 11, 3), "NYK", "PHI", 99, 104,
+             city="New York")
+    insert_schedule_row(con, "0022601010", date(2026, 11, 10), "PHI", "NYK",
+                         now + timedelta(hours=2), season=SEASON)
+    if with_odds:
+        _insert_odds(con, "0022601010", "fanduel", now - timedelta(hours=1),
+                     home=-200, away=170, spread=-5.5)
+        _insert_odds(con, "0022601010", "draftkings", now - timedelta(minutes=30),
+                     home=-180, away=150, spread=-4.5)
+        # Observed after `now`: must not be used.
+        _insert_odds(con, "0022601010", "betmgm", now + timedelta(minutes=5),
+                     home=-900, away=600, spread=-15.0)
+        # A historical (Kaggle) row for the same game: never a live line.
+        _insert_odds(con, "0022601010", "consensus", now - timedelta(hours=2),
+                     home=+300, away=-400, spread=8.0, source="kaggle_sbr")
+    return con
+
+
+def test_predicted_line_records_the_market_line_visible_at_now(tmp_path):
+    from predictor.model import market
+
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    con = _market_game(tmp_path, now, with_odds=True)
+    (line,) = predict_today(con, S, tmp_path / "repo", now).lines_written
+
+    view = market.market_p_home(market.live_lines(con, "0022601010", now), S.sigma)
+    assert view is not None and view.books == 2
+    assert line["market_p_home"] == round(view.p_home, 6)
+    assert line["market_spread"] == -5.0
+    assert line["market_books"] == 2
+    assert line["market_observed_at"] == (now - timedelta(minutes=30)).isoformat()
+    assert line["market_label"] == "market line at 17:30 IST"
+
+
+def test_predicted_line_without_odds_has_null_market_fields(tmp_path):
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    con = _market_game(tmp_path, now, with_odds=False)
+    (line,) = predict_today(con, S, tmp_path / "repo", now).lines_written
+    assert line["status"] == "predicted"
+    for field in _MARKET_FIELDS:
+        assert field in line and line[field] is None, field
+
+
+def test_market_from_spread_only_uses_the_live_sigma(tmp_path):
+    from predictor.model.ratings import win_probability
+
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    con = _market_game(tmp_path, now, with_odds=False)
+    _insert_odds(con, "0022601010", "fanduel", now - timedelta(hours=1),
+                 home=None, away=None, spread=-6.0)
+    (line,) = predict_today(con, S, tmp_path / "repo", now).lines_written
+    assert line["market_p_home"] == round(win_probability(6.0, S.sigma), 6)
+    assert line["market_spread"] == -6.0
+    assert line["market_books"] == 1
+
+
+def test_not_predicted_lines_carry_null_market_fields(tmp_path):
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    con = fixture_con(tmp_path)
+    insert_schedule_row(con, "0022601020", date(2026, 11, 10), "PHI", "NYK",
+                         now + timedelta(minutes=10), season=SEASON)
+    _insert_odds(con, "0022601020", "fanduel", now - timedelta(hours=1))
+    (line,) = predict_today(con, S, tmp_path / "repo", now).lines_written
+    assert line["status"] == "not_predicted"
+    for field in _MARKET_FIELDS:
+        assert line[field] is None, field
+
+
+def test_model_numbers_are_byte_identical_with_and_without_odds(tmp_path):
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    with_odds = _market_game(tmp_path / "with", now, with_odds=True)
+    without = _market_game(tmp_path / "without", now, with_odds=False)
+    (a,) = predict_today(with_odds, S, tmp_path / "repo_with", now).lines_written
+    (b,) = predict_today(without, S, tmp_path / "repo_without", now).lines_written
+    assert a["market_p_home"] is not None and b["market_p_home"] is None
+    model_keys = [k for k in a if not k.startswith("market_")]
+    assert model_keys == [k for k in b if not k.startswith("market_")]
+    dump = lambda line: json.dumps({k: line[k] for k in model_keys}, sort_keys=True)  # noqa: E731
+    assert dump(a) == dump(b)
+
+
+def test_explain_never_reads_the_odds_table(tmp_path):
+    """Leak test: a recording AsOfView proves the model only ever reads
+    tables other than odds_snapshots, even with odds rows present."""
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    con = _market_game(tmp_path, now, with_odds=True)
+    seen: list[str] = []
+
+    class RecordingView(AsOfView):
+        def table(self, name):
+            seen.append(name)
+            return super().table(name)
+
+        def latest(self, name, key=None):
+            seen.append(name)
+            return super().latest(name, key)
+
+    Stage1Predictor(con, S).explain(
+        GameToPredict("0022601010", SEASON, date(2026, 11, 10), "PHI", "NYK"),
+        RecordingView(con, now),
+    )
+    assert seen, "the recording view saw no reads at all"
+    assert "odds_snapshots" not in seen
+
+
+def test_grade_records_whether_the_market_was_right(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    tip = now + timedelta(hours=2)
+    games = {"0022601030": 0.7, "0022601031": 0.3, "0022601032": None}
+    for gid, market_p in games.items():
+        insert_schedule_row(con, gid, date(2026, 11, 10), "PHI", "NYK", tip, season=SEASON)
+        line = _hand_predicted_line(gid, "PHI", "NYK", tip, 0.6, now)
+        if market_p is not None:
+            line["market_p_home"] = market_p
+        _append_raw_line(log_path(repo_dir, SEASON), line)
+        _insert_final(con, gid, SEASON, date(2026, 11, 10), "PHI", "NYK", 110, 100,
+                      observed_at=tip + timedelta(hours=4))
+
+    assert grade(con, repo_dir, SEASON, tip + timedelta(hours=4)) == 3
+    got = {g["game_id"]: g["market_correct"] for g in read_log(grades_path(repo_dir, SEASON))}
+    # 0022601032's line predates market fields entirely: null, not a crash.
+    assert got == {"0022601030": True, "0022601031": False, "0022601032": None}

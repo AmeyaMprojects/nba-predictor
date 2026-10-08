@@ -181,6 +181,15 @@ def test_live_lines_nothing_before_now(tmp_path):
     assert market.live_lines(con, "g1", now=T1) == []
 
 
+def test_live_lines_game_id_is_a_bound_value_not_sql(tmp_path):
+    con = fixture_con(tmp_path)
+    _insert(con, "ev1", "fanduel", T0, game_id="g'1", source="theoddsapi")
+    _insert(con, "ev2", "fanduel", T0, game_id="g2", source="theoddsapi")
+    assert [ln.book for ln in market.live_lines(con, "g'1", now=T1)] == ["fanduel"]
+    # An injection-shaped id matches nothing rather than everything.
+    assert market.live_lines(con, "x' OR '1'='1", now=T1) == []
+
+
 def test_the_model_never_reads_odds():
     """Market reads live only in market.py / evaluate.py / live.py; the
     model's own fitting and prediction code never mentions odds or market."""

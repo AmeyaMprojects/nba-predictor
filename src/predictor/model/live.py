@@ -28,7 +28,7 @@ from zoneinfo import ZoneInfo
 from predictor import db
 from predictor.asof import AsOfView
 from predictor.backtest.baselines import GameToPredict
-from predictor.model import publish
+from predictor.model import market, publish
 from predictor.model.settings import ModelSettings
 from predictor.model.stage1 import Stage1Predictor
 from predictor.model.venues import COMPETITIVE_PREFIXES
@@ -75,6 +75,18 @@ _MISSED_REASON = (
 # A TBD line is provisional: it never blocks a later prediction of the same
 # game once its tip-off is announced (see predict_today's dedupe).
 _TBD_REASON = "tip-off time not announced when the prediction run happened"
+
+# The live odds job (com.predictor.odds) runs at 17:30 IST, half an hour
+# before predict-today; this label says which line the market fields hold.
+MARKET_LABEL = "market line at 17:30 IST"
+
+_NO_MARKET = {
+    "market_p_home": None,
+    "market_spread": None,
+    "market_books": None,
+    "market_observed_at": None,
+    "market_label": None,
+}
 
 _COMPETITIVE_SQL = ", ".join(f"'{p}'" for p in COMPETITIVE_PREFIXES)
 
@@ -327,6 +339,23 @@ def _r6(value: float) -> float:
     return round(value, 6) + 0.0
 
 
+def _market_fields(con, game_id: str, now: datetime, sigma: float) -> dict:
+    """The live market's view of one game as seen at ``now`` -- displayed
+    beside the model's numbers, never fed into them (the model is computed
+    before this is called and never sees it). All fields null when no live
+    line is visible."""
+    view = market.market_p_home(market.live_lines(con, game_id, now), sigma)
+    if view is None:
+        return dict(_NO_MARKET)
+    return {
+        "market_p_home": _r6(view.p_home),
+        "market_spread": _r6(view.spread) if view.spread is not None else None,
+        "market_books": view.books,
+        "market_observed_at": view.observed_at.isoformat(),
+        "market_label": MARKET_LABEL,
+    }
+
+
 def _append_line(path: Path, line: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
@@ -410,6 +439,7 @@ def predict_today(con, settings: ModelSettings, repo_dir: Path, now: datetime) -
             "p_home": None,
             "sentence": None,
             "terms": None,
+            **_NO_MARKET,
         }
 
     def write(g: SlateGame, line: dict) -> None:
@@ -459,6 +489,7 @@ def predict_today(con, settings: ModelSettings, repo_dir: Path, now: datetime) -
                 "p_home": _r6(breakdown.p_home),
                 "sentence": breakdown.sentence(),
                 "terms": {name: _r6(value) for name, value in breakdown.terms()},
+                **_market_fields(con, g.game_id, now, settings.sigma),
             }
             predicted += 1
         write(g, line)
@@ -533,6 +564,7 @@ def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
         home_points, away_points = row
         home_won = home_points > away_points
         p_home = line["p_home"]
+        market_p = line.get("market_p_home")
         grade_line = {
             "game_id": game_id,
             "home_team": line["home_team"],
@@ -543,6 +575,11 @@ def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
             "p_home": p_home,
             "home_won": home_won,
             "correct": (p_home >= 0.5) == home_won,
+            # Same tie-break as `correct`; null for a line with no market
+            # (or one written before market fields existed).
+            "market_correct": (
+                None if market_p is None else (market_p >= 0.5) == home_won
+            ),
             "graded_at": now.isoformat(),
             "code_version": code_sha,
             "code_dirty": code_dirty,

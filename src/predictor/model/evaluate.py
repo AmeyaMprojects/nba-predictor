@@ -434,6 +434,7 @@ def format_market_comparison(games: Sequence[MarketGame]) -> str:
     lines += _wrap(
         "Against the closing spread (games where the model expected a different "
         f"winning margin than the line, pushes left out): {check.games:,} games -- the "
-        f"result landed on the model's side {_pct(check.model_side, check.games)}"
+        f"result landed on the model's side {_pct(check.model_side, check.games)} "
+        "(50% = no better than the line)"
     )
     return "\n".join(lines)

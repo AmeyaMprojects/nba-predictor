@@ -73,13 +73,77 @@ def test_report_names_every_source(con):
         assert name in text
 
 
-def test_odds_advice_names_the_key_file_not_an_env_export(con, tmp_path, monkeypatch):
+def _add_odds(con, observed_at, source="theoddsapi", book="fanduel"):
+    con.execute(
+        f"INSERT INTO {db.POINT_IN_TIME_TABLES['odds_snapshots']} (game_key, book,"
+        " home_team, away_team, home_price, away_price, spread, total, observed_at,"
+        " game_id, source, reconstructed) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        [f"ev-{observed_at.isoformat()}", book, "PHI", "NYK", -150, 130, -3.5, 220.0,
+         observed_at, None, source, source == "kaggle_sbr"],
+    )
+
+
+def _in_season(con):
+    insert_schedule_row(con, "0022400900", NOW.date(), "PHI", "NYK",
+                         NOW + timedelta(hours=2), season=SEASON)
+
+
+def test_odds_advice_names_the_key_file_and_the_job_not_an_env_export(con, tmp_path,
+                                                                       monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    _in_season(con)
+    repo = _repo_with_remote(tmp_path / "repo")
+    health = {h.name: h for h in status.check_live(con, repo, NOW)}
+    odds = health["odds"]
+    assert odds.stale is True
+    assert str(tmp_path / "home" / ".config" / "predictor" / "odds_api_key") in odds.advice
+    assert "com.predictor.odds" in odds.advice
+    assert "export ODDS_API_KEY" not in odds.advice
+    assert "predictor ingest-odds" in odds.advice
+
+
+def test_odds_table_entry_does_not_report_odds_a_second_time(con):
+    # Live odds freshness is judged once, by check_live's `odds` entry; the
+    # table entry only reports what is stored.
     health = {h.name: h for h in status.check_sources(con, NOW)}
-    advice = health["odds_snapshots"].advice
-    assert str(tmp_path / "home" / ".config" / "predictor" / "odds_api_key") in advice
-    assert "export ODDS_API_KEY" not in advice
-    assert "predictor ingest-odds" in advice
+    assert health["odds_snapshots"].stale is False
+    assert health["odds_snapshots"].advice == ""
+    _add_odds(con, NOW - timedelta(days=400), source="kaggle_sbr", book="consensus")
+    health = {h.name: h for h in status.check_sources(con, NOW)}
+    assert health["odds_snapshots"].stale is False
+    assert health["odds_snapshots"].row_count == 1
+    assert "odds_snapshots: 1 rows" in status.format_report(list(health.values()))
+
+
+def test_live_odds_stale_in_season_without_a_recent_live_row(con, tmp_path):
+    _in_season(con)
+    repo = _repo_with_remote(tmp_path / "repo")
+    _add_odds(con, NOW - timedelta(hours=31))
+    # Historical rows, however recent, are not live odds.
+    _add_odds(con, NOW - timedelta(hours=1), source="kaggle_sbr", book="consensus")
+    odds = {h.name: h for h in status.check_live(con, repo, NOW)}["odds"]
+    assert odds.stale is True
+    assert odds.latest == NOW - timedelta(hours=31)
+    assert odds.advice
+
+
+def test_live_odds_fresh_within_30_hours(con, tmp_path):
+    _in_season(con)
+    repo = _repo_with_remote(tmp_path / "repo")
+    _add_odds(con, NOW - timedelta(hours=29))
+    odds = {h.name: h for h in status.check_live(con, repo, NOW)}["odds"]
+    assert odds.stale is False
+    assert odds.advice == ""
+    text = status.format_report([odds])
+    assert "odds: " in text and "STALE" not in text
+
+
+def test_live_odds_quiet_off_season(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    _add_odds(con, NOW - timedelta(days=90))
+    odds = {h.name: h for h in status.check_live(con, repo, NOW)}["odds"]
+    assert odds.stale is False
+    assert odds.advice == ""
 
 
 def test_stale_schedule_advice_names_the_command_and_the_launchd_job(con):
@@ -166,6 +230,7 @@ def test_off_season_is_quiet_with_no_games(con, tmp_path):
     assert health["live_results"].stale is False
     assert health["prediction_log"].stale is False
     assert health["log_published"].stale is False
+    assert health["odds"].stale is False
 
 
 def test_live_results_stale_when_results_missing(con, tmp_path):
@@ -336,7 +401,8 @@ def test_report_detail_says_no_remote_when_unpushed_commits_is_none(con, tmp_pat
 def test_check_live_returns_all_four_names(con, tmp_path):
     repo = _repo_with_remote(tmp_path / "repo")
     names = {h.name for h in status.check_live(con, repo, NOW)}
-    assert names == {"live_results", "prediction_log", "prediction_files", "log_published"}
+    assert names == {"live_results", "prediction_log", "prediction_files", "log_published",
+                     "odds"}
 
 
 # --- prediction_files: never OK while predictions are stranded -------------

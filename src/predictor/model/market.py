@@ -23,6 +23,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+import duckdb
+
 from predictor.asof import AsOfView
 from predictor.model.ratings import win_probability
 
@@ -142,13 +144,12 @@ def live_lines(con, game_id: str, now: datetime) -> list[OddsLine]:
     # historical row can never shadow a live one or vice versa.
     rows = (
         view.latest("odds_snapshots")
-        .filter(f"source = '{LIVE_SOURCE}' AND game_id = '{_sql_str(game_id)}'")
+        .filter(f"source = '{LIVE_SOURCE}'")
+        # A bound constant, not interpolated SQL text.
+        .filter(duckdb.ColumnExpression("game_id") == duckdb.ConstantExpression(game_id))
         .project(_COLUMNS)
         .order("book")
         .fetchall()
     )
     return [_line(r)[1] for r in rows]
 
-
-def _sql_str(value: str) -> str:
-    return value.replace("'", "''")

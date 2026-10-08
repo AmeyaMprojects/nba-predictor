@@ -321,6 +321,10 @@ def test_market_section_from_a_fixture_db_with_odds(tmp_path):
     assert rows["2023-24"][1] == "3" and rows["2023-24"][-2:] == ["0", "3"]
     assert "Where they disagree" in text
     assert "Against the closing spread" in text
+    joined = " ".join(text.split())
+    assert "the result landed on the model's side" in joined
+    spread_sentence = joined[joined.index("Against the closing spread"):]
+    assert spread_sentence.rstrip().endswith("(50% = no better than the line)")
 
 
 def test_evaluate_model_cli_says_no_market_data_without_odds(tmp_path, monkeypatch):
