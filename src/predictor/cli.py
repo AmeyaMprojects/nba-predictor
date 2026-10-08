@@ -664,6 +664,82 @@ def ingest_odds_cmd() -> None:
     remaining_line(summary.requests_remaining)
 
 
+@app.command("ingest-odds-history")
+def ingest_odds_history_cmd() -> None:
+    """Load historical closing odds (Kaggle) and report coverage per season.
+
+    Download (and archive) first, then open the database. The Kaggle token
+    comes from ~/.kaggle/kaggle.json and is never printed. Exits 1 when any
+    season from 2019-20 to 2025-26 has under 90% of its regular-season games
+    linked to a line.
+    """
+    import zipfile
+
+    import duckdb
+
+    from predictor import config, db
+    from predictor.config import settings
+    from predictor.sources import odds_history
+
+    settings.ensure_dirs()
+    credentials = config.kaggle_credentials()
+    if credentials is None:
+        typer.echo(odds_history.missing_credentials_message(), err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        downloaded = odds_history.download(credentials)
+    except odds_history.KaggleAuthError as exc:
+        typer.echo(odds_history.auth_failure_message(exc.status_code), err=True)
+        raise typer.Exit(code=1) from None
+    except odds_history.KaggleFetchError as exc:
+        typer.echo(f"Historical odds not fetched: {exc}. Nothing was stored.", err=True)
+        raise typer.Exit(code=1) from None
+
+    try:
+        con = db.connect_with_retry()
+        db.migrate(con)
+        summary = odds_history.load(con, downloaded)
+    except (duckdb.Error, KeyError, ValueError, zipfile.BadZipFile) as exc:
+        typer.echo(
+            f"The Kaggle file was downloaded and archived as {downloaded.archive_key} "
+            f"(raw store '{odds_history.RAW_SOURCE}'), but loading it failed "
+            f"({type(exc).__name__}: {exc}). Nothing was stored in the database.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
+
+    typer.echo(
+        f"read {summary.rows_read} rows ({summary.rows_in_scope} from 2014-15 on); "
+        f"stored {summary.stored} closing lines"
+    )
+    if summary.no_tip:
+        typer.echo(
+            f"note: {summary.no_tip} linked game(s) skipped: no tip-off time in the schedule"
+        )
+    for note in summary.shifted:
+        typer.echo(f"note: linked to a game listed one day off: {note}")
+    typer.echo("season    regular-season games  with a line  coverage")
+    for cov in summary.seasons:
+        typer.echo(f"{cov.season:<9} {cov.scheduled:>20}  {cov.linked:>11}  {cov.pct:>7.1f}%")
+    if summary.unmatched:
+        typer.echo(
+            f"{len(summary.unmatched)} row(s) not matched to a scheduled game "
+            "(not stored); first 10:"
+        )
+        for item in summary.unmatched[:10]:
+            typer.echo(f"  {item}")
+    failing = summary.failing_seasons()
+    if failing:
+        typer.echo(
+            f"Coverage is below {odds_history.GATE_MIN_PCT:.0f}% (or there are no "
+            f"schedule games) for {', '.join(failing)}: the comparison with the "
+            "market would be unreliable for those seasons.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def status() -> None:
     """Report data freshness in plain English."""

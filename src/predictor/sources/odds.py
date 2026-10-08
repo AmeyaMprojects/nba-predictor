@@ -215,41 +215,73 @@ def _event_label(home: str | None, away: str | None, day: date | None) -> str:
     return f"{away_text}@{home_text} {day.isoformat() if day else '?'}"
 
 
-def _schedule_index(con, days: set[date]) -> dict[tuple[date, str, str], list[str]]:
-    """(ET date, home, away) -> game_ids, from the LATEST schedule vintage of
-    each competitive game dated within a day of any of ``days``.
+@dataclass(frozen=True)
+class ScheduleGame:
+    """One game as its LATEST schedule vintage lists it."""
+
+    game_id: str
+    season: str
+    game_date: date
+    tip_off_utc: datetime | None
+    home_team: str
+    away_team: str
+
+
+def latest_schedule_games(
+    con, start: date | None = None, end: date | None = None
+) -> list[ScheduleGame]:
+    """The LATEST schedule vintage of each competitive game, optionally only
+    those dated ``start``..``end`` (inclusive, ET dates).
 
     Read directly rather than through AsOfView, like model/live.py's slate:
     linking a line to its game is bookkeeping, not a feature, and the
     current listing is the right one to link against.
     """
-    if not days:
-        return {}
     table = db.POINT_IN_TIME_TABLES["schedule"]
     rows = con.execute(
         f"""
         WITH latest AS (
-            SELECT game_id, game_date, home_team, away_team,
+            SELECT game_id, season, game_date, tip_off_utc, home_team, away_team,
                    row_number() OVER (
                        PARTITION BY game_id ORDER BY observed_at DESC
                    ) AS rn
             FROM {table}
         )
-        SELECT game_id, game_date, home_team, away_team
+        SELECT game_id, season, game_date, tip_off_utc, home_team, away_team
         FROM latest
         WHERE rn = 1
-          AND game_date BETWEEN ? AND ?
+          AND game_date BETWEEN coalesce(?, DATE '0001-01-01')
+                            AND coalesce(?, DATE '9999-12-31')
           AND substr(game_id, 1, 3) IN ({_COMPETITIVE_SQL})
+        ORDER BY game_date, game_id
         """,
-        [min(days) - timedelta(days=1), max(days) + timedelta(days=1)],
+        [start, end],
     ).fetchall()
+    return [ScheduleGame(*row) for row in rows]
+
+
+def build_link_index(games) -> dict[tuple[date, str, str], list[str]]:
+    """(ET date, home, away) -> game_ids, for `link_game`."""
     index: dict[tuple[date, str, str], list[str]] = {}
-    for game_id, game_date, home, away in rows:
-        index.setdefault((game_date, home, away), []).append(game_id)
+    for game in games:
+        index.setdefault((game.game_date, game.home_team, game.away_team), []).append(
+            game.game_id
+        )
     return index
 
 
-def _link(index, day: date, home: str, away: str) -> tuple[str | None, date | None]:
+def _schedule_index(con, days: set[date]) -> dict[tuple[date, str, str], list[str]]:
+    """`build_link_index` over the games dated within a day of any of ``days``."""
+    if not days:
+        return {}
+    return build_link_index(
+        latest_schedule_games(
+            con, min(days) - timedelta(days=1), max(days) + timedelta(days=1)
+        )
+    )
+
+
+def link_game(index, day: date, home: str, away: str) -> tuple[str | None, date | None]:
     """The one game this event is, as (game_id, matched schedule date).
 
     Exact ET date first; failing that, the day before or after -- but only
@@ -268,6 +300,9 @@ def _link(index, day: date, home: str, away: str) -> tuple[str | None, date | No
     if len(candidates) == 1:
         return candidates[0]
     return None, None
+
+
+_link = link_game
 
 
 def load(con, downloaded: OddsDownload) -> OddsIngestSummary:
