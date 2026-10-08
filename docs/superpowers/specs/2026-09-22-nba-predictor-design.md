@@ -764,3 +764,22 @@ Each `predicted` line gains `market_p_home`, `market_spread`,
 `market_correct`. `status` adds an `odds` check: stale if no live fetch in 30 h
 while games are being played; quota exhaustion produces a plain message and
 predictions continue without market fields.
+
+### Result — 2026-10-08
+
+Historical closing lines (Kaggle "NBA Betting Data", 2007-08..2025-26) loaded into the live database: 15,473 lines, coverage 99.8-100% of regular-season games in every season 2014-15..2025-26. Six rows were left out because their scores disagree with the NBA's own; one checked by hand (DEN at MIN 2025-11-15: file 103-115, NBA 112-123) is a file error. Moneylines are missing from mid 2022-23 on, so for 2,974 games the market chance comes from the moneyline and for 4,253 from the closing spread using the model's sigma.
+
+Walk-forward model vs closing market, 2020-21..2025-26, 7,227 games with a line:
+
+| | model | market |
+|---|---|---|
+| picked the winner | 65.4% | 67.9% |
+| Brier | 0.2158 | 0.2052 |
+| log loss | 0.6205 | 0.5960 |
+
+- The market is ahead in every season, by 0.9 (2025-26) to 3.6 points of accuracy.
+- Disagreement zone (different pick or ≥10 points apart): 2,372 games, model right 58.5%, market 65.9%.
+- Against the closing spread: 7,166 games, result on the model's side 50.0% -- no edge.
+- Reading: the model does not match the market. The honest public claim is "within about 2.5 points of the closing market, from free data, before tip-off". Closing lines know injuries and lineups up to tip-off; the model does not. Criterion 2 ("match the market") is NOT met; injury and lineup information is the obvious next lever.
+
+Live odds: first fetch 2026-10-08 stored 155 lines for 46 games, all linked; each daily fetch costs 3 of the 500 free monthly requests (~93 a month). Job `com.predictor.odds` runs at 17:30 IST from the live copy.
