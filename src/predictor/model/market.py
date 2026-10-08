@@ -21,7 +21,7 @@ from __future__ import annotations
 import statistics
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import duckdb
 
@@ -30,6 +30,12 @@ from predictor.model.ratings import win_probability
 
 HISTORICAL_SOURCE = "kaggle_sbr"
 LIVE_SOURCE = "theoddsapi"
+
+# `live_lines`: a live line last seen more than this long before `now` is
+# not the current market -- a failed daily fetch must not let yesterday's
+# line stand in for today's, and a book missing from today's snapshot must
+# not contribute its old line.
+LIVE_MAX_AGE = timedelta(hours=24)
 
 
 @dataclass(frozen=True)
@@ -138,12 +144,13 @@ def historical_lines(con, as_of: datetime | None = None) -> dict[str, list[OddsL
 
 def live_lines(con, game_id: str, now: datetime) -> list[OddsLine]:
     """The latest live snapshot per book for ``game_id`` observed at or
-    before ``now``."""
+    before ``now``, dropping any whose latest snapshot is older than
+    ``LIVE_MAX_AGE``."""
     view = AsOfView(con, now)
-    # Latest per (game_key, book) -- the table's own entity key -- so a
-    # historical row can never shadow a live one or vice versa.
+    # Latest per (source, game_key, book), so a historical row can never
+    # shadow a live one or vice versa, even under the same key and book.
     rows = (
-        view.latest("odds_snapshots")
+        view.latest("odds_snapshots", key=("source", "game_key", "book"))
         .filter(f"source = '{LIVE_SOURCE}'")
         # A bound constant, not interpolated SQL text.
         .filter(duckdb.ColumnExpression("game_id") == duckdb.ConstantExpression(game_id))
@@ -151,5 +158,6 @@ def live_lines(con, game_id: str, now: datetime) -> list[OddsLine]:
         .order("book")
         .fetchall()
     )
-    return [_line(r)[1] for r in rows]
+    lines = [_line(r)[1] for r in rows]
+    return [ln for ln in lines if now - ln.observed_at <= LIVE_MAX_AGE]
 

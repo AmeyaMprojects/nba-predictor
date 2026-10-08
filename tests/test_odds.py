@@ -479,3 +479,20 @@ def test_cli_database_error_names_the_archive_key_and_exits_1(cli_env, monkeypat
     assert result.exit_code == 1
     assert "odds_" in result.output and ".json" in result.output
     assert "Traceback" not in result.output
+
+
+def test_cli_archive_write_failure_is_a_plain_message_and_exit_1(cli_env, monkeypatch):
+    _write_key(cli_env)
+    _fake_fetch(monkeypatch, PAYLOAD)
+
+    def store(*args, **kwargs):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(odds.raw_store, "store", store)
+
+    result = runner.invoke(cli.app, ["ingest-odds"])
+
+    assert result.exit_code == 1
+    assert "Nothing was stored" in result.output
+    assert "Traceback" not in result.output
+    assert "test-key" not in result.output

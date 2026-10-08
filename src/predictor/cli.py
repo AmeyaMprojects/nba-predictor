@@ -632,6 +632,15 @@ def ingest_odds_cmd() -> None:
     except odds.OddsFetchError as exc:
         typer.echo(f"Odds not fetched: {exc}. Nothing was stored.", err=True)
         raise typer.Exit(code=1) from None
+    except OSError as exc:
+        # Fetched, but archiving the response to the raw store failed (disk
+        # full, permissions, ...). Nothing reached the database either.
+        typer.echo(
+            f"Odds were fetched but could not be archived ({type(exc).__name__}: "
+            f"{exc}). Nothing was stored; predictions carry on without market lines.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
 
     import duckdb
 

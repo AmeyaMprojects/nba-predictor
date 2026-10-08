@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -179,6 +179,28 @@ def test_live_lines_nothing_before_now(tmp_path):
     con = fixture_con(tmp_path)
     _insert(con, "ev1", "fanduel", T2, game_id="g1", source="theoddsapi")
     assert market.live_lines(con, "g1", now=T1) == []
+
+
+def test_live_lines_drops_a_book_missing_from_todays_snapshot(tmp_path):
+    con = fixture_con(tmp_path)
+    now = T1
+    _insert(con, "ev1", "fanduel", now - timedelta(hours=1), game_id="g1",
+            source="theoddsapi")
+    # Last seen more than 24h before `now`: an old line, not today's market.
+    _insert(con, "ev1", "draftkings", now - timedelta(hours=24, seconds=1), game_id="g1",
+            source="theoddsapi")
+    # Exactly 24h old still counts.
+    _insert(con, "ev1", "betmgm", now - timedelta(hours=24), game_id="g1",
+            source="theoddsapi")
+    assert [ln.book for ln in market.live_lines(con, "g1", now=now)] == ["betmgm", "fanduel"]
+
+
+def test_live_lines_kaggle_row_never_shadows_a_live_one(tmp_path):
+    con = fixture_con(tmp_path)
+    _insert(con, "ev1", "fanduel", T0, game_id="g1", source="theoddsapi", home=-150)
+    _insert(con, "ev1", "fanduel", T1, game_id="g1", source="kaggle_sbr", home=-999)
+    assert [(ln.book, ln.home_price) for ln in market.live_lines(con, "g1", now=T1)] == [
+        ("fanduel", -150)]
 
 
 def test_live_lines_game_id_is_a_bound_value_not_sql(tmp_path):

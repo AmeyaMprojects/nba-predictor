@@ -844,8 +844,10 @@ def _market_game(db_dir, now, *, with_odds):
         # Observed after `now`: must not be used.
         _insert_odds(con, "0022601010", "betmgm", now + timedelta(minutes=5),
                      home=-900, away=600, spread=-15.0)
-        # A historical (Kaggle) row for the same game: never a live line.
-        _insert_odds(con, "0022601010", "consensus", now - timedelta(hours=2),
+        # A historical (Kaggle) row for the same game, event key and book as a
+        # live row, and NEWER than it: must neither be used nor shadow the
+        # live fanduel line.
+        _insert_odds(con, "0022601010", "fanduel", now - timedelta(minutes=10),
                      home=+300, away=-400, spread=8.0, source="kaggle_sbr")
     return con
 
@@ -956,3 +958,41 @@ def test_grade_records_whether_the_market_was_right(tmp_path):
     got = {g["game_id"]: g["market_correct"] for g in read_log(grades_path(repo_dir, SEASON))}
     # 0022601032's line predates market fields entirely: null, not a crash.
     assert got == {"0022601030": True, "0022601031": False, "0022601032": None}
+
+
+def test_an_unusable_market_line_never_stops_a_prediction(tmp_path):
+    # +50 is not a valid American price: american_to_prob raises ValueError.
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    con = _market_game(tmp_path, now, with_odds=False)
+    _insert_odds(con, "0022601010", "fanduel", now - timedelta(hours=1), home=50, away=-110)
+    (line,) = predict_today(con, S, tmp_path / "repo", now).lines_written
+    assert line["status"] == "predicted"
+    assert line["p_home"] is not None
+    for field in _MARKET_FIELDS:
+        assert line[field] is None, field
+    assert read_log(log_path(tmp_path / "repo", SEASON)) == [line]
+
+
+def test_a_database_error_reading_odds_never_stops_a_prediction(tmp_path, monkeypatch):
+    import duckdb
+
+    from predictor.model import market
+
+    def broken(*args, **kwargs):
+        raise duckdb.Error("boom")
+
+    monkeypatch.setattr(market, "live_lines", broken)
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    con = _market_game(tmp_path, now, with_odds=True)
+    (line,) = predict_today(con, S, tmp_path / "repo", now).lines_written
+    assert line["status"] == "predicted"
+    assert line["market_p_home"] is None and line["market_label"] is None
+
+
+def test_a_line_older_than_24h_is_not_todays_market(tmp_path):
+    # A failed 17:30 job must not put yesterday's line under the label.
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    con = _market_game(tmp_path, now, with_odds=False)
+    _insert_odds(con, "0022601010", "fanduel", now - timedelta(hours=25))
+    (line,) = predict_today(con, S, tmp_path / "repo", now).lines_written
+    assert line["market_p_home"] is None and line["market_label"] is None

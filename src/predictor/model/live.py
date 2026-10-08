@@ -25,6 +25,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+import duckdb
+
 from predictor import db
 from predictor.asof import AsOfView
 from predictor.backtest.baselines import GameToPredict
@@ -343,8 +345,15 @@ def _market_fields(con, game_id: str, now: datetime, sigma: float) -> dict:
     """The live market's view of one game as seen at ``now`` -- displayed
     beside the model's numbers, never fed into them (the model is computed
     before this is called and never sees it). All fields null when no live
-    line is visible."""
-    view = market.market_p_home(market.live_lines(con, game_id, now), sigma)
+    line is visible.
+
+    Display-only, so it must never stop the prediction run: an unusable
+    stored price (ValueError) or a database error reading odds leaves the
+    market fields null and the prediction is still written."""
+    try:
+        view = market.market_p_home(market.live_lines(con, game_id, now), sigma)
+    except (ValueError, duckdb.Error):
+        return dict(_NO_MARKET)
     if view is None:
         return dict(_NO_MARKET)
     return {
