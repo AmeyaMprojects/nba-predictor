@@ -192,6 +192,9 @@ class HistoryLoadSummary:
     unmatched: list[str] = field(default_factory=list)
     shifted: list[str] = field(default_factory=list)
     seasons: list[SeasonCoverage] = field(default_factory=list)
+    # kaggle_sbr lines from an earlier load whose game this load did not
+    # store (e.g. a score correction made it unmatched), deleted.
+    removed_stale: int = 0
 
     def failing_seasons(self, gate: tuple[str, ...] | None = None) -> list[str]:
         """Gate seasons with coverage below GATE_MIN_PCT (or no schedule games)."""
@@ -214,7 +217,13 @@ def _sleep(seconds: float) -> None:
 
 def fetch_archive(username: str, key: str, session=None) -> bytes:
     """The dataset zip. Retries network errors only; never echoes URL or key."""
-    session = session or requests.Session()
+    if session is None:
+        with requests.Session() as own:
+            return _fetch_with(own, username, key)
+    return _fetch_with(session, username, key)
+
+
+def _fetch_with(session, username: str, key: str) -> bytes:
     for attempt in range(1, FETCH_ATTEMPTS + 1):
         try:
             response = session.get(DOWNLOAD_URL, auth=(username, key), timeout=(15, 300))
@@ -278,6 +287,12 @@ def read_csv_member(body: bytes) -> str:
         return zf.read(members[0]).decode("utf-8-sig")
 
 
+def _text(raw: dict, column: str) -> str:
+    """A cell's text; a cell missing from a short row (None) reads as blank."""
+    value = raw.get(column)
+    return value.strip() if isinstance(value, str) else ""
+
+
 def _blank(value: str | None) -> bool:
     return value is None or not value.strip()
 
@@ -308,32 +323,34 @@ def parse_csv(text: str) -> list[HistoryRow]:
     for raw in reader:
         line = reader.line_num
         try:
-            spread = _opt_float(raw["spread"])
-            favoured = raw["whos_favored"].strip().lower()
+            spread = _opt_float(_text(raw, "spread"))
+            favoured = _text(raw, "whos_favored").lower()
             if spread is not None:
                 if favoured == "home":
                     spread = -spread
                 elif favoured != "away":
-                    raise ValueError(f"whos_favored is {raw['whos_favored']!r}")
-            home_code = raw["home"].strip().lower()
-            away_code = raw["away"].strip().lower()
+                    raise ValueError(f"whos_favored is {favoured!r}")
+            home_code = _text(raw, "home").lower()
+            away_code = _text(raw, "away").lower()
+            if not home_code or not away_code:
+                raise ValueError("a team code is blank")
             rows.append(
                 HistoryRow(
                     line=line,
-                    season=season_label(int(raw["season"])),
-                    game_date=date.fromisoformat(raw["date"].strip()),
-                    regular=_bool(raw["regular"]),
-                    playoffs=_bool(raw["playoffs"]),
+                    season=season_label(int(_text(raw, "season"))),
+                    game_date=date.fromisoformat(_text(raw, "date")),
+                    regular=_bool(_text(raw, "regular")),
+                    playoffs=_bool(_text(raw, "playoffs")),
                     home_code=home_code,
                     away_code=away_code,
                     home=kaggle_team(home_code),
                     away=kaggle_team(away_code),
-                    score_home=_opt_int(raw["score_home"]),
-                    score_away=_opt_int(raw["score_away"]),
+                    score_home=_opt_int(_text(raw, "score_home")),
+                    score_away=_opt_int(_text(raw, "score_away")),
                     home_spread=spread + 0.0 if spread is not None else None,
-                    total=_opt_float(raw["total"]),
-                    moneyline_home=_opt_int(raw["moneyline_home"]),
-                    moneyline_away=_opt_int(raw["moneyline_away"]),
+                    total=_opt_float(_text(raw, "total")),
+                    moneyline_home=_opt_int(_text(raw, "moneyline_home")),
+                    moneyline_away=_opt_int(_text(raw, "moneyline_away")),
                 )
             )
         except (TypeError, ValueError) as exc:
@@ -401,6 +418,7 @@ def load(con, downloaded: HistoryDownload) -> HistoryLoadSummary:
         game = by_id[game_id]
         if game.tip_off_utc is None:
             no_tip += 1
+            unmatched.append(f"{where}: no tip-off in the schedule for game {game_id}")
             continue
         if matched_day != row.game_date:
             shifted.append(f"{row.label} -> {matched_day.isoformat()}")
@@ -414,6 +432,20 @@ def load(con, downloaded: HistoryDownload) -> HistoryLoadSummary:
     )
     con.execute("BEGIN TRANSACTION")
     try:
+        # Only this source's rows: a kaggle line whose game this load did
+        # not store (now unmatched, e.g. after a score correction) must not
+        # survive as a stale line. Live (theoddsapi) rows are never touched.
+        keep = [f"kaggle:{game_id}" for game_id in to_store]
+        removed_stale = con.execute(
+            f"SELECT count(*) FROM {table} WHERE source = ?"
+            " AND NOT list_contains(?::VARCHAR[], game_key)",
+            [SOURCE, keep],
+        ).fetchone()[0]
+        con.execute(
+            f"DELETE FROM {table} WHERE source = ?"
+            " AND NOT list_contains(?::VARCHAR[], game_key)",
+            [SOURCE, keep],
+        )
         for game_id, (row, game) in to_store.items():
             game_key = f"kaggle:{game_id}"
             # A tip-off that moved since the last load would otherwise leave
@@ -456,4 +488,5 @@ def load(con, downloaded: HistoryDownload) -> HistoryLoadSummary:
         unmatched=unmatched,
         shifted=shifted,
         seasons=coverage,
+        removed_stale=removed_stale,
     )

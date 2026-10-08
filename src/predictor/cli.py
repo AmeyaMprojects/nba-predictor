@@ -695,12 +695,20 @@ def ingest_odds_history_cmd() -> None:
     except odds_history.KaggleFetchError as exc:
         typer.echo(f"Historical odds not fetched: {exc}. Nothing was stored.", err=True)
         raise typer.Exit(code=1) from None
+    except OSError as exc:
+        # e.g. the raw store's disk is full or unwritable.
+        typer.echo(
+            f"Historical odds could not be downloaded or archived "
+            f"({type(exc).__name__}: {exc}). Nothing was stored.",
+            err=True,
+        )
+        raise typer.Exit(code=1) from None
 
     try:
         con = db.connect_with_retry()
         db.migrate(con)
         summary = odds_history.load(con, downloaded)
-    except (duckdb.Error, KeyError, ValueError, zipfile.BadZipFile) as exc:
+    except (duckdb.Error, KeyError, ValueError, zipfile.BadZipFile, OSError) as exc:
         typer.echo(
             f"The Kaggle file was downloaded and archived as {downloaded.archive_key} "
             f"(raw store '{odds_history.RAW_SOURCE}'), but loading it failed "
@@ -713,6 +721,11 @@ def ingest_odds_history_cmd() -> None:
         f"read {summary.rows_read} rows ({summary.rows_in_scope} from 2014-15 on); "
         f"stored {summary.stored} closing lines"
     )
+    if summary.removed_stale:
+        typer.echo(
+            f"removed {summary.removed_stale} earlier Kaggle line(s) for games "
+            "no longer matched"
+        )
     if summary.no_tip:
         typer.echo(
             f"note: {summary.no_tip} linked game(s) skipped: no tip-off time in the schedule"

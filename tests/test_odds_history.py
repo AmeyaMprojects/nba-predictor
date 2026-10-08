@@ -541,3 +541,97 @@ def test_cli_load_failure_names_the_archive_key(cli_env, monkeypatch):
     assert result.exit_code == 1
     assert "kaggle_" in result.output and "odds_history" in result.output
     assert "Traceback" not in result.output
+
+
+# --- fix round 1 -------------------------------------------------------------
+
+
+def test_short_row_with_missing_trailing_columns_is_not_a_traceback():
+    # Truncated after `whos_favored` is absent: DictReader fills None.
+    short = "2015,2014-10-28,True,False,dal,sa,100,101,24,29,20,27,0,26,19,31,25,0"
+    (row,) = odds_history.parse_csv("\n".join([HEADER, short]) + "\n")
+    assert row.home_spread is None and row.total is None
+    assert row.moneyline_home is None and row.moneyline_away is None
+
+
+def test_row_truncated_before_required_fields_is_a_plain_parse_error():
+    with pytest.raises(ValueError, match="line 2"):
+        odds_history.parse_csv("\n".join([HEADER, "2015,2014-10-28"]) + "\n")
+
+
+def test_no_tip_game_is_named_in_unmatched(con):
+    insert_schedule_row(con, "0021400001", date(2014, 10, 28), "SAS", "DAL",
+                        _tip(2014, 10, 29, 0), season="2014-15")
+    table = db.POINT_IN_TIME_TABLES["schedule"]
+    con.execute(f"UPDATE {table} SET tip_off_utc = NULL")
+    _, summary = _ingest(con, _zip("\n".join([HEADER, ROWS[1]]) + "\n"))
+    assert summary.no_tip == 1
+    assert len(summary.unmatched) == 1
+    assert "DAL@SAS" in summary.unmatched[0] and "no tip-off" in summary.unmatched[0]
+
+
+def test_reload_removes_lines_for_games_no_longer_matched(con):
+    _seed_schedule(con)
+    table = db.POINT_IN_TIME_TABLES["odds_snapshots"]
+    con.execute(
+        f"INSERT INTO {table} (game_key, book, home_team, away_team, observed_at,"
+        " game_id, source) VALUES ('abc', 'draftkings', 'SAS', 'DAL', ?, '0021400001',"
+        " 'theoddsapi')",
+        [_tip(2014, 10, 28, 20)],
+    )
+    _, first = _ingest(con)
+    assert first.removed_stale == 0
+    # A score correction: our final for HOU@LAL now disagrees with the file.
+    games = db.POINT_IN_TIME_TABLES["games"]
+    con.execute(
+        f"INSERT INTO {games} (game_id, season, game_date, home_team, away_team,"
+        " home_points, away_points, status, observed_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        ["0021400002", "2014-15", date(2014, 10, 28), "LAL", "HOU", 91, 108, "FINAL",
+         _tip(2014, 10, 29, 5)],
+    )
+    _, second = _ingest(con)
+    keys = {r[0] for r in _stored(con)}
+    assert "kaggle:0021400002" not in keys
+    assert second.removed_stale == 1
+    assert second.stored == 5
+    # The live line is never touched.
+    assert "abc" in keys
+
+
+def test_fetch_closes_the_session_it_creates(monkeypatch):
+    closed = []
+
+    class OwnSession(FakeSession):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            closed.append(True)
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(odds_history.requests, "Session",
+                        lambda: OwnSession([FakeResponse(200, _zip())]))
+    assert odds_history.fetch_archive("u", "k") == _zip()
+    assert closed
+
+
+@pytest.mark.parametrize("stage", ["download", "load"])
+def test_cli_os_error_is_a_plain_message(cli_env, monkeypatch, stage):
+    _write_token(cli_env)
+    if stage == "download":
+        def fetch(username, key, session=None):
+            raise OSError(28, "No space left on device")
+        monkeypatch.setattr(odds_history, "fetch_archive", fetch)
+    else:
+        monkeypatch.setattr(odds_history, "fetch_archive", lambda u, k, session=None: _zip())
+
+        def broken(con, downloaded):
+            raise OSError(5, "Input/output error")
+        monkeypatch.setattr(odds_history, "load", broken)
+    result = runner.invoke(cli.app, ["ingest-odds-history"])
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "error" in result.output.lower()
+    assert result.exception is None or isinstance(result.exception, SystemExit)
