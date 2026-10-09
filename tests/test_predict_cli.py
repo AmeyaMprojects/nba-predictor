@@ -19,15 +19,18 @@ import subprocess
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+import pandas as pd
+import requests
 from typer.testing import CliRunner
 
-from predictor import cli, config, db
+from predictor import cli, config, db, raw_store
 from predictor.config import Settings
 from predictor.model import settings as model_settings
 from predictor.model.adjustments import Coefficients
 from predictor.model.live import grades_path, log_path, read_log
 from predictor.model.ratings import RatingParams
 from predictor.model.settings import ModelSettings
+from predictor.sources import results
 from schedule_rows import insert_schedule_row
 
 runner = CliRunner()
@@ -57,6 +60,7 @@ def _point_settings_at_tmp(tmp_path, monkeypatch) -> Settings:
     s.ensure_dirs()
     monkeypatch.setattr(config, "settings", s)
     monkeypatch.setattr(db, "settings", s)
+    monkeypatch.setattr(raw_store, "settings", s)
     return s
 
 
@@ -102,8 +106,19 @@ def _wire(tmp_path, monkeypatch, now, *, with_remote=True):
     monkeypatch.setattr(cli, "_now", lambda: now)
     monkeypatch.setattr(cli, "_repo_dir", lambda: repo_dir)
     monkeypatch.setattr(model_settings, "load", lambda: S)
+    # predict-today catches up missing results first; tests never touch the
+    # network, so by default that download finds none (tests that want a
+    # successful catch-up replace this).
+    monkeypatch.setattr(results, "download", _no_network)
 
     return con, repo_dir, remote_dir
+
+
+_REAL_DOWNLOAD = results.download
+
+
+def _no_network(season):
+    raise requests.ConnectionError("Failed to resolve 'stats.nba.com' (test: no network)")
 
 
 def test_predict_today_happy_path_predicts_commits_and_pushes(tmp_path, monkeypatch):
@@ -475,3 +490,121 @@ def test_database_error_mid_query_is_a_plain_message_and_exit_1(tmp_path, monkey
     assert "Nothing was published." in result.output
     assert "Traceback" not in result.output
     assert _git(repo_dir, "rev-list", "--count", "HEAD").stdout.strip() == "1"
+
+
+# --- predict-today catches up missing results first --------------------------
+
+CATCH_UP_UNREACHABLE = (
+    "predict-today: could not reach stats.nba.com (no network?) to catch up "
+    "missing results -- predicting with the results already recorded."
+)
+
+
+def _finished_game_df(game_id, game_date, home, away, home_pts, away_pts):
+    wl = ("W", "L") if home_pts > away_pts else ("L", "W")
+    return pd.DataFrame(
+        [
+            {"GAME_ID": game_id, "GAME_DATE": game_date, "MATCHUP": f"{home} vs. {away}",
+             "TEAM_ABBREVIATION": home, "PTS": home_pts, "WL": wl[0]},
+            {"GAME_ID": game_id, "GAME_DATE": game_date, "MATCHUP": f"{away} @ {home}",
+             "TEAM_ABBREVIATION": away, "PTS": away_pts, "WL": wl[1]},
+        ]
+    )
+
+
+def _missing_result_and_todays_game(con, now):
+    # Tipped 20 hours ago with no FINAL row: inside results_missing's window.
+    insert_schedule_row(
+        con, "0022600778", date(2026, 11, 9), "BOS", "MIA",
+        now - timedelta(hours=20), season=SEASON,
+    )
+    insert_schedule_row(
+        con, "0022600779", date(2026, 11, 10), "PHI", "NYK",
+        now + timedelta(hours=2), season=SEASON,
+    )
+    con.close()
+
+
+def test_missing_results_are_captured_before_predicting(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    _missing_result_and_todays_game(con, now)
+    df = _finished_game_df("0022600778", "2026-11-09", "BOS", "MIA", 112, 104)
+    original_download = _REAL_DOWNLOAD
+    seasons = []
+
+    def fake_download(season):
+        seasons.append(season)
+        return original_download(season, fetched_at=now, fetch=lambda s: df)
+
+    monkeypatch.setattr(results, "download", fake_download)
+
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert seasons == [SEASON]
+    assert "WARNING: recent results are missing" not in result.output
+    con = db.connect(config.settings.db_path, read_only=True)
+    try:
+        finals = con.execute(
+            f"SELECT home_points, away_points, reconstructed FROM {db.POINT_IN_TIME_TABLES['games']} "
+            "WHERE game_id = '0022600778' AND status = 'FINAL'"
+        ).fetchall()
+    finally:
+        con.close()
+    assert finals == [(112, 104, False)]
+    lines = read_log(log_path(repo_dir, SEASON))
+    todays = [line for line in lines if line["game_id"] == "0022600779"]
+    assert todays and all(line["stale_results"] is False for line in todays)
+
+
+def test_catch_up_network_failure_is_one_line_and_predictions_still_written(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    _missing_result_and_todays_game(con, now)
+
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert "Traceback" not in result.output
+    assert result.output.count(CATCH_UP_UNREACHABLE) == 1
+    assert "stats.nba.com" not in result.output.replace(CATCH_UP_UNREACHABLE, "")
+    assert "WARNING: recent results are missing" in result.output
+    lines = read_log(log_path(repo_dir, SEASON))
+    todays = [line for line in lines if line["game_id"] == "0022600779"]
+    assert todays and all(line["stale_results"] is True for line in todays)
+
+
+def test_catch_up_other_capture_failure_is_one_line_and_predict_continues(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    _missing_result_and_todays_game(con, now)
+
+    def conflict(season):
+        raise raw_store.RawStoreConflict("key already holds different bytes")
+
+    monkeypatch.setattr(results, "download", conflict)
+
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert "Traceback" not in result.output
+    assert "predict-today: could not catch up missing results" in result.output
+    assert read_log(log_path(repo_dir, SEASON))
+
+
+def test_no_catch_up_when_no_results_are_missing(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    insert_schedule_row(
+        con, "0022600779", date(2026, 11, 10), "PHI", "NYK",
+        now + timedelta(hours=2), season=SEASON,
+    )
+    con.close()
+    calls = []
+    monkeypatch.setattr(results, "download", lambda season: calls.append(season))
+
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == []

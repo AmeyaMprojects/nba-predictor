@@ -55,6 +55,6 @@ install_job com.predictor.odds
 
 echo "The news archiver will run at 09:00, 14:00, and 19:00 daily."
 echo "The schedule archiver will run at 10:30 daily."
-echo "Live results will be captured at 17:00 daily."
+echo "Live results will be captured at 12:00, 16:00 and 22:00 daily."
 echo "Market odds will be fetched at 17:30 daily."
 echo "Today's predictions will be published at 18:00 daily."

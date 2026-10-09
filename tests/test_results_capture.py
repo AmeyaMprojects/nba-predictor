@@ -543,8 +543,7 @@ def test_cli_download_failure_is_plain_english_and_db_is_never_opened(tmp_path, 
     out = runner.invoke(cli.app, ["capture-results", "--season", SEASON])
 
     assert out.exit_code == 1
-    assert "Could not download results" in out.output
-    assert "nothing was saved" in out.output
+    assert out.output.strip() == UNREACHABLE_LINE
     assert calls == []
     assert "Traceback" not in out.output
 
@@ -601,3 +600,138 @@ def test_cli_exits_nonzero_and_warns_when_games_were_dropped(tmp_path, monkeypat
     # The success line (0 new results) still prints -- the WARNING is in
     # addition to it, not instead of it.
     assert f"results {SEASON}: 0 new game result(s) recorded (0 already known)" in out.output
+
+
+# --- a sleeping Mac: no network in a dark wake ------------------------------
+
+UNREACHABLE_LINE = (
+    "capture-results: could not reach stats.nba.com (no network?) -- nothing "
+    "recorded; the next scheduled run will try again."
+)
+
+
+def _name_resolution_error():
+    return requests.ConnectionError(
+        "HTTPSConnectionPool(host='stats.nba.com', port=443): Max retries exceeded "
+        "(Caused by NameResolutionError(\"Failed to resolve 'stats.nba.com'\"))"
+    )
+
+
+def _retry_error_wrapping(exc):
+    import tenacity
+
+    def fail():
+        raise exc
+
+    try:
+        tenacity.Retrying(stop=tenacity.stop_after_attempt(1))(fail)
+    except tenacity.RetryError as err:
+        return err
+    raise AssertionError("unreachable")
+
+
+@pytest.mark.parametrize(
+    "make_error",
+    [
+        _name_resolution_error,
+        lambda: requests.ReadTimeout("read timed out"),
+        lambda: _retry_error_wrapping(_name_resolution_error()),
+        lambda: _retry_error_wrapping(requests.ConnectTimeout("connect timed out")),
+    ],
+    ids=["name-resolution", "timeout", "retry-error-dns", "retry-error-connect-timeout"],
+)
+def test_cli_unreachable_network_is_one_plain_line(tmp_path, monkeypatch, make_error):
+    _point_settings_at_tmp(tmp_path, monkeypatch)
+
+    def fail(season):
+        raise make_error()
+
+    monkeypatch.setattr(results, "download", fail)
+    calls = []
+    monkeypatch.setattr(db, "connect_with_retry", lambda *a, **k: calls.append("connect"))
+
+    out = runner.invoke(cli.app, ["capture-results", "--season", SEASON])
+
+    assert out.exit_code == 1
+    assert out.output.strip() == UNREACHABLE_LINE
+    assert "Traceback" not in out.output
+    assert calls == []
+
+
+def test_cli_retry_error_around_a_non_network_failure_is_plain_english(tmp_path, monkeypatch):
+    _point_settings_at_tmp(tmp_path, monkeypatch)
+
+    def fail(season):
+        raise _retry_error_wrapping(ValueError("Expecting value: line 1 column 1"))
+
+    monkeypatch.setattr(results, "download", fail)
+    out = runner.invoke(cli.app, ["capture-results", "--season", SEASON])
+
+    assert out.exit_code == 1
+    assert "Could not download results" in out.output
+    assert "Traceback" not in out.output
+
+
+def test_download_fetches_through_the_results_retry_policy():
+    import inspect
+
+    assert inspect.signature(results.download).parameters["fetch"].default is results.fetch_season
+
+
+def _fake_clock_fetch(error, seconds_per_attempt):
+    """An attempt function that always fails, advancing a fake wall clock
+    by `seconds_per_attempt` each call (a stand-in for the Mac sleeping
+    between dark wakes); no network, no real sleeping."""
+    state = {"t": 0.0, "calls": 0}
+
+    def attempt(season):
+        state["calls"] += 1
+        state["t"] += seconds_per_attempt
+        raise error
+
+    return state, attempt
+
+
+def test_fetch_season_gives_up_on_connection_errors_after_about_two_minutes():
+    import tenacity
+
+    state, attempt = _fake_clock_fetch(_name_resolution_error(), 70)
+
+    with pytest.raises(tenacity.RetryError) as info:
+        results.fetch_season(
+            SEASON, attempt=attempt, clock=lambda: state["t"], sleep=lambda s: None
+        )
+
+    # 70s: under the budget, retried once; 140s: over it, give up.
+    assert state["calls"] == 2
+    assert isinstance(info.value.last_attempt.exception(), requests.ConnectionError)
+
+
+def test_fetch_season_keeps_the_shared_retry_policy_for_other_errors():
+    import tenacity
+
+    state, attempt = _fake_clock_fetch(requests.ReadTimeout("read timed out"), 70)
+
+    with pytest.raises(tenacity.RetryError):
+        results.fetch_season(
+            SEASON, attempt=attempt, clock=lambda: state["t"], sleep=lambda s: None
+        )
+
+    # Same 4 attempts as nba_stats.fetch_season, however long they take.
+    assert state["calls"] == 4
+
+
+def test_fetch_season_returns_the_frame_on_a_later_success():
+    calls = []
+    df = _game_df("0022600001", "2026-10-03", "PHI", "NYK", 119, 110)
+
+    def attempt(season):
+        calls.append(season)
+        if len(calls) == 1:
+            raise _name_resolution_error()
+        return df
+
+    got = results.fetch_season(SEASON, attempt=attempt, clock=lambda: 0.0, sleep=lambda s: None)
+
+    assert got is df
+    assert calls == [SEASON, SEASON]

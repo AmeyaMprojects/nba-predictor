@@ -45,14 +45,16 @@ def test_install_script_installs_both_jobs_and_is_valid_bash():
 
 # --- Task 4: capture-results and predict-today jobs -----------------------
 
-def test_results_job_runs_capture_results_once_a_day():
+def test_results_job_runs_capture_results_three_times_a_day():
     p = _load("com.predictor.results.plist")
     assert p["Label"] == "com.predictor.results"
     assert p["ProgramArguments"] == ["PROJECT_DIR/.venv/bin/predictor", "capture-results"]
-    # 17:00 IST = 07:30 EDT / 06:30 EST: every game of the previous ET day
-    # (latest tips ~22:30 ET) has long finished, and it runs an hour before
-    # predict-today (18:00) so today's predictions see last night's results.
-    assert _slots(p) == {(17, 0)}
+    # Three idempotent runs, so one run missed to a sleeping Mac (no
+    # network in a dark wake) is not a lost day. 12:00 IST = 02:30 EDT:
+    # most of the previous ET day has finished; 16:00 IST (06:30 EDT)
+    # catches the late tips before predict-today (18:00); 22:00 IST is a
+    # last same-day retry.
+    assert _slots(p) == {(12, 0), (16, 0), (22, 0)}
     assert p["StandardOutPath"] == "PROJECT_DIR/data/logs/results.out.log"
     assert p["StandardErrorPath"] == "PROJECT_DIR/data/logs/results.err.log"
     assert p["RunAtLoad"] is False
@@ -98,7 +100,7 @@ def test_results_job_shares_no_start_minute_with_any_other_job():
 
 def test_install_script_announces_the_results_time():
     text = (SCRIPTS / "install_schedule.sh").read_text()
-    assert "Live results will be captured at 17:00 daily." in text
+    assert "Live results will be captured at 12:00, 16:00 and 22:00 daily." in text
     assert "11:00" not in text
 
 
@@ -116,7 +118,7 @@ def test_odds_job_runs_ingest_odds_once_a_day_at_1730():
     p = _load("com.predictor.odds.plist")
     assert p["Label"] == "com.predictor.odds"
     assert p["ProgramArguments"] == ["PROJECT_DIR/.venv/bin/predictor", "ingest-odds"]
-    # 17:30 IST: after capture-results (17:00), before predict-today (18:00),
+    # 17:30 IST: after capture-results (16:00), before predict-today (18:00),
     # so the 18:00 log can carry the market line. One call/day stays far
     # inside the free 500-requests/month quota.
     assert _slots(p) == {(17, 30)}

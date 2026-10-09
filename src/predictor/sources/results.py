@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import gzip
 import io
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 import pandas as pd
+import requests
 
 from predictor import db, raw_store
 from predictor.sources import nba_stats
@@ -55,6 +57,48 @@ _READ_DTYPE = {"GAME_ID": str}
 # picked up by a later run once it qualifies -- never locked out.
 FINISHED_AFTER_TIP = timedelta(hours=3, minutes=30)
 _FINISHED_WL = frozenset({"W", "L"})
+
+
+# How long the live capture keeps retrying while the NBA site cannot even be
+# CONNECTED to (DNS failure, refused connection, connect timeout). On a
+# sleeping Mac the job runs in brief "dark wakes" with no network, and the
+# shared nba_stats retry policy (4 attempts, exponential backoff) then
+# stretched across sleeps for 46 minutes before failing anyway. Measured on
+# the WALL clock (not tenacity's monotonic one, which stops while the Mac
+# sleeps): once this has passed, the next connection error ends the run --
+# the job runs several times a day, so the next run tries again.
+CONNECTION_GIVE_UP = timedelta(minutes=2)
+
+
+def fetch_season(
+    season: str,
+    *,
+    attempt: Callable[[str], pd.DataFrame] = nba_stats.fetch_season.__wrapped__,
+    clock: Callable[[], float] = time.time,
+    sleep: Callable[[float], None] = time.sleep,
+) -> pd.DataFrame:
+    """`nba_stats.fetch_season` with one narrower stop for the live path.
+
+    Same policy as the shared decorator (its wait, its attempt limit, and a
+    `tenacity.RetryError` once it gives up) -- read from it, not copied --
+    plus: a `requests.ConnectionError` (which includes name-resolution
+    failures and connect timeouts) stops retrying once CONNECTION_GIVE_UP
+    of wall-clock time has passed since the first attempt. Other errors
+    (read timeouts, HTTP 5xx, ...) keep the shared behaviour unchanged, and
+    the historical `ingest-season` path does not use this function at all.
+    `attempt`, `clock` and `sleep` are injectable for tests.
+    """
+    shared = nba_stats.fetch_season.retry
+    started = clock()
+    budget = CONNECTION_GIVE_UP.total_seconds()
+
+    def stop(retry_state) -> bool:
+        if shared.stop(retry_state):
+            return True
+        exc = retry_state.outcome.exception() if retry_state.outcome else None
+        return isinstance(exc, requests.ConnectionError) and clock() - started >= budget
+
+    return shared.copy(stop=stop, sleep=sleep)(attempt, season)
 
 
 @dataclass(frozen=True)
@@ -92,7 +136,7 @@ def archive_key(season: str, fetched_at: datetime) -> str:
 def download(
     season: str,
     fetched_at: datetime | None = None,
-    fetch: Callable[[str], pd.DataFrame] = nba_stats.fetch_season,
+    fetch: Callable[[str], pd.DataFrame] = fetch_season,
 ) -> Downloaded:
     """Fetch, archive and parse one season's results. Touches no database.
 

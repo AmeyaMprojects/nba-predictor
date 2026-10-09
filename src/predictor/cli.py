@@ -379,22 +379,44 @@ def ingest_schedule_cmd(
         raise typer.Exit(code=1)
 
 
-@app.command("capture-results")
-def capture_results_cmd(
-    season: str = typer.Option(
-        None, help="Season to capture, e.g. 2024-25. Defaults to the current season."
-    ),
-) -> None:
-    """Fetch NBA results, archive them, and record newly finished games."""
+_UNREACHABLE = "could not reach stats.nba.com (no network?)"
+
+
+class _CaptureFailed(Exception):
+    """An expected, already-explained results-capture failure: `str(exc)`
+    is the plain-English message. `network` is True when the NBA site could
+    not be reached at all (no traceback, one line -- see `_capture_results`)."""
+
+    def __init__(self, message: str, *, network: bool = False) -> None:
+        super().__init__(message)
+        self.network = network
+
+
+def _is_network_failure(exc: BaseException) -> bool:
+    """A requests connection error or timeout (a DNS NameResolutionError
+    arrives as a ConnectionError), possibly wrapped in the
+    tenacity.RetryError the nba_api fetch raises once it gives up."""
+    import requests
+    import tenacity
+
+    if isinstance(exc, tenacity.RetryError):
+        exc = exc.last_attempt.exception()
+    return isinstance(exc, (requests.ConnectionError, requests.Timeout))
+
+
+def _capture_results(target: str):
+    """Download, archive and record one season's newly FINAL results -- the
+    whole of `capture-results`, shared with `predict-today`'s catch-up so
+    both follow the same rules (`results.load`: FINAL only once both WL are
+    set and FINISHED_AFTER_TIP has passed). Raises `_CaptureFailed` for
+    every expected failure; the connection is closed before returning, so a
+    caller can open its own afterwards."""
     import duckdb
     import requests
+    import tenacity
 
     from predictor import db, raw_store
-    from predictor.config import season_label, settings
     from predictor.sources import results
-
-    settings.ensure_dirs()
-    target = season or season_label(_now())
 
     # Raw-first, and the download happens entirely before the database is
     # opened -- same discipline as ingest-schedule: a slow or retried
@@ -402,36 +424,64 @@ def capture_results_cmd(
     # job also needs.
     try:
         downloaded = results.download(target)
-    except requests.RequestException as exc:
-        typer.echo(
+    except (requests.RequestException, tenacity.RetryError) as exc:
+        if _is_network_failure(exc):
+            raise _CaptureFailed(_UNREACHABLE, network=True) from None
+        if isinstance(exc, tenacity.RetryError):
+            exc = exc.last_attempt.exception()
+        raise _CaptureFailed(
             f"Could not download results for {target} ({exc}); nothing was saved. "
             "The next scheduled run will try again."
-        )
-        raise typer.Exit(code=1) from None
+        ) from None
     except raw_store.RawStoreConflict as exc:
-        typer.echo(
+        raise _CaptureFailed(
             f"The {target} results download clashes with a copy already "
             f"archived under the same name ({exc}). Nothing was overwritten "
             "or loaded; the next scheduled run will try again."
-        )
-        raise typer.Exit(code=1) from None
+        ) from None
 
     try:
         con = db.connect_with_retry()
     except duckdb.Error as exc:
-        typer.echo(
+        raise _CaptureFailed(
             f"Could not open the database to save results ({exc}). The download "
             "is archived on disk; the next scheduled run will try again."
-        )
-        raise typer.Exit(code=1) from None
+        ) from None
     try:
         db.migrate(con)
-        result = results.load(con, downloaded)
+        return results.load(con, downloaded)
     except duckdb.Error as exc:
-        typer.echo(
+        raise _CaptureFailed(
             f"Could not save the {target} results to the database ({exc}). The "
             "download is archived on disk; the next scheduled run will try again."
-        )
+        ) from None
+    finally:
+        con.close()
+
+
+@app.command("capture-results")
+def capture_results_cmd(
+    season: str = typer.Option(
+        None, help="Season to capture, e.g. 2024-25. Defaults to the current season."
+    ),
+) -> None:
+    """Fetch NBA results, archive them, and record newly finished games."""
+    from predictor.config import season_label, settings
+
+    settings.ensure_dirs()
+    target = season or season_label(_now())
+
+    try:
+        result = _capture_results(target)
+    except _CaptureFailed as exc:
+        if exc.network:
+            typer.echo(
+                f"capture-results: {exc} -- nothing recorded; the next "
+                "scheduled run will try again.",
+                err=True,
+            )
+        else:
+            typer.echo(str(exc))
         raise typer.Exit(code=1) from None
 
     typer.echo(
@@ -484,6 +534,7 @@ def predict_today_cmd(
         grades_path,
         log_path,
         predict_today,
+        results_missing,
         slate_date,
         slate_for,
     )
@@ -497,25 +548,61 @@ def predict_today_cmd(
         typer.echo(f"Cannot run predict-today: {exc}")
         raise typer.Exit(code=1) from None
 
+    def open_read_only():
+        try:
+            # Read-only, but a read-only open still conflicts with another
+            # process's write lock (e.g. capture-results or poll-news firing on
+            # wake at the same moment) -- wait that out like every other job.
+            return db.connect_with_retry(read_only=True)
+        except duckdb.Error as exc:
+            if "conflicting lock is held" in str(exc).lower():
+                typer.echo(
+                    "Could not open the database -- another 'predictor' command "
+                    "is using it right now (still, after waiting). Try 'predictor "
+                    "predict-today' again in a few minutes."
+                )
+            else:
+                typer.echo(
+                    f"Could not open the database ({exc}). Run an ingest command "
+                    "first (for example 'predictor ingest-schedule'), then try "
+                    "'predictor predict-today' again."
+                )
+            raise typer.Exit(code=1) from None
+
+    con = open_read_only()
+
+    # Catch up first: if recent results are missing (a capture-results run
+    # missed, e.g. to a sleeping Mac), try one capture now so today's
+    # predictions are not needlessly stale_results. Best effort -- any
+    # expected failure is one line and predicting carries on; the stale flag
+    # is still computed by predict_today, after this attempt. The read-only
+    # connection is closed before the capture opens its own writable one
+    # (DuckDB will not hold both in one process), then reopened.
     try:
-        # Read-only, but a read-only open still conflicts with another
-        # process's write lock (e.g. capture-results or poll-news firing on
-        # wake at the same moment) -- wait that out like every other job.
-        con = db.connect_with_retry(read_only=True)
-    except duckdb.Error as exc:
-        if "conflicting lock is held" in str(exc).lower():
-            typer.echo(
-                "Could not open the database -- another 'predictor' command "
-                "is using it right now (still, after waiting). Try 'predictor "
-                "predict-today' again in a few minutes."
-            )
+        missing = results_missing(con, now)
+    except duckdb.Error:
+        missing = []  # the predict step below reports a broken database
+    if missing:
+        con.close()
+        try:
+            _capture_results(season_label(now))
+        except _CaptureFailed as exc:
+            if exc.network:
+                typer.echo(
+                    f"predict-today: {exc} to catch up missing results -- "
+                    "predicting with the results already recorded."
+                )
+            else:
+                typer.echo(
+                    f"predict-today: could not catch up missing results -- {exc} "
+                    "Predicting with the results already recorded."
+                )
         else:
-            typer.echo(
-                f"Could not open the database ({exc}). Run an ingest command "
-                "first (for example 'predictor ingest-schedule'), then try "
-                "'predictor predict-today' again."
-            )
-        raise typer.Exit(code=1) from None
+            # The capture stamps its rows with the real time it fetched them,
+            # just after `now` was read; move `now` past it so this run's
+            # as-of cut actually sees the results it just recorded.
+            now = _now()
+        con = open_read_only()
 
     try:
         slate = slate_for(con, now)
