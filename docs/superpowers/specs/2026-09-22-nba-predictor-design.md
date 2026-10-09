@@ -709,8 +709,9 @@ publication (unpushed commits).
   `git -C ~/projects/predictor-live pull --ff-only && (cd ~/projects/predictor-live && uv sync)`.
   The development copy must `git pull --ff-only` before pushing, because the
   live copy pushes prediction commits daily.
-- Jobs (IST): news 09:00/14:00/19:00, schedule 10:30, results 17:00,
-  predictions 18:00. Results are recorded only when both teams' W/L are set
+- Jobs (IST): news 09:00/14:00/19:00, schedule 10:30, results 12:00/16:00/22:00
+  (17:00 until 2026-10-09; a sleeping Mac lost the single run on 2026-10-08),
+  odds 17:30, predictions 18:00 (captures missing results first, best effort). Results are recorded only when both teams' W/L are set
   and capture is at least 3h30m after tip-off. The slate is the ET date of
   (now − 7h); IST has no DST.
 - Verified under launchd: capture recorded a finished preseason game with
