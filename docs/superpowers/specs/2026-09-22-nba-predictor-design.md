@@ -740,7 +740,8 @@ used only for comparison.
   repository. One fetch per day at **17:30 IST** via launchd, all bookmakers,
   `observed_at` = real fetch time. These are *early* lines (taken ~13–16 h
   before tip-off, because the laptop sleeps through US evenings) and are always
-  labelled "market line at 17:30 IST", never "closing".
+  labelled "market line at HH:MM IST" (actual fetch time; the 18:00 run fetches
+  one if the 17:30 job missed), never "closing".
 - A test fails if a key-shaped secret appears in any tracked file.
 
 ### Market probability

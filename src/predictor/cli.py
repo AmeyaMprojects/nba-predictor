@@ -530,7 +530,7 @@ def predict_today_cmd(
     """
     import duckdb
 
-    from predictor import db
+    from predictor import db, net
     from predictor.config import previous_season_label, season_label
     from predictor.model import publish
     from predictor.model import settings as model_settings
@@ -592,6 +592,10 @@ def predict_today_cmd(
     if missing:
         con.close()
         try:
+            # predict-today also fires the instant the Mac wakes: give DNS
+            # a short while first, exactly as capture-results does.
+            if not net.wait_for_network(_NBA_HOST):
+                raise _CaptureFailed(_UNREACHABLE, network=True)
             _capture_results(season_label(now))
         except _CaptureFailed as exc:
             if exc.network:
@@ -624,7 +628,7 @@ def predict_today_cmd(
     if odds_due:
         con.close()
         try:
-            _ingest_odds()
+            _ingest_odds(wait_for_network=True)
         except _OddsFailed as exc:
             typer.echo(
                 f"predict-today: market odds not fetched ({exc.reason}) -- "

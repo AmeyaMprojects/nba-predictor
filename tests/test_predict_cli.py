@@ -795,3 +795,73 @@ def test_odds_load_failure_is_one_plain_line_and_predictions_still_written(tmp_p
     assert result.output.count("predict-today: market odds not fetched (") == 1
     (line,) = read_log(log_path(repo_dir, SEASON))
     assert line["status"] == "predicted" and line["market_label"] is None
+
+
+# --- a sleeping Mac: wait briefly for the network before each catch-up -------
+
+
+def _record_waits(monkeypatch, *, up):
+    from predictor import net
+
+    hosts = []
+    monkeypatch.setattr(net, "wait_for_network", lambda host, *a, **k: hosts.append(host) or up)
+    return hosts
+
+
+def test_no_network_skips_the_results_catch_up_with_one_line(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, _ = _wire(tmp_path, monkeypatch, now)
+    _missing_result_and_todays_game(con, now)
+    hosts = _record_waits(monkeypatch, up=False)
+    calls = []
+    monkeypatch.setattr(results, "download", lambda season: calls.append("results"))
+    monkeypatch.setattr(odds, "fetch_current", lambda *a, **k: calls.append("odds"))
+
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == []
+    assert hosts == ["stats.nba.com", "api.the-odds-api.com"]
+    assert result.output.count(CATCH_UP_UNREACHABLE) == 1
+    odds_lines = [ln for ln in result.output.splitlines() if "market odds not fetched" in ln]
+    assert odds_lines == [
+        "predict-today: market odds not fetched (could not reach The Odds API "
+        "(no network?)) -- predicting without a market line."
+    ]
+    todays = [ln for ln in read_log(log_path(repo_dir, SEASON)) if ln["game_id"] == "0022600779"]
+    assert todays and todays[0]["status"] == "predicted"
+    assert todays[0]["market_label"] is None
+
+
+def test_network_wait_is_used_before_a_successful_odds_catch_up(tmp_path, monkeypatch):
+    import json
+
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, _ = _wire(tmp_path, monkeypatch, now)
+    _todays_game(con, now)
+    con.close()
+    hosts = _record_waits(monkeypatch, up=True)
+    monkeypatch.setattr(odds, "_utcnow", lambda: now - timedelta(seconds=1))
+    monkeypatch.setattr(
+        odds, "fetch_current",
+        lambda api_key, session=None: odds.OddsResponse(json.dumps(_odds_payload(now)).encode(), None),
+    )
+
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert hosts == ["api.the-odds-api.com"]
+    (line,) = read_log(log_path(repo_dir, SEASON))
+    assert line["market_books"] == 1
+
+
+def test_no_network_wait_when_no_catch_up_is_due(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, _ = _wire(tmp_path, monkeypatch, now)
+    con.close()
+    hosts = _record_waits(monkeypatch, up=False)
+
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert hosts == []
