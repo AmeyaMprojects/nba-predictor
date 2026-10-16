@@ -36,6 +36,7 @@ from predictor.model.stage1 import Stage1Predictor
 from predictor.model.venues import COMPETITIVE_PREFIXES
 
 EASTERN = ZoneInfo("America/New_York")
+IST = ZoneInfo("Asia/Kolkata")
 START_BUFFER = timedelta(minutes=30)
 
 # `slate_date`: a run's slate is the ET calendar date of (now - this). A
@@ -79,8 +80,13 @@ _MISSED_REASON = (
 _TBD_REASON = "tip-off time not announced when the prediction run happened"
 
 # The live odds job (com.predictor.odds) runs at 17:30 IST, half an hour
-# before predict-today; this label says which line the market fields hold.
-MARKET_LABEL = "market line at 17:30 IST"
+# before predict-today -- but when it missed (a sleeping Mac), predict-today
+# fetches the line itself, later. So the label is derived from when the
+# line was actually observed (``market_label``), never assumed.
+
+# `market_odds_due`: a live odds snapshot observed within this long before
+# `now` counts as today's market -- no fresh fetch is needed.
+MARKET_FRESH = timedelta(hours=6)
 
 _NO_MARKET = {
     "market_p_home": None,
@@ -361,8 +367,37 @@ def _market_fields(con, game_id: str, now: datetime, sigma: float) -> dict:
         "market_spread": _r6(view.spread) if view.spread is not None else None,
         "market_books": view.books,
         "market_observed_at": view.observed_at.isoformat(),
-        "market_label": MARKET_LABEL,
+        "market_label": market_label(view.observed_at),
     }
+
+
+def market_label(observed_at: datetime) -> str:
+    """'market line at HH:MM IST' -- when the line was actually observed,
+    as the owner's clock in India showed it. ``observed_at`` is the
+    timezone-aware instant read back from the odds table."""
+    return f"market line at {observed_at.astimezone(IST):%H:%M} IST"
+
+
+def market_odds_due(con, now: datetime) -> bool:
+    """Whether predict-today should fetch the live market line itself: the
+    slate has at least one game it will actually predict (tip-off more
+    than ``START_BUFFER`` away) and no live (``theoddsapi``) snapshot was
+    observed within ``MARKET_FRESH`` before ``now``. An empty slate --
+    off-season, or a day without games -- is never due, so no Odds API
+    request (500 a month) is spent on it."""
+    db.require_utc(now, "now")
+    if not any(g.tip_off_utc - START_BUFFER > now for g in slate_for(con, now)):
+        return False
+    table = db.POINT_IN_TIME_TABLES["odds_snapshots"]
+    (fresh,) = con.execute(
+        f"""
+        SELECT count(*) FROM {table}
+        WHERE source = '{market.LIVE_SOURCE}'
+          AND observed_at > ? AND observed_at <= ?
+        """,
+        [now - MARKET_FRESH, now],
+    ).fetchone()
+    return fresh == 0
 
 
 def _append_line(path: Path, line: dict) -> None:

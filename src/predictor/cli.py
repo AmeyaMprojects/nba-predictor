@@ -379,7 +379,8 @@ def ingest_schedule_cmd(
         raise typer.Exit(code=1)
 
 
-_UNREACHABLE = "could not reach stats.nba.com (no network?)"
+_NBA_HOST = "stats.nba.com"
+_UNREACHABLE = f"could not reach {_NBA_HOST} (no network?)"
 
 
 class _CaptureFailed(Exception):
@@ -466,12 +467,17 @@ def capture_results_cmd(
     ),
 ) -> None:
     """Fetch NBA results, archive them, and record newly finished games."""
+    from predictor import net
     from predictor.config import season_label, settings
 
     settings.ensure_dirs()
     target = season or season_label(_now())
 
     try:
+        # A run that fires the instant the Mac wakes can beat Wi-Fi back:
+        # give DNS a short while before calling it a network failure.
+        if not net.wait_for_network(_NBA_HOST):
+            raise _CaptureFailed(_UNREACHABLE, network=True)
         result = _capture_results(target)
     except _CaptureFailed as exc:
         if exc.network:
@@ -533,6 +539,7 @@ def predict_today_cmd(
         grade,
         grades_path,
         log_path,
+        market_odds_due,
         predict_today,
         results_missing,
         slate_date,
@@ -601,6 +608,32 @@ def predict_today_cmd(
             # The capture stamps its rows with the real time it fetched them,
             # just after `now` was read; move `now` past it so this run's
             # as-of cut actually sees the results it just recorded.
+            now = _now()
+        con = open_read_only()
+
+    # Then the market line: if today's live odds are missing (the 17:30
+    # ingest-odds run missed, e.g. to a sleeping Mac) and there is a game
+    # still to predict, fetch one snapshot now. Best effort, same rules as
+    # the results catch-up above: any expected failure is one line and the
+    # predictions are written without a market line. Never on an empty
+    # slate -- the Odds API allows 500 requests a month.
+    try:
+        odds_due = market_odds_due(con, now)
+    except duckdb.Error:
+        odds_due = False  # the predict step below reports a broken database
+    if odds_due:
+        con.close()
+        try:
+            _ingest_odds()
+        except _OddsFailed as exc:
+            typer.echo(
+                f"predict-today: market odds not fetched ({exc.reason}) -- "
+                "predicting without a market line."
+            )
+        else:
+            # As above: the snapshot is stamped with the real fetch time,
+            # just after `now` was read -- move `now` past it so this run
+            # sees the line it just stored.
             now = _now()
         con = open_read_only()
 
@@ -681,6 +714,95 @@ def predict_today_cmd(
         typer.echo(f"WARNING: {publish_result.message}")
 
 
+_ODDS_HOST = "api.the-odds-api.com"
+_ODDS_UNREACHABLE = "Odds not fetched: could not reach The Odds API (no network?). Nothing was stored."
+
+
+class _OddsFailed(Exception):
+    """An expected, already-explained odds-ingest failure: `str(exc)` is the
+    full plain-English message `ingest-odds` prints; `reason` is the short
+    form `predict-today` puts in its one line; `remaining` is the API's
+    quota header, when it sent one. Never contains the key."""
+
+    def __init__(self, message: str, *, reason: str, remaining: str | None = None) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.remaining = remaining
+
+
+def _ingest_odds(*, wait_for_network: bool = False):
+    """Fetch, archive and store one live odds snapshot -- the whole of
+    `ingest-odds`, shared with `predict-today`'s catch-up. Spends one Odds
+    API request. Raises `_OddsFailed` for every expected failure; the
+    connection is closed before returning, so a caller can open its own
+    afterwards.
+
+    Download (and archive) first, then open the database: the network call
+    never holds DuckDB's write lock. With `wait_for_network`, a short wait
+    for DNS comes first (after the key check, so a missing key is reported
+    at once)."""
+    import duckdb
+
+    from predictor import config, db, net, raw_store
+    from predictor.config import settings
+    from predictor.sources import odds
+
+    settings.ensure_dirs()
+    api_key = config.odds_api_key()
+    if not api_key:
+        raise _OddsFailed(
+            odds.missing_key_message(),
+            reason=f"no Odds API key in {config.odds_api_key_path()}",
+        )
+    if wait_for_network and not net.wait_for_network(_ODDS_HOST):
+        raise _OddsFailed(_ODDS_UNREACHABLE, reason="could not reach The Odds API (no network?)")
+
+    try:
+        downloaded = odds.download(api_key)
+    except odds.OddsQuotaExceeded as exc:
+        raise _OddsFailed(
+            f"The Odds API refused the request (HTTP {exc.status_code}): the "
+            "monthly free quota is used up, or the key in "
+            f"{config.odds_api_key_path()} is wrong. Nothing was stored; "
+            "predictions carry on without market lines.",
+            reason=(
+                f"The Odds API refused the request, HTTP {exc.status_code}: monthly "
+                "quota used up, or the key is wrong"
+            ),
+            remaining=exc.requests_remaining,
+        ) from None
+    except odds.OddsFetchError as exc:
+        raise _OddsFailed(f"Odds not fetched: {exc}. Nothing was stored.", reason=str(exc)) from None
+    except (OSError, raw_store.RawStoreConflict) as exc:
+        # Fetched, but archiving the response to the raw store failed (disk
+        # full, permissions, ...). Nothing reached the database either.
+        raise _OddsFailed(
+            f"Odds were fetched but could not be archived ({type(exc).__name__}: "
+            f"{exc}). Nothing was stored; predictions carry on without market lines.",
+            reason=f"could not archive the response: {type(exc).__name__}",
+        ) from None
+
+    con = None
+    try:
+        con = db.connect_with_retry()
+        db.migrate(con)
+        return odds.ingest_current(con, fetch=downloaded)
+    except (duckdb.Error, KeyError, ValueError) as exc:
+        # The snapshot is already safely archived; only loading it failed.
+        raise _OddsFailed(
+            f"Odds were fetched and archived as {downloaded.archive_key} (raw "
+            f"store '{odds.RAW_SOURCE}'), but loading them into the database "
+            f"failed ({type(exc).__name__}: {exc}). Nothing was stored in the "
+            "database; the archived file can be loaded later without spending "
+            "another API request.",
+            reason=f"fetched and archived, but loading them into the database failed: "
+            f"{type(exc).__name__}",
+        ) from None
+    finally:
+        if con is not None:
+            con.close()
+
+
 @app.command("ingest-odds")
 def ingest_odds_cmd() -> None:
     """Fetch and store one odds snapshot. Budgeted to one call per run.
@@ -690,62 +812,20 @@ def ingest_odds_cmd() -> None:
     ~/.config/predictor/odds_api_key (or env ODDS_API_KEY) and is never
     printed.
     """
-    from predictor import config, db
-    from predictor.config import settings
-    from predictor.sources import odds
-
-    settings.ensure_dirs()
-    api_key = config.odds_api_key()
-    if not api_key:
-        typer.echo(odds.missing_key_message(), err=True)
-        raise typer.Exit(code=1)
 
     def remaining_line(remaining: str | None) -> None:
         if remaining is not None:
             typer.echo(f"Odds API requests remaining this month: {remaining}")
 
     try:
-        downloaded = odds.download(api_key)
-    except odds.OddsQuotaExceeded as exc:
-        typer.echo(
-            f"The Odds API refused the request (HTTP {exc.status_code}): the "
-            "monthly free quota is used up, or the key in "
-            f"{config.odds_api_key_path()} is wrong. Nothing was stored; "
-            "predictions carry on without market lines.",
-            err=True,
-        )
-        remaining_line(exc.requests_remaining)
-        raise typer.Exit(code=1) from None
-    except odds.OddsFetchError as exc:
-        typer.echo(f"Odds not fetched: {exc}. Nothing was stored.", err=True)
-        raise typer.Exit(code=1) from None
-    except OSError as exc:
-        # Fetched, but archiving the response to the raw store failed (disk
-        # full, permissions, ...). Nothing reached the database either.
-        typer.echo(
-            f"Odds were fetched but could not be archived ({type(exc).__name__}: "
-            f"{exc}). Nothing was stored; predictions carry on without market lines.",
-            err=True,
-        )
+        # A run that fires the instant the Mac wakes can beat Wi-Fi back:
+        # give DNS a short while before calling it a network failure.
+        summary = _ingest_odds(wait_for_network=True)
+    except _OddsFailed as exc:
+        typer.echo(str(exc), err=True)
+        remaining_line(exc.remaining)
         raise typer.Exit(code=1) from None
 
-    import duckdb
-
-    try:
-        con = db.connect_with_retry()
-        db.migrate(con)
-        summary = odds.ingest_current(con, fetch=downloaded)
-    except (duckdb.Error, KeyError, ValueError) as exc:
-        # The snapshot is already safely archived; only loading it failed.
-        typer.echo(
-            f"Odds were fetched and archived as {downloaded.archive_key} (raw "
-            f"store '{odds.RAW_SOURCE}'), but loading them into the database "
-            f"failed ({type(exc).__name__}: {exc}). Nothing was stored in the "
-            "database; the archived file can be loaded later without spending "
-            "another API request.",
-            err=True,
-        )
-        raise typer.Exit(code=1) from None
     typer.echo(
         f"stored {summary.rows} odds rows for {summary.events} game(s); "
         f"{summary.linked} linked to the schedule"

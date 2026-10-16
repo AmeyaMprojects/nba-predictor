@@ -20,6 +20,7 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
+import pytest
 import requests
 from typer.testing import CliRunner
 
@@ -30,7 +31,7 @@ from predictor.model.adjustments import Coefficients
 from predictor.model.live import grades_path, log_path, read_log
 from predictor.model.ratings import RatingParams
 from predictor.model.settings import ModelSettings
-from predictor.sources import results
+from predictor.sources import odds, results
 from schedule_rows import insert_schedule_row
 
 runner = CliRunner()
@@ -110,6 +111,10 @@ def _wire(tmp_path, monkeypatch, now, *, with_remote=True):
     # network, so by default that download finds none (tests that want a
     # successful catch-up replace this).
     monkeypatch.setattr(results, "download", _no_network)
+    # ...and fetches the market line when today's is missing: never the real
+    # key file, never the real Odds API (tests that want odds replace this).
+    monkeypatch.setattr(config, "odds_api_key", lambda: "test-key")
+    monkeypatch.setattr(odds, "fetch_current", _no_odds_network)
 
     return con, repo_dir, remote_dir
 
@@ -119,6 +124,10 @@ _REAL_DOWNLOAD = results.download
 
 def _no_network(season):
     raise requests.ConnectionError("Failed to resolve 'stats.nba.com' (test: no network)")
+
+
+def _no_odds_network(api_key, session=None):
+    raise odds.OddsFetchError("could not reach The Odds API (ConnectionError)")
 
 
 def test_predict_today_happy_path_predicts_commits_and_pushes(tmp_path, monkeypatch):
@@ -608,3 +617,181 @@ def test_no_catch_up_when_no_results_are_missing(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert calls == []
+
+
+# --- the market line, fetched if the 17:30 odds job missed it -----------------
+
+MARKET_SKIPPED_TAIL = "-- predicting without a market line."
+
+
+def _todays_game(con, now):
+    insert_schedule_row(
+        con, "0022600779", date(2026, 11, 10), "PHI", "NYK",
+        now + timedelta(hours=2), season=SEASON,
+    )
+
+
+def _odds_payload(now):
+    book = {
+        "key": "draftkings",
+        "markets": [
+            {"key": "h2h", "outcomes": [
+                {"name": "Philadelphia 76ers", "price": -150},
+                {"name": "New York Knicks", "price": 130},
+            ]},
+            {"key": "spreads", "outcomes": [
+                {"name": "Philadelphia 76ers", "price": -110, "point": -3.5},
+                {"name": "New York Knicks", "price": -110, "point": 3.5},
+            ]},
+        ],
+    }
+    tip = (now + timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return [{
+        "id": "ev1", "commence_time": tip, "home_team": "Philadelphia 76ers",
+        "away_team": "New York Knicks", "bookmakers": [book],
+    }]
+
+
+def test_missing_odds_are_fetched_before_predicting_with_an_honest_label(tmp_path, monkeypatch):
+    import json
+
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, _ = _wire(tmp_path, monkeypatch, now)
+    _todays_game(con, now)
+    con.close()
+    clock = [now]
+    monkeypatch.setattr(cli, "_now", lambda: clock[0])
+    fetched_at = now + timedelta(seconds=30)
+    monkeypatch.setattr(odds, "_utcnow", lambda: fetched_at)
+    keys = []
+
+    def fetch(api_key, session=None):
+        keys.append(api_key)
+        clock[0] = now + timedelta(minutes=1)  # wall time moves on during the fetch
+        return odds.OddsResponse(json.dumps(_odds_payload(now)).encode(), "123")
+
+    monkeypatch.setattr(odds, "fetch_current", fetch)
+
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert keys == ["test-key"]
+    assert "market odds not fetched" not in result.output
+    (line,) = read_log(log_path(repo_dir, SEASON))
+    assert line["status"] == "predicted"
+    assert line["market_books"] == 1
+    assert line["market_spread"] == -3.5
+    assert line["market_observed_at"] == fetched_at.isoformat()
+    # 20:00:30 UTC is 01:30 IST the next day.
+    assert line["market_label"] == "market line at 01:30 IST"
+
+
+def _insert_live_odds(observed_at):
+    table = db.POINT_IN_TIME_TABLES["odds_snapshots"]
+    con = db.connect(config.settings.db_path)
+    try:
+        con.execute(
+            f"INSERT INTO {table} (game_key, book, home_team, away_team, home_price,"
+            " away_price, spread, total, observed_at, game_id, source, reconstructed)"
+            " VALUES ('ev1','fanduel','PHI','NYK',-200,170,-5.5,220.0,?,'0022600779',"
+            "'theoddsapi',FALSE)",
+            [observed_at],
+        )
+    finally:
+        con.close()
+
+
+def test_fresh_odds_are_not_fetched_again(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, _ = _wire(tmp_path, monkeypatch, now)
+    _todays_game(con, now)
+    con.close()
+    _insert_live_odds(now - timedelta(hours=2, minutes=30))
+    calls = []
+    monkeypatch.setattr(odds, "fetch_current", lambda *a, **k: calls.append("fetch"))
+
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == []
+    (line,) = read_log(log_path(repo_dir, SEASON))
+    assert line["market_label"] == "market line at 23:00 IST"
+
+
+def test_empty_slate_never_spends_an_odds_request(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, _ = _wire(tmp_path, monkeypatch, now)
+    con.close()
+    calls = []
+    monkeypatch.setattr(config, "odds_api_key", lambda: calls.append("key") or "test-key")
+    monkeypatch.setattr(odds, "fetch_current", lambda *a, **k: calls.append("fetch"))
+
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == []
+    assert "market odds" not in result.output
+
+
+def _quota(api_key, session=None):
+    raise odds.OddsQuotaExceeded(429, "quota", requests_remaining="0")
+
+
+@pytest.mark.parametrize(
+    ("setup", "reason"),
+    [
+        (lambda mp: None, "could not reach The Odds API"),
+        (lambda mp: mp.setattr(config, "odds_api_key", lambda: None), "no Odds API key"),
+        (lambda mp: mp.setattr(odds, "fetch_current", _quota), "quota"),
+    ],
+    ids=["network", "missing-key", "quota"],
+)
+def test_odds_fetch_failure_is_one_plain_line_and_predictions_still_written(
+    tmp_path, monkeypatch, setup, reason
+):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, _ = _wire(tmp_path, monkeypatch, now)
+    _todays_game(con, now)
+    con.close()
+    setup(monkeypatch)
+
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert "Traceback" not in result.output
+    skipped = [ln for ln in result.output.splitlines() if "market" in ln]
+    assert len(skipped) == 1, result.output
+    assert skipped[0].startswith("predict-today: market odds not fetched (")
+    assert skipped[0].endswith(MARKET_SKIPPED_TAIL)
+    assert reason in skipped[0]
+    assert "test-key" not in result.output
+    (line,) = read_log(log_path(repo_dir, SEASON))
+    assert line["status"] == "predicted"
+    assert line["market_p_home"] is None and line["market_label"] is None
+    assert line["market_observed_at"] is None
+
+
+def test_odds_load_failure_is_one_plain_line_and_predictions_still_written(tmp_path, monkeypatch):
+    import json
+
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, _ = _wire(tmp_path, monkeypatch, now)
+    _todays_game(con, now)
+    con.close()
+    monkeypatch.setattr(
+        odds, "fetch_current",
+        lambda api_key, session=None: odds.OddsResponse(json.dumps(_odds_payload(now)).encode(), None),
+    )
+
+    def broken_load(con, downloaded):
+        raise ValueError("bad json")
+
+    monkeypatch.setattr(odds, "load", broken_load)
+
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert "Traceback" not in result.output
+    assert result.output.count("predict-today: market odds not fetched (") == 1
+    (line,) = read_log(log_path(repo_dir, SEASON))
+    assert line["status"] == "predicted" and line["market_label"] is None

@@ -865,7 +865,8 @@ def test_predicted_line_records_the_market_line_visible_at_now(tmp_path):
     assert line["market_spread"] == -5.0
     assert line["market_books"] == 2
     assert line["market_observed_at"] == (now - timedelta(minutes=30)).isoformat()
-    assert line["market_label"] == "market line at 17:30 IST"
+    # 11:30 UTC is 17:00 IST: the label says when the line was really seen.
+    assert line["market_label"] == "market line at 17:00 IST"
 
 
 def test_predicted_line_without_odds_has_null_market_fields(tmp_path):
@@ -996,3 +997,74 @@ def test_a_line_older_than_24h_is_not_todays_market(tmp_path):
     _insert_odds(con, "0022601010", "fanduel", now - timedelta(hours=25))
     (line,) = predict_today(con, S, tmp_path / "repo", now).lines_written
     assert line["market_p_home"] is None and line["market_label"] is None
+
+
+# --- an honest market label, and when predict-today should fetch odds -------
+
+
+@pytest.mark.parametrize(
+    ("observed", "label"),
+    [
+        (datetime(2026, 11, 10, 12, 0, tzinfo=UTC), "market line at 17:30 IST"),
+        (datetime(2026, 11, 10, 12, 31, 59, tzinfo=UTC), "market line at 18:01 IST"),
+        # IST keeps no daylight saving: a summer UTC time maps the same way.
+        (datetime(2026, 6, 1, 19, 0, tzinfo=UTC), "market line at 00:30 IST"),
+    ],
+)
+def test_market_label_gives_the_observed_time_in_ist(observed, label):
+    from predictor.model.live import market_label
+
+    assert market_label(observed) == label
+
+
+def _slate_game(con, now, *, tip):
+    insert_schedule_row(con, "0022601010", date(2026, 11, 10), "PHI", "NYK", tip, season=SEASON)
+
+
+def test_market_odds_due_when_a_game_is_still_to_predict_and_no_fresh_odds(tmp_path):
+    from predictor.model.live import market_odds_due
+
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    con = fixture_con(tmp_path)
+    _slate_game(con, now, tip=now + timedelta(hours=2))
+    assert market_odds_due(con, now) is True
+
+
+def test_market_odds_not_due_when_live_odds_are_under_six_hours_old(tmp_path):
+    from predictor.model.live import market_odds_due
+
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    con = fixture_con(tmp_path)
+    _slate_game(con, now, tip=now + timedelta(hours=2))
+    _insert_odds(con, "0022601010", "fanduel", now - timedelta(hours=5, minutes=59))
+    assert market_odds_due(con, now) is False
+
+
+def test_market_odds_due_when_only_old_future_or_historical_odds_exist(tmp_path):
+    from predictor.model.live import market_odds_due
+
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    con = fixture_con(tmp_path)
+    _slate_game(con, now, tip=now + timedelta(hours=2))
+    _insert_odds(con, "0022601010", "fanduel", now - timedelta(hours=6, minutes=1))
+    _insert_odds(con, "0022601010", "betmgm", now + timedelta(minutes=5))
+    _insert_odds(con, "0022601010", "draftkings", now - timedelta(hours=1), source="kaggle_sbr")
+    assert market_odds_due(con, now) is True
+
+
+def test_market_odds_not_due_for_an_empty_slate(tmp_path):
+    from predictor.model.live import market_odds_due
+
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    con = fixture_con(tmp_path)
+    assert market_odds_due(con, now) is False
+
+
+def test_market_odds_not_due_when_every_game_has_started(tmp_path):
+    from predictor.model.live import market_odds_due
+
+    now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
+    con = fixture_con(tmp_path)
+    # Inside START_BUFFER: logged as not_predicted, so no market line needed.
+    _slate_game(con, now, tip=now + timedelta(minutes=20))
+    assert market_odds_due(con, now) is False

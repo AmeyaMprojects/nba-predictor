@@ -38,3 +38,16 @@ os.environ["PREDICTOR_DATA_DIR"] = _TEST_DATA_DIR
 # removes the directory THIS process itself created under the system temp
 # root -- never anything under the real, irreplaceable `data/` directory.
 atexit.register(shutil.rmtree, _TEST_DATA_DIR, ignore_errors=True)
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _network_is_up(monkeypatch):
+    """`ingest-odds` and `capture-results` first wait for DNS to resolve
+    (`predictor.net.wait_for_network`). Tests never do a real lookup:
+    the network counts as up unless a test says otherwise."""
+    from predictor import net
+
+    monkeypatch.setattr(net, "wait_for_network", lambda *a, **k: True)

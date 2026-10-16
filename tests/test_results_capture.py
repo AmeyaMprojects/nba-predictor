@@ -735,3 +735,39 @@ def test_fetch_season_returns_the_frame_on_a_later_success():
 
     assert got is df
     assert calls == [SEASON, SEASON]
+
+
+def test_cli_waits_for_stats_nba_com_before_downloading(tmp_path, monkeypatch):
+    from predictor import net
+
+    _point_settings_at_tmp(tmp_path, monkeypatch)
+    order = []
+    monkeypatch.setattr(
+        net, "wait_for_network", lambda host, *a, **k: order.append(("wait", host)) or True
+    )
+
+    def fail(season):
+        order.append(("download", season))
+        raise _name_resolution_error()
+
+    monkeypatch.setattr(results, "download", fail)
+
+    runner.invoke(cli.app, ["capture-results", "--season", SEASON])
+
+    assert order == [("wait", "stats.nba.com"), ("download", SEASON)]
+
+
+def test_cli_no_network_after_waiting_is_one_plain_line(tmp_path, monkeypatch):
+    from predictor import net
+
+    _point_settings_at_tmp(tmp_path, monkeypatch)
+    monkeypatch.setattr(net, "wait_for_network", lambda *a, **k: False)
+    calls = []
+    monkeypatch.setattr(results, "download", lambda season: calls.append("download"))
+    monkeypatch.setattr(db, "connect_with_retry", lambda *a, **k: calls.append("connect"))
+
+    out = runner.invoke(cli.app, ["capture-results", "--season", SEASON])
+
+    assert out.exit_code == 1
+    assert out.output.strip() == UNREACHABLE_LINE
+    assert calls == []

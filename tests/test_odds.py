@@ -496,3 +496,45 @@ def test_cli_archive_write_failure_is_a_plain_message_and_exit_1(cli_env, monkey
     assert "Nothing was stored" in result.output
     assert "Traceback" not in result.output
     assert "test-key" not in result.output
+
+
+# --- a sleeping Mac: wait briefly for the network first -----------------------
+
+
+def test_cli_waits_for_the_odds_api_host_before_fetching(cli_env, monkeypatch):
+    from predictor import net
+
+    _write_key(cli_env)
+    order = []
+    monkeypatch.setattr(
+        net, "wait_for_network", lambda host, *a, **k: order.append(("wait", host)) or True
+    )
+
+    def fetch(api_key, session=None):
+        order.append(("fetch", None))
+        return odds.OddsResponse(json.dumps(PAYLOAD).encode(), None)
+
+    monkeypatch.setattr(odds, "fetch_current", fetch)
+
+    result = runner.invoke(cli.app, ["ingest-odds"])
+
+    assert result.exit_code == 0, result.output
+    assert order == [("wait", "api.the-odds-api.com"), ("fetch", None)]
+
+
+def test_cli_no_network_after_waiting_is_one_plain_line(cli_env, monkeypatch):
+    from predictor import net
+
+    _write_key(cli_env)
+    monkeypatch.setattr(net, "wait_for_network", lambda *a, **k: False)
+    calls = []
+    monkeypatch.setattr(odds, "fetch_current", lambda *a, **k: calls.append("fetch"))
+    monkeypatch.setattr(db, "connect_with_retry", lambda *a, **k: calls.append("connect"))
+
+    result = runner.invoke(cli.app, ["ingest-odds"])
+
+    assert result.exit_code == 1
+    assert result.output.strip() == (
+        "Odds not fetched: could not reach The Odds API (no network?). Nothing was stored."
+    )
+    assert calls == []
