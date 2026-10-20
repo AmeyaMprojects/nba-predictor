@@ -109,7 +109,7 @@ export function startSeal() {
       if (sec === lastSecond) return;
       lastSecond = sec;
       if (introDone && live) applyRail(frac());
-      if (nowTime) set(nowTime, et(t));
+      if (nowTime) set(nowTime, ist(t));
       for (const m of marks) m.el.classList.toggle('is-past', m.ms <= t);
       for (const s of statuses) {
         set(s.el,
@@ -123,11 +123,11 @@ export function startSeal() {
         if (next) {
           set(clockLabel, next === tips[0] ? 'First tip in' : 'Next tip in');
           set(clockN, clockText(next - t));
-          set(clockSub, `${et(next)}, ${ist(next)}`);
+          set(clockSub, `${ist(next)}, ${et(next)}`);
         } else {
           set(clockLabel, t < last + FINAL_AFTER ? 'Every game has tipped off' : 'This slate is over');
           set(clockN, t < last + FINAL_AFTER ? 'In play' : 'Final');
-          set(clockSub, t < last + FINAL_AFTER ? `last final due about ${et(last + FINAL_AFTER)}` : 'grades arrive with the next update');
+          set(clockSub, t < last + FINAL_AFTER ? `last final due about ${ist(last + FINAL_AFTER)}` : 'grades arrive with the next update');
         }
       }
     };

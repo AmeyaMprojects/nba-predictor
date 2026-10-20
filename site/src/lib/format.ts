@@ -2,7 +2,7 @@
 // - spreads only ever as "TEAM by X.X"; never a raw signed number
 // - model spread: home margin (+ = home favoured)
 // - market_spread: betting home line (− = home favoured), so the market's home margin is −market_spread
-// - times in US Eastern first, India time second
+// - times in India time (IST) first, US Eastern second
 import type { Game, Tally, Terms } from './data';
 
 const ET = 'America/New_York';
@@ -23,8 +23,8 @@ export function partsET(iso: string) {
   const [hm, ap] = etTime.format(new Date(iso)).split(' ');
   return { hm, ampm: ap.toLowerCase() };
 }
-/** "market line at 8:22 am ET" from the observation time, ET-first. */
-export const marketWhen = (iso: string | null) => (iso ? `market line at ${timeET(iso)}` : 'market line');
+/** "market line at 17:52 IST" from the observation time, IST-first. */
+export const marketWhen = (iso: string | null) => (iso ? `market line at ${timeIST(iso)}` : 'market line');
 
 /** game_date is the league's (Eastern) calendar date: format it without shifting time zones. */
 export function gameDate(date: string, style: 'long' | 'short' | 'weekday' = 'long') {
@@ -100,3 +100,8 @@ export const TERM_LABELS: [keyof Terms, string][] = [
 ];
 
 export const nf = (n: number) => n.toLocaleString('en-US');
+
+/** The site's main clock is India time; ET is the secondary label. */
+export const timeMain = timeIST;
+const istDayGB = new Intl.DateTimeFormat('en-GB', { timeZone: IST, weekday: 'short', day: 'numeric', month: 'short' });
+export const dayMain = (iso: string) => istDayGB.format(new Date(iso)).replace(',', '');

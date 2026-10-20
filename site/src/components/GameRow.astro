@@ -5,7 +5,7 @@
 // settles at the winner's end.
 import type { Game } from '../lib/data';
 import { teamName } from '../lib/teams';
-import { disagree, marketPick, marketSpread, modelPick, modelSpread, timeET, timeIST, winner } from '../lib/format';
+import { disagree, marketPick, marketSpread, modelPick, modelSpread, timeET, timeIST, dayMain, winner } from '../lib/format';
 
 interface Props { game: Game; size?: 'slate' | 'day'; headingLevel?: 'h3' | 'h2' }
 const { game: g, size = 'slate', headingLevel = 'h3' } = Astro.props;
@@ -71,7 +71,7 @@ const score = gr
     )}
     <div class="read read--tip">
       <dt>Tip</dt>
-      <dd><time datetime={g.tip_off_utc}>{timeET(g.tip_off_utc)}</time> <span>{timeIST(g.tip_off_utc)}</span></dd>
+      <dd><time datetime={g.tip_off_utc}>{timeIST(g.tip_off_utc)}</time> <span>{dayMain(g.tip_off_utc)} · {timeET(g.tip_off_utc)}</span></dd>
     </div>
     {gr ? (
       <div class="read read--final">

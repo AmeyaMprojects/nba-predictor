@@ -3,7 +3,7 @@
 // crawls along it in real time (motion/seal.ts). Positions are fractions of [start, end].
 // A slate already over when the site is built never renders the now-marker at all.
 import type { Day } from '../lib/data';
-import { timeET } from '../lib/format';
+import { timeMain } from '../lib/format';
 
 interface Props { day: Day }
 const { day } = Astro.props;
@@ -20,19 +20,19 @@ const over = Date.now() >= end;
 
 type Mark = { x: number; kind: 'seal' | 'tip' | 'final'; title: string; sub: string; iso: string; ms: number; row?: number };
 const marks: Mark[] = [];
-if (sealMs != null) marks.push({ x: at(sealMs), kind: 'seal', title: 'Sealed', sub: timeET(day.seal!.time), iso: day.seal!.time, ms: sealMs });
+if (sealMs != null) marks.push({ x: at(sealMs), kind: 'seal', title: 'Sealed', sub: timeMain(day.seal!.time), iso: day.seal!.time, ms: sealMs });
 const groups = new Map<string, string[]>();
 for (const g of day.games) {
   if (!groups.has(g.tip_off_utc)) groups.set(g.tip_off_utc, []);
   groups.get(g.tip_off_utc)!.push(`${g.away_team} · ${g.home_team}`);
 }
 const tipKeys = [...groups.keys()].sort();
-const tipList = tipKeys.map((iso) => ({ iso, time: timeET(iso), games: groups.get(iso)! }));
+const tipList = tipKeys.map((iso) => ({ iso, time: timeMain(iso), games: groups.get(iso)! }));
 for (const iso of tipKeys) {
   const games = groups.get(iso)!;
-  marks.push({ x: at(Date.parse(iso)), kind: 'tip', title: games.length > 1 ? `${games.length} games` : games[0], sub: timeET(iso), iso, ms: Date.parse(iso) });
+  marks.push({ x: at(Date.parse(iso)), kind: 'tip', title: games.length > 1 ? `${games.length} games` : games[0], sub: timeMain(iso), iso, ms: Date.parse(iso) });
 }
-marks.push({ x: 1, kind: 'final', title: 'Finals', sub: `about ${timeET(new Date(end).toISOString())}`, iso: new Date(end).toISOString(), ms: end });
+marks.push({ x: 1, kind: 'final', title: 'Finals', sub: `about ${timeMain(new Date(end).toISOString())}`, iso: new Date(end).toISOString(), ms: end });
 
 // Stagger labels into rows so none collide. Estimate each label's footprint on a narrow
 // desktop rail (W px); the label is shifted left by x*100% of its own width (see CSS).

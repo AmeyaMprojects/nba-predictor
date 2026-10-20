@@ -10,7 +10,7 @@ import Path from '../components/Path.astro';
 import { getData, latestDay } from '../lib/data';
 import { site } from '../data/site';
 import { dayHref, href } from '../lib/url';
-import { gameDate, timeET, timeIST } from '../lib/format';
+import { dayMain, gameDate, timeET, timeIST, timeMain } from '../lib/format';
 
 const { days, record } = getData();
 const day = latestDay();
@@ -42,14 +42,14 @@ const gradeFile = file.replace('.jsonl', '-grades.jsonl');
             )}
             <p class="clock" data-clock data-last-tip={Date.parse(day.lastTip)}>
               <span class="clock__k" data-clock-label>First tip</span>
-              <span class="clock__n" data-clock-n>{timeET(day.firstTip).replace(' ET', '')}</span>
-              <span class="clock__k"><span data-clock-sub>{timeET(day.firstTip)}, {timeIST(day.firstTip)}</span></span>
+              <span class="clock__n" data-clock-n>{timeMain(day.firstTip).replace(' IST', '')}</span>
+              <span class="clock__k"><span data-clock-sub>{timeIST(day.firstTip)} {dayMain(day.firstTip)}, {timeET(day.firstTip)}</span></span>
             </p>
             <dl class="proof__facts">
               {written && (
                 <div>
                   <dt>Model clock</dt>
-                  <dd>wrote these at {timeET(written)}</dd>
+                  <dd>wrote these at {timeMain(written)}</dd>
                 </div>
               )}
               <div>
@@ -100,13 +100,13 @@ const gradeFile = file.replace('.jsonl', '-grades.jsonl');
         <span class="step__n" aria-hidden="true">1</span>
         <h3 class="step__t">Written</h3>
         <p>Once a day, before the first game, the model writes one line per game into <Path path={file} />: its chance for each side, its margin, and the market line it could see at that moment.</p>
-        {written && <p class="step__today">Latest: written {timeET(written)}</p>}
+        {written && <p class="step__today">Latest: written {timeMain(written)}</p>}
       </li>
       <li class="step" data-reveal="up" data-delay="0.06">
         <span class="step__n" aria-hidden="true">2</span>
         <h3 class="step__t">Committed</h3>
         <p>The file is committed and pushed to the public repository. The commit that added a line is its seal, and <code>git blame</code> names that commit for every line.</p>
-        {day?.seal && <p class="step__today">Latest: <a class="ilink" href={site.commit(day.seal.hash)} aria-label={`Commit ${day.seal.short}`}>{day.seal.short}</a> at {timeET(day.seal.time)}</p>}
+        {day?.seal && <p class="step__today">Latest: <a class="ilink" href={site.commit(day.seal.hash)} aria-label={`Commit ${day.seal.short}`}>{day.seal.short}</a> at {timeMain(day.seal.time)}</p>}
       </li>
       <li class="step" data-reveal="up" data-delay="0.12">
         <span class="step__n" aria-hidden="true">3</span>

@@ -9,7 +9,7 @@ import Path from '../../components/Path.astro';
 import { getData, type Day } from '../../lib/data';
 import { site } from '../../data/site';
 import { dayHref, href } from '../../lib/url';
-import { gameDate, gameDayNum, gameMonth, modelPick, timeET, dayET, marketWhen } from '../../lib/format';
+import { dayMain, gameDate, gameDayNum, gameMonth, marketWhen, modelPick, timeMain } from '../../lib/format';
 
 export function getStaticPaths() {
   const { days } = getData();
@@ -55,9 +55,9 @@ const h1 = `${gameDate(day.date, 'weekday')} ${gameDayNum(day.date)} ${gameMonth
           <div><dt>Commit</dt><dd>{day.seal ? <a class="hash" href={site.commit(day.seal.hash)}>{day.seal.short}</a> : 'not yet committed'}</dd></div>
           <div><dt>Graded</dt><dd>{day.graded} of {day.called.length}{day.graded > 0 && `, model ${day.model.right} right`}</dd></div>
           {day.graded > 0 && day.market.of > 0 && <div><dt>Market right</dt><dd>{day.market.right} of {day.market.of}</dd></div>}
-          {sharedWritten && <div><dt>Written</dt><dd>{timeET(sharedWritten)}, {dayET(sharedWritten)}</dd></div>}
+          {sharedWritten && <div><dt>Written</dt><dd>{timeMain(sharedWritten)}, {dayMain(sharedWritten)}</dd></div>}
           {sharedMarket && <div><dt>Market line</dt><dd>{sharedMarket}</dd></div>}
-          {sharedGraded && day.graded === called.length && <div><dt>Graded at</dt><dd>{timeET(sharedGraded)}, {dayET(sharedGraded)}</dd></div>}
+          {sharedGraded && day.graded === called.length && <div><dt>Graded at</dt><dd>{timeMain(sharedGraded)}, {dayMain(sharedGraded)}</dd></div>}
           {sharedCode && code && <div><dt>Code</dt><dd><a class="hash" href={site.commit(code)}>{code}</a>{dirty && ' with uncommitted changes'}</dd></div>}
         </dl>
       </div>
@@ -84,18 +84,18 @@ const h1 = `${gameDate(day.date, 'weekday')} ${gameDayNum(day.date)} ${gameMonth
               </>
             )}
             <dl class="facts">
-              {!sharedWritten && <div><dt>Written</dt><dd>{timeET(g.predicted_at)}, {dayET(g.predicted_at)}</dd></div>}
+              {!sharedWritten && <div><dt>Written</dt><dd>{timeMain(g.predicted_at)}, {dayMain(g.predicted_at)}</dd></div>}
               {g.seal?.hash !== day.seal?.hash && <div>
                 <dt>Sealed</dt>
                 <dd>
                   {g.seal
-                    ? <><a class="hash" href={site.commit(g.seal.hash)}>{g.seal.short}</a> at {timeET(g.seal.time)}, {dayET(g.seal.time)}</>
+                    ? <><a class="hash" href={site.commit(g.seal.hash)}>{g.seal.short}</a> at {timeMain(g.seal.time)}, {dayMain(g.seal.time)}</>
                     : 'not yet committed'}
                 </dd>
               </div>}
               <div><dt>Line</dt><dd><a class="ulink" href={`${site.rawFile(g.file)}#L${g.line}`}><Path path={g.file} /> line {g.line}</a></dd></div>
               {g.status === 'predicted' && !sharedMarket && <div><dt>Market</dt><dd>{mkt(g)}</dd></div>}
-              {g.grade && <div><dt>Grade</dt><dd>{g.grade.correct ? 'model right' : 'model wrong'}{g.grade.market_correct != null && `, market ${g.grade.market_correct ? 'right' : 'wrong'}`}{!(sharedGraded && day.graded === called.length) && `, graded ${timeET(g.grade.graded_at)}`}</dd></div>}
+              {g.grade && <div><dt>Grade</dt><dd>{g.grade.correct ? 'model right' : 'model wrong'}{g.grade.market_correct != null && `, market ${g.grade.market_correct ? 'right' : 'wrong'}`}{!(sharedGraded && day.graded === called.length) && `, graded ${timeMain(g.grade.graded_at)}`}</dd></div>}
               {!sharedCode && g.code_version && <div><dt>Code</dt><dd><a class="hash" href={site.commit(g.code_version)}>{g.code_version}</a>{g.code_dirty && ' with uncommitted changes'}</dd></div>}
             </dl>
           </div>
