@@ -9,7 +9,7 @@ const scale = Math.max(8, ...TERM_LABELS.map(([k]) => Math.abs(terms[k] ?? 0)), 
 const w = (v: number) => Math.min(1, Math.abs(v) / scale) / 2;
 ---
 <div class="terms">
-  <p class="terms__axis" aria-hidden="true"><span>favours {g.away_team}</span><span>favours {g.home_team}</span></p>
+  <p class="terms__axis" aria-hidden="true"><span>← {g.away_team}</span><span>{g.home_team} →</span></p>
   <dl>
     {TERM_LABELS.map(([k, label]) => {
       const v = terms[k] ?? 0;

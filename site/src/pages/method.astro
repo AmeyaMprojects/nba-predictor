@@ -4,6 +4,7 @@ import { backtest, site } from '../data/site';
 import { latestDay } from '../lib/data';
 import { nf } from '../lib/format';
 import { href } from '../lib/url';
+import Path from '../components/Path.astro';
 
 const day = latestDay();
 const file = day?.games[0]?.file ?? 'predictions/2026-27.jsonl';
@@ -15,6 +16,7 @@ const b = backtest;
   description="How the model builds a margin from five points terms, how it did against the closing market over 7,227 games, and how to check every call yourself."
   current="Method"
 >
+  <div class="methodwrap">
   <article class="method">
     <header class="method__head">
       <p class="label">Method</p>
@@ -94,7 +96,7 @@ cd nba-predictor</code></pre>
 git log --format='%h %ci %s' -- predictions/</code></pre>
         </li>
         <li>
-          <p>Or open any commit on GitHub. Every hash on this site links to <code>github.com/AmeyaMprojects/nba-predictor/commit/</code> followed by the hash.</p>
+          <p>Or open any commit on GitHub. Every hash on this site links to <Path path="github.com/AmeyaMprojects/nba-predictor/commit/" /> followed by the hash.</p>
         </li>
       </ol>
       <p>
@@ -110,4 +112,24 @@ git log --format='%h %ci %s' -- predictions/</code></pre>
       <p><a class="more" href={href('/')}><span>Back to the latest calls</span><span class="more__arrow" aria-hidden="true">→</span></a></p>
     </section>
   </article>
+  <aside class="toc" aria-label="On this page">
+    <div class="toc__inner">
+      <p class="label">On this page</p>
+      <ol>
+        <li><a class="draw" href="#m-what">What goes into a call</a></li>
+        <li><a class="draw" href="#m-not">What it does not know</a></li>
+        <li><a class="draw" href="#m-test">The backtest</a></li>
+        <li><a class="draw" href="#m-small">Reading the live record</a></li>
+        <li><a class="draw" href="#m-verify">How to verify a call</a></li>
+        <li><a class="draw" href="#m-no">Not betting advice</a></li>
+      </ol>
+      <dl class="toc__figs">
+        <div><dt><span class="key key--model" aria-hidden="true"></span>Model picked</dt><dd>{b.model.accuracy}%</dd></div>
+        <div><dt><span class="key key--market" aria-hidden="true"></span>Market picked</dt><dd>{b.market.accuracy}%</dd></div>
+        <div><dt>Games tested</dt><dd>{nf(b.games)}</dd></div>
+      </dl>
+      <p class="toc__note">Walk-forward, {b.seasons}, games with a closing line.</p>
+    </div>
+  </aside>
+</div>
 </Base>

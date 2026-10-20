@@ -1,5 +1,5 @@
 // Astro adapter (ClientRouter). Call start(setup) once from the layout's <script>.
-import { boot, cleanup, enter, leave, syncFlags } from './index';
+import { boot, cleanup, enter, leave, setDestination, syncFlags } from './index';
 
 let navigating = false;
 let popstate = false;
@@ -9,6 +9,7 @@ export function start(setup?: () => void) {
     navigating = true;
     popstate = e.navigationType === 'traverse';
     if (popstate) return; // back/forward: no curtain
+    setDestination(e.to);
     const load = e.loader;
     e.loader = async () => { await Promise.all([leave(), load()]); };
   });

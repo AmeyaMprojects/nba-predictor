@@ -47,7 +47,7 @@ const fontCss = `
     <link rel="icon" href={href('/favicon.svg')} type="image/svg+xml" />
     <link rel="icon" href={href('/favicon-32.png')} sizes="32x32" type="image/png" />
     <link rel="apple-touch-icon" href={href('/apple-touch-icon.png')} />
-    <link rel="sitemap" href={href('/sitemap-index.xml')} />
+    <link rel="sitemap" href={href('/sitemap.xml')} />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content={site.name} />
     <meta property="og:title" content={fullTitle} />
@@ -72,7 +72,7 @@ const fontCss = `
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
-    <div id="curtain" transition:persist="curtain" aria-hidden="true"><div class="curtain__panel"></div></div>
+    <div id="curtain" transition:persist="curtain" aria-hidden="true"><div class="curtain__panel"></div><div class="curtain__stamp"><span class="curtain__k">Opening</span><span class="curtain__label" data-curtain-label>Tonight</span></div></div>
     <Header current={current} />
     <main id="main" tabindex="-1">
       <slot />

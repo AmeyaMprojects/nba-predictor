@@ -4,6 +4,7 @@ import Stamp from '../../components/Stamp.astro';
 import Rail from '../../components/Rail.astro';
 import GameRow from '../../components/GameRow.astro';
 import Terms from '../../components/Terms.astro';
+import Path from '../../components/Path.astro';
 import { getData, type Day } from '../../lib/data';
 import { site } from '../../data/site';
 import { dayHref, href } from '../../lib/url';
@@ -77,7 +78,7 @@ const year = day.date.slice(0, 4);
                     : 'not yet committed'}
                 </dd>
               </div>
-              <div><dt>Line</dt><dd><a class="ulink" href={`${site.rawFile(g.file)}#L${g.line}`}>{g.file} line {g.line}</a></dd></div>
+              <div><dt>Line</dt><dd><a class="ulink" href={`${site.rawFile(g.file)}#L${g.line}`}><Path path={g.file} /> line {g.line}</a></dd></div>
               {g.status === 'predicted' && (
                 <div>
                   <dt>Market</dt>

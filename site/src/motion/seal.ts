@@ -53,7 +53,14 @@ export function startSeal() {
     let applyRail = (_p: number) => {};
     let frac = () => 0;
     let marks: { el: HTMLElement; ms: number }[] = [];
-    if (rail) {
+    const live = rail && rail.querySelector('[data-now]') ? rail : null;
+    if (rail && !live) {
+      // A finished slate: the rail is simply full. Only the marks are read below.
+      marks = [...rail.querySelectorAll<HTMLElement>('[data-mark]')].map((el) => ({ el, ms: Number(el.dataset.mark) }));
+      introDone = true;
+    }
+    if (live) {
+      const rail = live;
       const start = Number(rail.dataset.start);
       const end = Number(rail.dataset.end);
       const track = rail.querySelector<HTMLElement>('.rail__track')!;
@@ -74,7 +81,7 @@ export function startSeal() {
       addEventListener('resize', onResize);
       off.push(() => removeEventListener('resize', onResize));
       rail.classList.add('is-live');
-      if (reduced) applyRail(frac());
+      if (reduced || frac() >= 1) { applyRail(frac()); introDone = true; }
       else {
         applyRail(0);
         intro.add(gsap.to(shown, { p: frac(), duration: 0.9, ease: ease.out, onUpdate: () => applyRail(shown.p), onComplete: () => { introDone = true; } }), 0.2);
@@ -97,7 +104,7 @@ export function startSeal() {
       const sec = Math.floor(t / 1000);
       if (sec === lastSecond) return;
       lastSecond = sec;
-      if (introDone && rail) applyRail(frac());
+      if (introDone && live) applyRail(frac());
       if (nowTime) set(nowTime, istClock.format(t));
       for (const m of marks) m.el.classList.toggle('is-past', m.ms <= t);
       for (const s of statuses) {

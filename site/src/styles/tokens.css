@@ -2,7 +2,7 @@
 :root {
   --c-bg: #f2f3ef;        /* court paint, cool white */
   --c-fg: #0f1113;        /* ink */
-  --c-muted: #5c6169;     /* AA on ground */
+  --c-muted: #4d525a;     /* 6.9:1 on ground, 7.5:1 on paper */
   --c-line: #d5d7d2;
   --c-line-strong: #b9bcb5;
   --c-accent: #c8461a;    /* the model: ball orange (marks and large numerals only) */

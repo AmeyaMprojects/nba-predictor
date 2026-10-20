@@ -2,6 +2,7 @@
 import { site } from '../data/site';
 import { href } from '../lib/url';
 import { getData } from '../lib/data';
+import Path from './Path.astro';
 const files = [...new Set(getData().games.map((g) => g.file))];
 const year = new Date().getFullYear();
 ---
@@ -12,7 +13,7 @@ const year = new Date().getFullYear();
       <h2 class="label">Source</h2>
       <ul>
         <li><a class="ulink" href={site.repo}>Repository on GitHub</a></li>
-        {files.map((f) => <li><a class="ulink" href={site.rawFile(f)}>{f}</a></li>)}
+        {files.map((f) => <li><a class="ulink" href={site.rawFile(f)}><Path path={f} /></a></li>)}
       </ul>
     </div>
     <div>

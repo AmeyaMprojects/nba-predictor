@@ -5,6 +5,7 @@ import Rail from '../components/Rail.astro';
 import GameRow from '../components/GameRow.astro';
 import Record from '../components/Record.astro';
 import Ledger from '../components/Ledger.astro';
+import Path from '../components/Path.astro';
 import { getData, latestDay } from '../lib/data';
 import { site } from '../data/site';
 import { dayHref, href } from '../lib/url';
@@ -54,7 +55,7 @@ const gradeFile = file.replace('.jsonl', '-grades.jsonl');
               )}
               <div>
                 <dt>Check it</dt>
-                <dd><code>git blame {file}</code></dd>
+                <dd><code>git blame</code> <Path path={file} /></dd>
               </div>
             </dl>
           </aside>
@@ -99,19 +100,19 @@ const gradeFile = file.replace('.jsonl', '-grades.jsonl');
       <li class="step" data-reveal="up">
         <span class="step__n" aria-hidden="true">1</span>
         <h3 class="step__t">Written</h3>
-        <p>Once a day, before the first game, the model writes one line per game into <code>{file}</code>: its chance for each side, its margin, and the market line it could see at that moment.</p>
+        <p>Once a day, before the first game, the model writes one line per game into <Path path={file} />: its chance for each side, its margin, and the market line it could see at that moment.</p>
         {written && <p class="step__today">Latest: written {timeIST(written)}</p>}
       </li>
       <li class="step" data-reveal="up" data-delay="0.06">
         <span class="step__n" aria-hidden="true">2</span>
         <h3 class="step__t">Committed</h3>
         <p>The file is committed and pushed to the public repository. The commit that added a line is its seal, and <code>git blame</code> names that commit for every line.</p>
-        {day?.seal && <p class="step__today">Latest: <a class="ilink" href={site.commit(day.seal.hash)}>{day.seal.short}</a> at {timeIST(day.seal.time)}</p>}
+        {day?.seal && <p class="step__today">Latest: <a class="ilink" href={site.commit(day.seal.hash)} aria-label={`Commit ${day.seal.short}`}>{day.seal.short}</a> at {timeIST(day.seal.time)}</p>}
       </li>
       <li class="step" data-reveal="up" data-delay="0.12">
         <span class="step__n" aria-hidden="true">3</span>
         <h3 class="step__t">Graded</h3>
-        <p>After the finals, a grade line goes into <code>{gradeFile}</code> in a separate commit. The prediction line stays as committed, and any later edit would show in its history.</p>
+        <p>After the finals, a grade line goes into <Path path={gradeFile} /> in a separate commit. The prediction line stays as committed, and any later edit would show in its history.</p>
         <p class="step__today">{day && pending > 0 ? `Latest: ${pending} ${pending === 1 ? 'game' : 'games'} waiting on a final` : 'Latest: every call graded'}</p>
       </li>
     </ol>

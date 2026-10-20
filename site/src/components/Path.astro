@@ -1,0 +1,6 @@
+---
+// A file path that may only wrap after a slash, never at the hyphen in "2026-27".
+interface Props { path: string }
+const parts = Astro.props.path.split('/');
+---
+<code class="path">{parts.map((p, i) => (<><span>{p}{i < parts.length - 1 ? '/' : ''}</span>{i < parts.length - 1 && <wbr />}</>))}</code>

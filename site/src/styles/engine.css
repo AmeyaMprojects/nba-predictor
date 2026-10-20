@@ -55,3 +55,13 @@ html.lenis, html.lenis body { height: auto; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; }
 }
+.curtain__stamp {
+  position: absolute; left: 50%; top: 50%; translate: -50% -50%; rotate: -1.5deg;
+  display: grid; justify-items: start; padding: 14px clamp(18px, 3vw, 34px) 20px;
+  background: var(--c-paper); border: 3px solid var(--c-fg); visibility: hidden;
+}
+.curtain__k { font-family: var(--f-mono); font-size: 0.85rem; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--c-fg); }
+.curtain__label {
+  font-family: var(--f-display); font-stretch: 64%; font-variation-settings: 'wdth' 64; font-weight: 800;
+  font-size: clamp(3.5rem, 2rem + 7vw, 9rem); line-height: 0.88; letter-spacing: -0.03em; color: var(--c-accent); white-space: nowrap;
+}

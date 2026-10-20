@@ -1,6 +1,7 @@
 ---
 // The seal-to-buzzer timeline: seal, then each tip-off, then the finals. A "now" marker
 // crawls along it in real time (motion/seal.ts). Positions are fractions of [start, end].
+// A slate already over when the site is built never renders the now-marker at all.
 import type { Day } from '../lib/data';
 import { timeET, timeIST } from '../lib/format';
 
@@ -15,49 +16,45 @@ const lastTip = Date.parse(day.lastTip);
 const start = Math.min(sealMs ?? writtenMs, writtenMs, firstTip - 3600e3);
 const end = lastTip + FINAL_AFTER;
 const at = (ms: number) => (ms - start) / (end - start);
+const over = Date.now() >= end;
 
-type Mark = { x: number; kind: 'seal' | 'tip' | 'final'; title: string; sub: string; iso: string; ms: number; row?: number; priority: boolean };
+type Mark = { x: number; kind: 'seal' | 'tip' | 'final'; title: string; sub: string; iso: string; ms: number; row?: number };
 const marks: Mark[] = [];
-if (sealMs != null) marks.push({ x: at(sealMs), kind: 'seal', title: 'Sealed', sub: timeIST(day.seal!.time), iso: day.seal!.time, ms: sealMs, priority: true });
+if (sealMs != null) marks.push({ x: at(sealMs), kind: 'seal', title: 'Sealed', sub: timeIST(day.seal!.time), iso: day.seal!.time, ms: sealMs });
 const groups = new Map<string, string[]>();
 for (const g of day.games) {
   if (!groups.has(g.tip_off_utc)) groups.set(g.tip_off_utc, []);
-  groups.get(g.tip_off_utc)!.push(`${g.away_team} at ${g.home_team}`);
+  groups.get(g.tip_off_utc)!.push(`${g.away_team} · ${g.home_team}`);
 }
 const tipKeys = [...groups.keys()].sort();
-tipKeys.forEach((iso, i) => {
+const tipList = tipKeys.map((iso) => ({ iso, time: timeET(iso), games: groups.get(iso)! }));
+for (const iso of tipKeys) {
   const games = groups.get(iso)!;
-  marks.push({
-    x: at(Date.parse(iso)),
-    kind: 'tip',
-    title: games.length > 1 ? `${games.length} tips` : games[0].replace(' at ', ' · '),
-    sub: timeET(iso),
-    iso,
-    ms: Date.parse(iso),
-    priority: i === 0,
-  });
-});
-marks.push({ x: 1, kind: 'final', title: 'Finals', sub: `about ${timeET(new Date(end).toISOString())}`, iso: new Date(end).toISOString(), ms: end, priority: true });
-
-// Labels alternate between two rows above the rail; a label too close to both is dropped
-// (its tick stays, and the game list below carries the time).
-const GAP = 0.15;
-const lastInRow = [-1, -1];
-for (const mk of marks) {
-  const row = [0, 1].find((r) => lastInRow[r] < 0 || mk.x - marks[lastInRow[r]].x >= GAP);
-  if (row !== undefined) { mk.row = row; lastInRow[row] = marks.indexOf(mk); }
+  marks.push({ x: at(Date.parse(iso)), kind: 'tip', title: games.length > 1 ? `${games.length} games` : games[0], sub: timeET(iso), iso, ms: Date.parse(iso) });
 }
+marks.push({ x: 1, kind: 'final', title: 'Finals', sub: `about ${timeET(new Date(end).toISOString())}`, iso: new Date(end).toISOString(), ms: end });
+
+// Stagger labels into rows so none collide. Estimate each label's footprint on a narrow
+// desktop rail (W px); the label is shifted left by x*100% of its own width (see CSS).
+const W = 900;
+const CH = 7.4; // px per mono character at 0.76rem
+const rowsEnd: number[] = [];
+for (const mk of marks) {
+  const w = Math.max(mk.title.length, mk.sub.length) * CH + 18;
+  const left = mk.x * W - mk.x * w;
+  let row = rowsEnd.findIndex((r) => left >= r + 8);
+  if (row === -1) { row = rowsEnd.length; rowsEnd.push(0); }
+  rowsEnd[row] = left + w;
+  mk.row = row;
+}
+const rows = Math.max(1, rowsEnd.length);
 ---
-<div class="rail" data-rail data-start={start} data-end={end} data-first-tip={firstTip}>
+<div class:list={['rail', { 'is-over': over }]} data-rail data-start={start} data-end={end} style={`--rows:${rows}`}>
   <ol class="rail__marks">
     {marks.map((mk) => (
-      <li
-        class:list={['mark', `mark--${mk.kind}`, { 'is-priority': mk.priority, 'is-unlabelled': mk.row === undefined }]}
-        style={`--x:${mk.x.toFixed(4)}; --row:${mk.row ?? 0}`}
-        data-mark={mk.ms}
-      >
+      <li class:list={['mark', `mark--${mk.kind}`, { 'is-past': over }]} style={`--x:${mk.x.toFixed(4)}; --row:${mk.row}`} data-mark={mk.ms}>
         <span class="mark__tick" aria-hidden="true"></span>
-        <span class:list={['mark__label', { 'sr-only': mk.row === undefined }]}>
+        <span class="mark__label">
           <span class="mark__title">{mk.title}</span>
           <time class="mark__sub" datetime={mk.iso}>{mk.sub}</time>
         </span>
@@ -67,8 +64,15 @@ for (const mk of marks) {
   <div class="rail__track" aria-hidden="true">
     <span class="rail__done" data-rail-done></span>
   </div>
-  <div class="rail__now" data-now aria-hidden="true">
-    <span class="rail__nowhead"></span>
-    <span class="rail__nowlabel">now <span data-now-time></span></span>
-  </div>
+  {!over && (
+    <div class="rail__now" data-now aria-hidden="true">
+      <span class="rail__nowhead"></span>
+      <span class="rail__nowlabel">now <span data-now-time></span></span>
+    </div>
+  )}
+  <ol class="rail__list" aria-hidden="true">
+    {tipList.map((t) => (
+      <li><time datetime={t.iso}>{t.time}</time> <span>{t.games.join(', ')}</span></li>
+    ))}
+  </ol>
 </div>
