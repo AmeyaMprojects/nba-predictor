@@ -1,0 +1,14 @@
+// @ts-check
+import { defineConfig } from 'astro/config';
+import sitemap from '@astrojs/sitemap';
+
+// GitHub Pages project site: https://ameyamprojects.github.io/nba-predictor/
+// Every internal link goes through src/lib/url.ts so the base path is never hard-coded.
+export default defineConfig({
+  site: 'https://ameyamprojects.github.io',
+  base: '/nba-predictor',
+  trailingSlash: 'always',
+  integrations: [sitemap()],
+  prefetch: { prefetchAll: true, defaultStrategy: 'hover' },
+  build: { inlineStylesheets: 'auto', format: 'directory' },
+});

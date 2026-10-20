@@ -1,0 +1,40 @@
+/* Design tokens: DESIGN.md, System. @font-face lives in Base.astro (base-aware URLs). */
+:root {
+  --c-bg: #f2f3ef;        /* court paint, cool white */
+  --c-fg: #0f1113;        /* ink */
+  --c-muted: #5c6169;     /* AA on ground */
+  --c-line: #d5d7d2;
+  --c-line-strong: #b9bcb5;
+  --c-accent: #c8461a;    /* the model: ball orange (marks and large numerals only) */
+  --c-market: #33445e;    /* the market: slate */
+  --c-curtain: #0f1113;
+  --c-paper: #fafaf7;     /* the stamp's inside */
+
+  --f-display: 'Archivo', 'Arial Narrow', system-ui, sans-serif;
+  --f-body: 'Archivo', system-ui, sans-serif;
+  --f-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+  --t-mega: clamp(4.25rem, 1.2rem + 13vw, 14rem);
+  --t-xl: clamp(2.75rem, 1.2rem + 6.4vw, 7.5rem);
+  --t-l: clamp(1.9rem, 1.2rem + 2.6vw, 3.6rem);
+  --t-m: clamp(1.25rem, 1.05rem + 0.8vw, 1.75rem);
+  --t-body: clamp(1rem, 0.96rem + 0.15vw, 1.0625rem);
+  --t-s: 0.875rem;
+  --t-xs: 0.8125rem;
+
+  --u: clamp(0.5rem, 0.35rem + 0.6vw, 1rem);
+  --gutter: 16px;
+  --pad: 16px;
+  --maxw: 1440px;
+  --radius: 0px;
+
+  --e-settle: cubic-bezier(0.16, 1, 0.3, 1);   /* expo.out */
+  --e-stamp: cubic-bezier(0.34, 1.4, 0.64, 1); /* back.out(1.4) */
+
+  --z-content: 1;
+  --z-header: 50;
+  --z-curtain: 90;
+}
+@media (min-width: 768px) {
+  :root { --gutter: 24px; --pad: clamp(24px, 3vw, 48px); }
+}

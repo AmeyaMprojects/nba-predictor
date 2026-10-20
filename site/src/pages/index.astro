@@ -1,0 +1,122 @@
+---
+import Base from '../layouts/Base.astro';
+import Stamp from '../components/Stamp.astro';
+import Rail from '../components/Rail.astro';
+import GameRow from '../components/GameRow.astro';
+import Record from '../components/Record.astro';
+import Ledger from '../components/Ledger.astro';
+import { getData, latestDay } from '../lib/data';
+import { site } from '../data/site';
+import { dayHref, href } from '../lib/url';
+import { gameDate, timeET, timeIST } from '../lib/format';
+
+const { days, record } = getData();
+const day = latestDay();
+const pending = day ? day.called.length - day.graded : 0;
+const written = day?.called[0]?.predicted_at ?? null;
+const file = day?.games[0]?.file ?? 'predictions/';
+const gradeFile = file.replace('.jsonl', '-grades.jsonl');
+---
+<Base current="Home">
+  <section class="hero" id="tonight" aria-labelledby="hero-h">
+    {day ? (
+      <>
+        <div class="hero__grid">
+          <h1 id="hero-h" class="hero__title">
+            <span class="hero__kicker" data-reveal="fade" data-intro>
+              {day.called.length} NBA {day.called.length === 1 ? 'call' : 'calls'} for {gameDate(day.date, 'long')}
+            </span>
+            <Stamp day={day} />
+          </h1>
+          <aside class="proof" aria-label="Proof for this slate" data-reveal="fade" data-intro data-delay="0.25">
+            <p class="proof__lede">
+              Each call below went into a public git commit before its game started. The final score grades it, in a later commit.
+            </p>
+            {day.seal ? (
+              <a class="stamp-link" href={site.commit(day.seal.hash)}>
+                <span class="stamp-link__k">Commit</span> <span class="stamp-link__v">{day.seal.short}</span>
+                <span class="stamp-link__arrow" aria-hidden="true">→</span>
+              </a>
+            ) : (
+              <p class="proof__open">Not yet committed</p>
+            )}
+            <p class="clock" data-clock data-last-tip={Date.parse(day.lastTip)}>
+              <span class="clock__k" data-clock-label>First tip</span>
+              <span class="clock__n" data-clock-n>{timeET(day.firstTip).replace(' ET', '')}</span>
+              <span class="clock__k"><span data-clock-sub>{timeET(day.firstTip)}, {timeIST(day.firstTip)}</span></span>
+            </p>
+            <dl class="proof__facts">
+              {written && (
+                <div>
+                  <dt>Model clock</dt>
+                  <dd>wrote these at {timeIST(written)}</dd>
+                </div>
+              )}
+              <div>
+                <dt>Check it</dt>
+                <dd><code>git blame {file}</code></dd>
+              </div>
+            </dl>
+          </aside>
+        </div>
+
+        <Rail day={day} />
+
+        <div class="slate">
+          <div class="slate__head">
+            <h2 class="label">The calls</h2>
+            <p class="legend" aria-hidden="true">
+              <span><span class="key key--model"></span>model</span>
+              <span><span class="key key--market"></span>market</span>
+              <span class="legend__scale">position on the line is each side's chance to win; the centre mark is 50/50</span>
+            </p>
+          </div>
+          <ol class="games">
+            {day.games.map((g) => <GameRow game={g} />)}
+          </ol>
+          <a class="more" href={dayHref(day.date)}>
+            <span>Full breakdown for {gameDate(day.date, 'short')}</span><span class="more__arrow" aria-hidden="true">→</span>
+          </a>
+        </div>
+      </>
+    ) : (
+      <div class="hero__grid">
+        <h1 id="hero-h" class="hero__title">
+          <span class="hero__kicker">NBA calls, sealed before tip-off</span>
+          <span class="stamp stamp--open stamp--hero"><span class="stamp__word">No calls</span><span class="stamp__time">logged yet</span></span>
+        </h1>
+      </div>
+    )}
+  </section>
+
+  <Record record={record} pendingTonight={pending} />
+
+  {days.length > 0 && <Ledger days={days} />}
+
+  <section class="how" id="how" aria-labelledby="how-h">
+    <h2 id="how-h" class="h2">How a call is sealed</h2>
+    <ol class="steps">
+      <li class="step" data-reveal="up">
+        <span class="step__n" aria-hidden="true">1</span>
+        <h3 class="step__t">Written</h3>
+        <p>Once a day, before the first game, the model writes one line per game into <code>{file}</code>: its chance for each side, its margin, and the market line it could see at that moment.</p>
+        {written && <p class="step__today">Latest: written {timeIST(written)}</p>}
+      </li>
+      <li class="step" data-reveal="up" data-delay="0.06">
+        <span class="step__n" aria-hidden="true">2</span>
+        <h3 class="step__t">Committed</h3>
+        <p>The file is committed and pushed to the public repository. The commit that added a line is its seal, and <code>git blame</code> names that commit for every line.</p>
+        {day?.seal && <p class="step__today">Latest: <a class="ilink" href={site.commit(day.seal.hash)}>{day.seal.short}</a> at {timeIST(day.seal.time)}</p>}
+      </li>
+      <li class="step" data-reveal="up" data-delay="0.12">
+        <span class="step__n" aria-hidden="true">3</span>
+        <h3 class="step__t">Graded</h3>
+        <p>After the finals, a grade line goes into <code>{gradeFile}</code> in a separate commit. The prediction line stays as committed, and any later edit would show in its history.</p>
+        <p class="step__today">{day && pending > 0 ? `Latest: ${pending} ${pending === 1 ? 'game' : 'games'} waiting on a final` : 'Latest: every call graded'}</p>
+      </li>
+    </ol>
+    <p class="how__note">
+      Commit times come from the machine that made them, so the history itself is the guarantee: it is public, and anyone who pulled it earlier holds a copy that a rewrite would no longer match. The <a class="ilink" href={href('/method/')}>method page</a> lists the commands to check it.
+    </p>
+  </section>
+</Base>

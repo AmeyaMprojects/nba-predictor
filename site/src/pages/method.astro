@@ -1,0 +1,113 @@
+---
+import Base from '../layouts/Base.astro';
+import { backtest, site } from '../data/site';
+import { latestDay } from '../lib/data';
+import { nf } from '../lib/format';
+import { href } from '../lib/url';
+
+const day = latestDay();
+const file = day?.games[0]?.file ?? 'predictions/2026-27.jsonl';
+const hash = day?.seal?.short ?? 'e14df79';
+const b = backtest;
+---
+<Base
+  title="Method and backtest"
+  description="How the model builds a margin from five points terms, how it did against the closing market over 7,227 games, and how to check every call yourself."
+  current="Method"
+>
+  <article class="method">
+    <header class="method__head">
+      <p class="label">Method</p>
+      <h1 class="method__title">A plain model, checked against the market in public</h1>
+      <p class="method__lede">
+        The model adds up a handful of points terms into a predicted margin, then turns that margin into a chance to win. Over six seasons it picked {b.model.accuracy}% of winners. The betting market picked {b.market.accuracy}%. It does not beat the market, and this site never says it does.
+      </p>
+    </header>
+
+    <section aria-labelledby="m-what">
+      <h2 id="m-what" class="h3">What goes into a call</h2>
+      <p>For each game the model estimates the home team's margin from five terms, all in points:</p>
+      <ul class="plain">
+        <li><b>Team rating</b>: the gap between the two teams' current strength, updated after every game and pulled halfway back to average between seasons.</li>
+        <li><b>Home court</b>: the recent value of playing at home, measured over the last 1,230 games.</li>
+        <li><b>Rest</b>, <b>travel</b> and <b>altitude</b>: small adjustments for back-to-backs, distance flown and playing in Denver or Utah.</li>
+      </ul>
+      <p>The margin becomes a win chance through a normal curve with a spread of 12.8 points. The day page for each slate shows every term for every game, next to the log line the model wrote.</p>
+    </section>
+
+    <section aria-labelledby="m-not">
+      <h2 id="m-not" class="h3">What it does not know</h2>
+      <p>
+        The model does not know injuries, rest days for stars, or starting lineups. The market does, right up to tip-off. When a star sits, the market moves and the model does not. That gap is most of the reason the market is ahead, and it is the obvious next thing to add.
+      </p>
+    </section>
+
+    <section aria-labelledby="m-test">
+      <h2 id="m-test" class="h3">The backtest</h2>
+      <p>
+        Walk-forward over {b.seasons}: each game was predicted using only what was known before it, then compared with the closing betting line. {nf(b.games)} games had a closing line.
+      </p>
+      <div class="ledger__scroll">
+        <table class="table table--method">
+          <caption class="sr-only">Walk-forward results, {b.seasons}</caption>
+          <thead>
+            <tr><th scope="col"></th><th scope="col" class="num">Picked the winner</th><th scope="col" class="num">Brier score</th><th scope="col" class="num">Log loss</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row"><span class="key key--model" aria-hidden="true"></span>Model</th><td class="num">{b.model.accuracy}%</td><td class="num">{b.model.brier.toFixed(4)}</td><td class="num">{b.model.logLoss.toFixed(4)}</td></tr>
+            <tr><th scope="row"><span class="key key--market" aria-hidden="true"></span>Closing market</th><td class="num">{b.market.accuracy}%</td><td class="num">{b.market.brier.toFixed(4)}</td><td class="num">{b.market.logLoss.toFixed(4)}</td></tr>
+            <tr><th scope="row">Always pick home</th><td class="num">{b.home.low} to {b.home.high}% a season</td><td class="num"></td><td class="num"></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="small">Lower is better for Brier score and log loss. Both measure how good the stated chances were, not just the picks.</p>
+      <ul class="plain">
+        <li>The market was ahead in every one of the six seasons, by {b.marketLeadRange} points of accuracy.</li>
+        <li>In the {nf(b.disagreements.games)} games where the two disagreed (a different winner, or margins at least 10 points apart), the model was right {b.disagreements.model}% of the time and the market {b.disagreements.market}%.</li>
+        <li>Against the closing spread, the result landed on the model's side in {b.againstSpread.model.toFixed(1)}% of {nf(b.againstSpread.games)} games. That is a coin flip: no edge.</li>
+      </ul>
+      <p>The fair summary: within about 2.5 points of the closing market, from free data, before tip-off.</p>
+    </section>
+
+    <section aria-labelledby="m-small">
+      <h2 id="m-small" class="h3">Reading the live record</h2>
+      <p>
+        Early in a season the live record is a small sample. Ten games can read 80% or 40% by luck alone. Under 100 graded games the home page says so next to the numbers, and the backtest above is the better guide to what the model can do.
+      </p>
+    </section>
+
+    <section aria-labelledby="m-verify">
+      <h2 id="m-verify" class="h3">How to verify a call</h2>
+      <ol class="verify">
+        <li>
+          <p>Clone the repository with its full history.</p>
+          <pre><code>git clone {site.repo}.git
+cd nba-predictor</code></pre>
+        </li>
+        <li>
+          <p>See which commit added each prediction line, and when.</p>
+          <pre><code>git blame --date=iso {file}</code></pre>
+        </li>
+        <li>
+          <p>Read the commit itself, with its time and the lines it added.</p>
+          <pre><code>git show --stat {hash}
+git log --format='%h %ci %s' -- predictions/</code></pre>
+        </li>
+        <li>
+          <p>Or open any commit on GitHub. Every hash on this site links to <code>github.com/AmeyaMprojects/nba-predictor/commit/</code> followed by the hash.</p>
+        </li>
+      </ol>
+      <p>
+        Compare the commit time with the game's tip-off time on the same line. A commit time is set by the machine that made it, which is why the public history matters: once pushed, a rewrite would no longer match the copies other people already pulled.
+      </p>
+    </section>
+
+    <section aria-labelledby="m-no">
+      <h2 id="m-no" class="h3">Not betting advice</h2>
+      <p>
+        This is a public record of a model's calls, kept to see how close free data can get to the market. It is not a tip sheet. Nothing here says to bet on anything.
+      </p>
+      <p><a class="more" href={href('/')}><span>Back to the latest calls</span><span class="more__arrow" aria-hidden="true">→</span></a></p>
+    </section>
+  </article>
+</Base>

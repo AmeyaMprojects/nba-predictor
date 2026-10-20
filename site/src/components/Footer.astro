@@ -1,0 +1,34 @@
+---
+import { site } from '../data/site';
+import { href } from '../lib/url';
+import { getData } from '../lib/data';
+const files = [...new Set(getData().games.map((g) => g.file))];
+const year = new Date().getFullYear();
+---
+<footer class="foot">
+  <p class="foot__line">The model does not know injuries or lineups. The market does. Nothing here is betting advice.</p>
+  <div class="foot__cols">
+    <div>
+      <h2 class="label">Source</h2>
+      <ul>
+        <li><a class="ulink" href={site.repo}>Repository on GitHub</a></li>
+        {files.map((f) => <li><a class="ulink" href={site.rawFile(f)}>{f}</a></li>)}
+      </ul>
+    </div>
+    <div>
+      <h2 class="label">Read</h2>
+      <ul>
+        <li><a class="ulink" href={href('/method/')}>Method and backtest</a></li>
+        <li><a class="ulink" href={href('/#ledger')}>Every day in the ledger</a></li>
+      </ul>
+    </div>
+    <div>
+      <h2 class="label">Made by</h2>
+      <ul>
+        <li>{site.owner.name}, from free data only</li>
+        <li><a class="ulink" href={site.linkedin.href}>LinkedIn</a></li>
+      </ul>
+    </div>
+  </div>
+  <p class="foot__small">{year}. Type: Archivo and JetBrains Mono. Built with Astro from the prediction log at build time.</p>
+</footer>

@@ -1,0 +1,24 @@
+---
+import Base from '../layouts/Base.astro';
+import { href } from '../lib/url';
+---
+<Base title="No call sealed here" description="This page does not exist. No call was sealed for it.">
+  <section class="lost" aria-labelledby="lost-h">
+    <p class="label">404</p>
+    <h1 id="lost-h" class="lost__title">
+      <span class="stamp stamp--open stamp--hero" data-stamp>
+        <span class="stamp__word">Unsealed</span>
+        <span class="stamp__time">404</span>
+        <span class="stamp__lead">No call was sealed for this page.</span>
+      </span>
+    </h1>
+    <div class="court court--lost" aria-hidden="true" style="--mx:0.5">
+      <span class="court__basket court__basket--away"></span>
+      <span class="court__line"></span>
+      <span class="court__mid"></span>
+      <span class="court__basket court__basket--home"></span>
+    </div>
+    <p class="lost__text">The address may be from an old link, or a day the model did not run.</p>
+    <p><a class="more" href={href('/')}><span>Go to the latest calls</span><span class="more__arrow" aria-hidden="true">→</span></a></p>
+  </section>
+</Base>

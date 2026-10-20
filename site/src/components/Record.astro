@@ -1,0 +1,66 @@
+---
+// The running record: model right / always-pick-home right / market right, always with n.
+import type { Totals } from '../lib/data';
+import { backtest, SMALL_SAMPLE } from '../data/site';
+import { nf, pct } from '../lib/format';
+import { href } from '../lib/url';
+
+interface Props { record: Totals; pendingTonight: number }
+const { record: r, pendingTonight } = Astro.props;
+const none = r.graded === 0;
+const rows = [
+  { key: 'model', label: 'Model', t: r.model, ref: backtest.model.accuracy, refLabel: `backtest ${backtest.model.accuracy}%` },
+  { key: 'home', label: 'Always pick home', t: r.home, ref: (backtest.home.low + backtest.home.high) / 2, refLabel: `backtest ${backtest.home.low} to ${backtest.home.high}%` },
+  { key: 'market', label: 'Market', t: r.market, ref: backtest.market.accuracy, refLabel: `backtest ${backtest.market.accuracy}%` },
+];
+const missingMarket = r.graded - r.market.of;
+---
+<section class="record" id="record" aria-labelledby="record-h">
+  <div class="record__left">
+    <h2 id="record-h" class="label">Record so far</h2>
+    {none ? (
+      <p class="record__big" data-reveal="up">
+        <span class="record__num">{nf(r.calls)}</span>
+        <span class="record__unit">{r.calls === 1 ? 'call' : 'calls'} sealed, none graded yet</span>
+      </p>
+    ) : (
+      <p class="record__big" data-reveal="up">
+        <span class="record__pair"><span class="record__num">{nf(r.model.right)}</span><span class="record__unit">right</span></span>
+        <span class="record__pair record__pair--wrong"><span class="record__num">{nf(r.model.of - r.model.right)}</span><span class="record__unit">wrong</span></span>
+      </p>
+    )}
+    <p class="record__n">
+      {none
+        ? 'First results arrive after tonight\'s finals.'
+        : `Sample: ${nf(r.graded)} graded ${r.graded === 1 ? 'game' : 'games'} across ${nf(r.days)} ${r.days === 1 ? 'day' : 'days'}.`}
+      {!none && pendingTonight > 0 && ` ${pendingTonight} more ${pendingTonight === 1 ? 'call is' : 'calls are'} waiting on a final.`}
+    </p>
+  </div>
+  <div class="record__right">
+    <ul class="bars">
+      {rows.map((row) => {
+        const p = pct(row.t);
+        return (
+          <li class:list={['bar', `bar--${row.key}`]}>
+            <span class="bar__label">{row.label}</span>
+            <span class="bar__val">
+              {row.t.of ? <><b>{p!.toFixed(1)}%</b> <span>{nf(row.t.right)} of {nf(row.t.of)}</span></> : <span>no graded games</span>}
+            </span>
+            <span class="bar__track" aria-hidden="true">
+              <span class="bar__fill" data-bar style={`--p:${(p ?? 0) / 100}`}></span>
+              <span class="bar__ref" style={`--p:${row.ref / 100}`}><span>{row.refLabel}</span></span>
+            </span>
+          </li>
+        );
+      })}
+    </ul>
+    <p class="record__note">
+      {r.graded === 0
+        ? <>Nothing is graded yet, so there is no live record to read. The thin ticks mark what each line scored over the six-season backtest of {nf(backtest.games)} games (<a class="ilink" href={href('/method/')}>method</a>).</>
+        : r.graded < SMALL_SAMPLE
+        ? <>The sample is small. With {nf(r.graded)} graded {r.graded === 1 ? 'game' : 'games'}, a few results can swing these numbers by many points. The thin ticks mark the six-season backtest of {nf(backtest.games)} games, which is the steadier guide (<a class="ilink" href={href('/method/')}>method</a>).</>
+        : <>The thin ticks mark the six-season backtest of {nf(backtest.games)} games. Over that test the market picked more winners than the model in every season.</>}
+      {missingMarket > 0 && ` ${missingMarket} graded ${missingMarket === 1 ? 'game had' : 'games had'} no market line, so the market's count is out of ${nf(r.market.of)}.`}
+    </p>
+  </div>
+</section>

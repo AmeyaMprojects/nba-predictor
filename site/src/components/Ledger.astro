@@ -1,0 +1,59 @@
+---
+// One row per day, newest first, grouped by month.
+import type { Day } from '../lib/data';
+import { site } from '../data/site';
+import { dayHref } from '../lib/url';
+import { duration, gameDate, gameMonth, timeIST } from '../lib/format';
+
+interface Props { days: Day[] }
+const days = [...Astro.props.days].reverse();
+const months = new Map<string, Day[]>();
+for (const d of days) {
+  const k = d.date.slice(0, 7);
+  if (!months.has(k)) months.set(k, []);
+  months.get(k)!.push(d);
+}
+const tally = (t: { right: number; of: number }) => (t.of ? `${t.right}/${t.of}` : '');
+---
+<section class="ledger" id="ledger" aria-labelledby="ledger-h">
+  <div class="ledger__head">
+    <h2 id="ledger-h" class="h2">Ledger</h2>
+    <p class="ledger__intro">Every day the model ran, newest first. Open a day for each game's breakdown and the commit that sealed it.</p>
+  </div>
+  <div class="ledger__scroll">
+    <table class="table">
+      <thead>
+        <tr>
+          <th scope="col">Day</th>
+          <th scope="col" class="num">Calls</th>
+          <th scope="col" class="num">Model</th>
+          <th scope="col" class="num opt">Home won</th>
+          <th scope="col" class="num">Market</th>
+          <th scope="col" class="opt">Sealed</th>
+          <th scope="col" class="opt">Before first tip</th>
+          <th scope="col">Commit</th>
+        </tr>
+      </thead>
+      {[...months.entries()].map(([k, list]) => (
+        <tbody>
+          <tr class="table__month"><th scope="rowgroup" colspan="8">{gameMonth(`${k}-01`)} {k.slice(0, 4)}</th></tr>
+          {list.map((d) => {
+            const lead = d.seal ? Date.parse(d.firstTip) - Date.parse(d.seal.time) : null;
+            return (
+              <tr class="table__row">
+                <th scope="row"><a class="rowlink" href={dayHref(d.date)}>{gameDate(d.date, 'long').slice(0, -5)}<span class="yr"> {d.date.slice(0, 4)}</span></a></th>
+                <td class="num">{d.called.length}{d.games.length > d.called.length && <span class="muted"> of {d.games.length}</span>}</td>
+                <td class="num">{d.graded ? tally(d.model) : <span class="muted">pending</span>}</td>
+                <td class="num opt">{d.graded ? tally(d.home) : <span class="muted">pending</span>}</td>
+                <td class="num">{d.graded ? (d.market.of ? tally(d.market) : <span class="muted">no line</span>) : <span class="muted">pending</span>}</td>
+                <td class="opt">{d.seal ? timeIST(d.seal.time) : <span class="muted">not yet committed</span>}</td>
+                <td class="opt">{lead == null ? '' : lead >= 0 ? duration(lead) : <span class="late">{duration(lead)} after</span>}</td>
+                <td>{d.seal ? <a class="hash" href={site.commit(d.seal.hash)}>{d.seal.short}</a> : <span class="muted">none</span>}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      ))}
+    </table>
+  </div>
+</section>

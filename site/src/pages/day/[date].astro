@@ -1,0 +1,100 @@
+---
+import Base from '../../layouts/Base.astro';
+import Stamp from '../../components/Stamp.astro';
+import Rail from '../../components/Rail.astro';
+import GameRow from '../../components/GameRow.astro';
+import Terms from '../../components/Terms.astro';
+import { getData, type Day } from '../../lib/data';
+import { site } from '../../data/site';
+import { dayHref, href } from '../../lib/url';
+import { gameDate, gameDayNum, gameMonth, modelPick, timeET, timeIST, dayIST } from '../../lib/format';
+
+export function getStaticPaths() {
+  const { days } = getData();
+  return days.map((day, i) => ({
+    params: { date: day.date },
+    props: { day, prev: days[i - 1]?.date ?? null, next: days[i + 1]?.date ?? null },
+  }));
+}
+interface Props { day: Day; prev: string | null; next: string | null }
+const { day, prev, next } = Astro.props;
+const title = `Calls for ${gameDate(day.date, 'long')}`;
+const picks = day.called.map((g) => `${modelPick(g)?.team} over ${modelPick(g)?.team === g.home_team ? g.away_team : g.home_team}`).join(', ');
+const description = `${day.called.length} NBA ${day.called.length === 1 ? 'call' : 'calls'} sealed in a public commit before tip-off on ${gameDate(day.date, 'long')}${picks ? `: ${picks}` : ''}. ${day.graded ? `${day.model.right} of ${day.graded} right.` : 'Results pending.'}`.slice(0, 300);
+const year = day.date.slice(0, 4);
+---
+<Base title={title} description={description} current="Ledger">
+  <section class="dayhero" aria-labelledby="day-h">
+    <nav class="crumbs" aria-label="Breadcrumb">
+      <a class="ulink" href={href('/#ledger')}>Ledger</a>
+      <span aria-hidden="true">/</span>
+      <span aria-current="page">{day.date}</span>
+    </nav>
+    <div class="dayhero__grid">
+      <h1 id="day-h" class="dayhero__title">
+        <span class="dayhero__num">{gameDayNum(day.date)}</span>
+        <span class="dayhero__month">{gameMonth(day.date)} {year}</span>
+        <span class="sr-only">, </span>
+        <span class="dayhero__weekday">{gameDate(day.date, 'weekday')}, {day.called.length} {day.called.length === 1 ? 'call' : 'calls'}</span>
+      </h1>
+      <div class="dayhero__side" data-reveal="fade" data-intro data-delay="0.2">
+        <Stamp day={day} size="page" />
+        <dl class="proof__facts">
+          <div><dt>Commit</dt><dd>{day.seal ? <a class="hash" href={site.commit(day.seal.hash)}>{day.seal.short}</a> : 'not yet committed'}</dd></div>
+          <div><dt>Graded</dt><dd>{day.graded} of {day.called.length}{day.graded > 0 && `, model ${day.model.right} right`}</dd></div>
+          {day.graded > 0 && day.market.of > 0 && <div><dt>Market</dt><dd>{day.market.right} of {day.market.of} right</dd></div>}
+        </dl>
+      </div>
+    </div>
+  </section>
+
+  <div class="railwrap"><Rail day={day} /></div>
+
+  <ol class="games games--day">
+    {day.games.map((g) => (
+      <GameRow game={g} size="day" headingLevel="h2">
+        <div class="detail">
+          {g.terms && g.status === 'predicted' && (
+            <div class="detail__terms">
+              <h3 class="label">How the margin adds up</h3>
+              <Terms game={g} />
+            </div>
+          )}
+          <div class="detail__facts">
+            {g.sentence && (
+              <>
+                <h3 class="label">Log line</h3>
+                <p class="logline"><code>{g.sentence}</code></p>
+              </>
+            )}
+            <dl class="facts">
+              <div><dt>Written</dt><dd>{timeIST(g.predicted_at)}, {dayIST(g.predicted_at)}</dd></div>
+              <div>
+                <dt>Sealed</dt>
+                <dd>
+                  {g.seal
+                    ? <><a class="hash" href={site.commit(g.seal.hash)}>{g.seal.short}</a> at {timeIST(g.seal.time)} ({timeET(g.seal.time)})</>
+                    : 'not yet committed'}
+                </dd>
+              </div>
+              <div><dt>Line</dt><dd><a class="ulink" href={`${site.rawFile(g.file)}#L${g.line}`}>{g.file} line {g.line}</a></dd></div>
+              {g.status === 'predicted' && (
+                <div>
+                  <dt>Market</dt>
+                  <dd>{g.market_p_home != null ? `${g.market_label ?? 'market line'}, ${g.market_books ?? 'unknown number of'} books` : 'no market line was available'}</dd>
+                </div>
+              )}
+              {g.grade && <div><dt>Graded</dt><dd>{timeIST(g.grade.graded_at)}, {dayIST(g.grade.graded_at)}</dd></div>}
+              {g.code_version && <div><dt>Code</dt><dd><a class="hash" href={site.commit(g.code_version)}>{g.code_version}</a>{g.code_dirty && ' with uncommitted changes'}</dd></div>}
+            </dl>
+          </div>
+        </div>
+      </GameRow>
+    ))}
+  </ol>
+
+  <nav class="pager" aria-label="Other days">
+    {prev ? <a class="more more--back" href={dayHref(prev)}><span class="more__arrow" aria-hidden="true">←</span><span>{gameDate(prev, 'long')}</span></a> : <span></span>}
+    {next ? <a class="more" href={dayHref(next)}><span>{gameDate(next, 'long')}</span><span class="more__arrow" aria-hidden="true">→</span></a> : <a class="more" href={href('/')}><span>Back to the latest slate</span><span class="more__arrow" aria-hidden="true">→</span></a>}
+  </nav>
+</Base>

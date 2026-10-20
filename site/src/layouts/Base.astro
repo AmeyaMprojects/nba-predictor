@@ -1,0 +1,87 @@
+---
+import { ClientRouter } from 'astro:transitions';
+import { site } from '../data/site';
+import { href } from '../lib/url';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import '../styles/tokens.css';
+import '../styles/engine.css';
+import '../styles/site.css';
+
+interface Props {
+  title?: string;
+  description?: string;
+  current?: string; // nav label to mark as current
+  jsonLd?: Record<string, unknown>;
+}
+const { title, description = site.description, current, jsonLd } = Astro.props;
+const fullTitle = title ? `${title} | ${site.name}` : `${site.name} | NBA calls with a public record`;
+const canonical = new URL(Astro.url.pathname, Astro.site).href;
+const ogImage = new URL(href('/og.png'), Astro.site).href;
+const ld = jsonLd ?? {
+  '@context': 'https://schema.org',
+  '@type': 'WebSite',
+  name: site.name,
+  url: site.url,
+  description: site.description,
+  author: { '@type': 'Person', name: site.owner.name, url: site.repo },
+};
+const fonts = {
+  archivo: href('/fonts/archivo.woff2'),
+  mono: href('/fonts/jetbrains-mono.woff2'),
+};
+const fontCss = `
+@font-face{font-family:'Archivo';src:url('${fonts.archivo}') format('woff2');font-weight:400 800;font-stretch:62% 100%;font-style:normal;font-display:swap}
+@font-face{font-family:'JetBrains Mono';src:url('${fonts.mono}') format('woff2');font-weight:400 500;font-style:normal;font-display:swap}`;
+---
+<!doctype html>
+<html lang="en" transition:animate="none">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{fullTitle}</title>
+    <meta name="description" content={description} />
+    <link rel="canonical" href={canonical} />
+    <meta name="theme-color" content="#f2f3ef" />
+    <meta name="color-scheme" content="light" />
+    <link rel="icon" href={href('/favicon.svg')} type="image/svg+xml" />
+    <link rel="icon" href={href('/favicon-32.png')} sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href={href('/apple-touch-icon.png')} />
+    <link rel="sitemap" href={href('/sitemap-index.xml')} />
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content={site.name} />
+    <meta property="og:title" content={fullTitle} />
+    <meta property="og:description" content={description} />
+    <meta property="og:url" content={canonical} />
+    <meta property="og:image" content={ogImage} />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={fullTitle} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content={ogImage} />
+    <link rel="preload" href={fonts.archivo} as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href={fonts.mono} as="font" type="font/woff2" crossorigin />
+    <style is:inline set:html={fontCss}></style>
+    <script type="application/ld+json" set:html={JSON.stringify(ld)} />
+    <script is:inline>
+      document.documentElement.classList.add('js');
+      if (!matchMedia('(prefers-reduced-motion: reduce)').matches) document.documentElement.classList.add('motion');
+    </script>
+    <ClientRouter fallback="swap" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div id="curtain" transition:persist="curtain" aria-hidden="true"><div class="curtain__panel"></div></div>
+    <Header current={current} />
+    <main id="main" tabindex="-1">
+      <slot />
+    </main>
+    <Footer />
+    <script>
+      import { start } from '../engine/astro';
+      import { setupMotion } from '../motion/setup';
+      start(setupMotion);
+    </script>
+  </body>
+</html>

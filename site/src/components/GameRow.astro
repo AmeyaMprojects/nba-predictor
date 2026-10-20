@@ -1,0 +1,101 @@
+---
+// One game as a court line: away basket on the left, home basket on the right.
+// The model's orange dot and the market's slate ring sit where each puts the home team's chance
+// (left end = away certain, centre = 50/50, right end = home certain). After the final, the ball
+// settles at the winner's end.
+import type { Game } from '../lib/data';
+import { teamName } from '../lib/teams';
+import { disagree, marketPick, marketSpread, modelPick, modelSpread, timeET, timeIST, winner } from '../lib/format';
+
+interface Props { game: Game; size?: 'slate' | 'day'; headingLevel?: 'h3' | 'h2' }
+const { game: g, size = 'slate', headingLevel = 'h3' } = Astro.props;
+const H = headingLevel;
+const called = g.status === 'predicted' && g.p_home != null;
+const clamp = (v: number) => Math.min(0.96, Math.max(0.04, v));
+const mx = called ? clamp(g.p_home!) : 0.5;
+const kx = g.market_p_home != null ? clamp(g.market_p_home) : null;
+const m = modelPick(g);
+const k = marketPick(g);
+const won = winner(g);
+const split = called && disagree(g);
+const tipMs = Date.parse(g.tip_off_utc);
+const gr = g.grade;
+const score = gr
+  ? gr.home_won
+    ? `${g.home_team} ${gr.home_points}, ${g.away_team} ${gr.away_points}`
+    : `${g.away_team} ${gr.away_points}, ${g.home_team} ${gr.home_points}`
+  : null;
+---
+<li class:list={['game', `game--${size}`, { 'is-graded': !!gr, 'is-nocall': !called, 'is-split': split }]} data-game>
+  <H class="game__teams">
+    <abbr class:list={['game__code game__code--away', { 'is-loser': won && won !== g.away_team }]} title={teamName(g.away_team)}>{g.away_team}</abbr>
+    <span class="sr-only"> at </span>
+    <abbr class:list={['game__code game__code--home', { 'is-loser': won && won !== g.home_team }]} title={teamName(g.home_team)}>{g.home_team}</abbr>
+  </H>
+
+  <div class="court" aria-hidden="true" data-court style={`--mx:${mx}; --kx:${kx ?? 0.5}`}>
+    <span class="court__basket court__basket--away"></span>
+    <span class="court__line"></span>
+    <span class="court__mid"></span>
+    <span class="court__basket court__basket--home"></span>
+    {called && kx != null && <span class="court__ring" data-ring style={`left:${kx * 100}%`}></span>}
+    {called && <span class="court__dot" data-dot style={`left:${mx * 100}%`}></span>}
+    {gr && (
+      <span
+        class:list={['court__trail', { 'is-right': gr.correct }]}
+        data-trail
+        style={gr.home_won ? `left:${mx * 100}%; right:1.2%` : `left:1.2%; right:${(1 - mx) * 100}%`}
+        data-dir={gr.home_won ? 'right' : 'left'}
+      ></span>
+    )}
+    {gr && <span class="court__ball" data-ball data-from={mx} style={`left:${gr.home_won ? 98.8 : 1.2}%`}></span>}
+  </div>
+
+  <dl class="game__read">
+    {called ? (
+      <>
+        <div class="read read--model">
+          <dt><span class="key key--model" aria-hidden="true"></span>Model</dt>
+          <dd><b>{m!.team} {m!.pct}%</b> <span>{modelSpread(g)}</span></dd>
+        </div>
+        <div class="read read--market">
+          <dt><span class="key key--market" aria-hidden="true"></span>Market</dt>
+          {k ? <dd><b>{k.team} {k.pct}%</b> <span>{marketSpread(g) ?? 'no spread'}</span></dd> : <dd><span>No market line</span></dd>}
+        </div>
+      </>
+    ) : (
+      <div class="read read--nocall">
+        <dt>No call</dt>
+        <dd>{g.reason ?? 'no reason logged'}</dd>
+      </div>
+    )}
+    <div class="read read--tip">
+      <dt>Tip</dt>
+      <dd><time datetime={g.tip_off_utc}>{timeET(g.tip_off_utc)}</time> <span>{timeIST(g.tip_off_utc)}</span></dd>
+    </div>
+    {gr ? (
+      <div class="read read--final">
+        <dt>Final</dt>
+        <dd>
+          <b>{score}</b>
+          <span class="verdicts">
+            <span class:list={['verdict', gr.correct ? 'is-right' : 'is-wrong']}>Model {gr.correct ? 'right' : 'wrong'}</span>
+            {gr.market_correct != null && (
+              <span class:list={['verdict verdict--market', gr.market_correct ? 'is-right' : 'is-wrong']}>Market {gr.market_correct ? 'right' : 'wrong'}</span>
+            )}
+          </span>
+        </dd>
+      </div>
+    ) : (
+      called && (
+        <div class="read read--status">
+          <dt>Status</dt>
+          <dd data-status data-tip={tipMs}>Sealed, waiting for tip-off</dd>
+        </div>
+      )
+    )}
+  </dl>
+  {split && <p class="game__flag">Model and market pick different winners</p>}
+  {called && g.sealedBeforeTip === false && <p class="game__flag game__flag--late">This line was committed after tip-off, so its seal proves nothing</p>}
+  <slot />
+</li>
