@@ -18,17 +18,15 @@ const written = day?.called[0]?.predicted_at ?? null;
 const file = day?.games[0]?.file ?? 'predictions/';
 const gradeFile = file.replace('.jsonl', '-grades.jsonl');
 ---
-<Base current="Home">
+<Base current="Tonight">
   <section class="hero" id="tonight" aria-labelledby="hero-h">
     {day ? (
       <>
         <div class="hero__grid">
-          <h1 id="hero-h" class="hero__title">
-            <span class="hero__kicker" data-reveal="fade" data-intro>
-              {day.called.length} NBA {day.called.length === 1 ? 'call' : 'calls'} for {gameDate(day.date, 'long')}
-            </span>
+          <div class="hero__title">
+            <h1 id="hero-h" class="hero__kicker">{day.called.length} NBA {day.called.length === 1 ? 'call' : 'calls'} for {gameDate(day.date, 'long')}</h1>
             <Stamp day={day} />
-          </h1>
+          </div>
           <aside class="proof" aria-label="Proof for this slate" data-reveal="fade" data-intro data-delay="0.25">
             <p class="proof__lede">
               Each call below went into a public git commit before its game started. The final score grades it, in a later commit.
@@ -82,10 +80,10 @@ const gradeFile = file.replace('.jsonl', '-grades.jsonl');
       </>
     ) : (
       <div class="hero__grid">
-        <h1 id="hero-h" class="hero__title">
-          <span class="hero__kicker">NBA calls, sealed before tip-off</span>
-          <span class="stamp stamp--open stamp--hero"><span class="stamp__word">No calls</span><span class="stamp__time">logged yet</span></span>
-        </h1>
+        <div class="hero__title">
+          <h1 id="hero-h" class="hero__kicker">NBA calls, sealed before tip-off</h1>
+          <p class="stamp stamp--open stamp--hero"><span class="stamp__word">No calls</span><span class="stamp__time">logged yet</span></p>
+        </div>
       </div>
     )}
   </section>

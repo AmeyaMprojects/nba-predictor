@@ -4,3 +4,4 @@ dist/
 .shots/
 BUILD-REPORT.md
 dist-fx/
+.DS_Store

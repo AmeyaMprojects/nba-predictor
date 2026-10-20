@@ -37,13 +37,15 @@ export function startSeal() {
 
     // --- the stamp press -------------------------------------------------------------------
     document.querySelectorAll<HTMLElement>('[data-stamp]').forEach((s) => {
-      if (reduced) return void gsap.set(s, { autoAlpha: 1 });
-      intro.add(
-        gsap.fromTo(s,
-          { autoAlpha: 0, scale: 1.06, boxShadow: '7px 7px 0 0 rgba(15,17,19,0.9)' },
-          { autoAlpha: 1, scale: 1, boxShadow: '1px 1px 0 0 rgba(15,17,19,0.9)', duration: 0.35, ease: ease.stamp }),
-        0.05,
-      );
+      if (reduced) return void s.classList.add('is-pressed');
+      // The stamp-down: tilted and lifted (CSS) to its resting -2deg, shadow collapsing to 1px.
+      // Tweens CSS variables, so transform stays the only thing that changes (no opacity: the text
+      // is visible and the LCP from the first paint).
+      const press = gsap.fromTo(s,
+        { '--st-r': '-8deg', '--st-s': 1.12, '--st-sh': '9px' },
+        { '--st-r': '-2deg', '--st-s': 1, '--st-sh': '1px', duration: 0.45, ease: ease.stamp, paused: true,
+          onComplete: () => s.classList.add('is-pressed') });
+      intro.add(() => press.play(), 0.1);
     });
 
     // --- the rail and its now-marker (the one clock) ------------------------------------------
@@ -105,7 +107,7 @@ export function startSeal() {
       if (sec === lastSecond) return;
       lastSecond = sec;
       if (introDone && live) applyRail(frac());
-      if (nowTime) set(nowTime, istClock.format(t));
+      if (nowTime) set(nowTime, et(t));
       for (const m of marks) m.el.classList.toggle('is-past', m.ms <= t);
       for (const s of statuses) {
         set(s.el,

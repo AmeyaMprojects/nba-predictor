@@ -38,7 +38,7 @@ const score = gr
     <span class="court__line"></span>
     <span class="court__mid"></span>
     <span class="court__basket court__basket--home"></span>
-    {called && kx != null && <span class="court__ring" data-ring style={`left:${kx * 100}%`}></span>}
+    {called && kx != null && <span class:list={['court__ring', { 'is-near': Math.abs(kx - mx) < 0.05, 'is-close': Math.abs(kx - mx) < 0.1 }]} data-ring style={`left:${kx * 100}%`}></span>}
     {called && <span class="court__dot" data-dot style={`left:${mx * 100}%`}></span>}
     {gr && (
       <span

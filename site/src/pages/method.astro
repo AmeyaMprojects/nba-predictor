@@ -128,7 +128,7 @@ git log --format='%h %ci %s' -- predictions/</code></pre>
         <div><dt><span class="key key--market" aria-hidden="true"></span>Market picked</dt><dd>{b.market.accuracy}%</dd></div>
         <div><dt>Games tested</dt><dd>{nf(b.games)}</dd></div>
       </dl>
-      <p class="toc__note">Walk-forward, {b.seasons}, games with a closing line.</p>
+      <p class="toc__note">Walk-forward, {b.seasons.replaceAll('-', '\u2011')}, games with a closing line.</p>
     </div>
   </aside>
 </div>

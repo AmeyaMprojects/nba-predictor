@@ -15,6 +15,35 @@ const rows = [
 ];
 const missingMarket = r.graded - r.market.of;
 ---
+{none ? (
+<section class="record record--empty" id="record" aria-labelledby="record-h">
+  <div class="record__left">
+    <h2 id="record-h" class="label">Record so far</h2>
+    <p class="record__strip">
+      <span class="record__num record__num--s">{nf(r.calls)}</span>
+      <span class="record__unit">{r.calls === 1 ? 'call' : 'calls'} sealed, none graded yet. First grades after tonight's finals.</span>
+    </p>
+  </div>
+  <div class="record__right">
+    <p class="refrail__cap">Where each line landed over the {nf(backtest.games)}-game backtest (share of winners picked)</p>
+    <div class="refrail" aria-hidden="true">
+      <span class="refrail__track"></span>
+      {[50, 55, 60, 65, 70, 75].map((v) => <span class="refrail__scale" style={`--p:${(v - 50) / 25}`}>{v}%</span>)}
+      {rows.map((row, i) => (
+        <span class:list={['refrail__tick', `refrail__tick--${row.key}`]} style={`--p:${(row.ref - 50) / 25}; --row:${i}`}>
+          <span>{row.label} {row.key === 'home' ? `${backtest.home.low} to ${backtest.home.high}%` : `${row.ref}%`}</span>
+        </span>
+      ))}
+    </div>
+    <ul class="sr-only">
+      <li>Model: {backtest.model.accuracy}% in the backtest</li>
+      <li>Always pick home: {backtest.home.low} to {backtest.home.high}% a season</li>
+      <li>Market: {backtest.market.accuracy}% in the backtest</li>
+    </ul>
+    <p class="record__note">Live results start at 0 games, so for now the backtest is the only record to read (<a class="ilink" href={href('/method/')}>method</a>). Each graded game will appear here with its sample size.</p>
+  </div>
+</section>
+) : (
 <section class="record" id="record" aria-labelledby="record-h">
   <div class="record__left">
     <h2 id="record-h" class="label">Record so far</h2>
@@ -64,3 +93,4 @@ const missingMarket = r.graded - r.market.of;
     </p>
   </div>
 </section>
+)}

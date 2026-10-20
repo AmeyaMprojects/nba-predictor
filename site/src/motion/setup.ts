@@ -1,6 +1,8 @@
 // Global motion, registered once on the client before the first page initializes.
 import { onScroll } from '../engine';
 import { startSeal } from './seal';
+import { startNavState } from './navstate';
+import { startToc } from './toc';
 
 export function setupMotion() {
   // The header steps aside while reading down and returns on the way up.
@@ -11,4 +13,6 @@ export function setupMotion() {
     last = y;
   });
   startSeal();
+  startNavState();
+  startToc();
 }

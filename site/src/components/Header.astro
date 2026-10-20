@@ -5,7 +5,7 @@ interface Props { current?: string }
 const { current } = Astro.props;
 ---
 <header class="frame" data-frame>
-  <a class="frame__mark" href={href('/')} aria-current={current === 'Home' ? 'page' : undefined}>
+  <a class="frame__mark" href={href('/')}>
     <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" class="frame__glyph">
       <rect x="1.5" y="1.5" width="21" height="21" fill="none" stroke="currentColor" stroke-width="2" />
       <line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" stroke-width="2" />

@@ -1,5 +1,6 @@
 ---
 // The seal stamp: when the day's calls entered a public commit, and how long before the first tip.
+// Rendered as a <p> (the page heading stays plain text); the seal time is a real <time>.
 import type { Day } from '../lib/data';
 import { duration, timeIST, timeET } from '../lib/format';
 interface Props { day: Day; size?: 'hero' | 'page' }
@@ -7,18 +8,18 @@ const { day, size = 'hero' } = Astro.props;
 const lead = day.seal ? Date.parse(day.firstTip) - Date.parse(day.seal.time) : null;
 ---
 {day.seal ? (
-  <span class:list={['stamp', `stamp--${size}`]} data-stamp>
+  <p class:list={['stamp', `stamp--${size}`]} data-stamp>
     <span class="stamp__word">Sealed</span>
     <time class="stamp__time" datetime={day.seal.time}>{timeIST(day.seal.time).replace(' IST', '')}<span class="stamp__tz"> IST</span></time>
     <span class="stamp__lead">
-      {lead! >= 0 ? `${duration(lead!)} before the first tip` : `${duration(lead!)} after the first tip`}
-      <span class="stamp__et">{timeET(day.seal.time)}</span>
+      <span>sealed <time datetime={day.seal.time}>{timeET(day.seal.time)}</time></span>
+      <span class="stamp__et">{lead! >= 0 ? `${duration(lead!)} before the first tip` : `${duration(lead!)} after the first tip`}</span>
     </span>
-  </span>
+  </p>
 ) : (
-  <span class:list={['stamp', 'stamp--open', `stamp--${size}`]} data-stamp>
+  <p class:list={['stamp', 'stamp--open', `stamp--${size}`]} data-stamp>
     <span class="stamp__word">Not yet</span>
     <span class="stamp__time">committed</span>
     <span class="stamp__lead">The calls are written. The public commit that seals them has not been made yet.</span>
-  </span>
+  </p>
 )}
