@@ -16,6 +16,15 @@ const istDay = fmt(IST, { weekday: 'short', day: 'numeric', month: 'short' });
 export const timeET = (iso: string) => `${etTime.format(new Date(iso)).replace(' AM', ' am').replace(' PM', ' pm')} ET`;
 export const timeIST = (iso: string) => `${istTime.format(new Date(iso))} IST`;
 export const dayIST = (iso: string) => istDay.format(new Date(iso));
+const etDay = fmt(ET, { weekday: 'short', day: 'numeric', month: 'short' });
+export const dayET = (iso: string) => etDay.format(new Date(iso)).replace(',', '');
+/** "8:40 am ET" split for display: { hm: '8:40', ampm: 'am' } */
+export function partsET(iso: string) {
+  const [hm, ap] = etTime.format(new Date(iso)).split(' ');
+  return { hm, ampm: ap.toLowerCase() };
+}
+/** "market line at 8:22 am ET" from the observation time, ET-first. */
+export const marketWhen = (iso: string | null) => (iso ? `market line at ${timeET(iso)}` : 'market line');
 
 /** game_date is the league's (Eastern) calendar date: format it without shifting time zones. */
 export function gameDate(date: string, style: 'long' | 'short' | 'weekday' = 'long') {

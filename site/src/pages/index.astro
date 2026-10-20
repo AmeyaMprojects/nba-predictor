@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import Arrow from '../components/Arrow.astro';
 import Stamp from '../components/Stamp.astro';
 import Rail from '../components/Rail.astro';
 import GameRow from '../components/GameRow.astro';
@@ -34,7 +35,7 @@ const gradeFile = file.replace('.jsonl', '-grades.jsonl');
             {day.seal ? (
               <a class="stamp-link" href={site.commit(day.seal.hash)}>
                 <span class="stamp-link__k">Commit</span> <span class="stamp-link__v">{day.seal.short}</span>
-                <span class="stamp-link__arrow" aria-hidden="true">→</span>
+                <span class="stamp-link__arrow" aria-hidden="true"><Arrow /></span>
               </a>
             ) : (
               <p class="proof__open">Not yet committed</p>
@@ -48,7 +49,7 @@ const gradeFile = file.replace('.jsonl', '-grades.jsonl');
               {written && (
                 <div>
                   <dt>Model clock</dt>
-                  <dd>wrote these at {timeIST(written)}</dd>
+                  <dd>wrote these at {timeET(written)}</dd>
                 </div>
               )}
               <div>
@@ -74,7 +75,7 @@ const gradeFile = file.replace('.jsonl', '-grades.jsonl');
             {day.games.map((g) => <GameRow game={g} />)}
           </ol>
           <a class="more" href={dayHref(day.date)}>
-            <span>Full breakdown for {gameDate(day.date, 'short')}</span><span class="more__arrow" aria-hidden="true">→</span>
+            <span>Full breakdown for {gameDate(day.date, 'short')}</span><span class="more__arrow" aria-hidden="true"><Arrow /></span>
           </a>
         </div>
       </>
@@ -99,13 +100,13 @@ const gradeFile = file.replace('.jsonl', '-grades.jsonl');
         <span class="step__n" aria-hidden="true">1</span>
         <h3 class="step__t">Written</h3>
         <p>Once a day, before the first game, the model writes one line per game into <Path path={file} />: its chance for each side, its margin, and the market line it could see at that moment.</p>
-        {written && <p class="step__today">Latest: written {timeIST(written)}</p>}
+        {written && <p class="step__today">Latest: written {timeET(written)}</p>}
       </li>
       <li class="step" data-reveal="up" data-delay="0.06">
         <span class="step__n" aria-hidden="true">2</span>
         <h3 class="step__t">Committed</h3>
         <p>The file is committed and pushed to the public repository. The commit that added a line is its seal, and <code>git blame</code> names that commit for every line.</p>
-        {day?.seal && <p class="step__today">Latest: <a class="ilink" href={site.commit(day.seal.hash)} aria-label={`Commit ${day.seal.short}`}>{day.seal.short}</a> at {timeIST(day.seal.time)}</p>}
+        {day?.seal && <p class="step__today">Latest: <a class="ilink" href={site.commit(day.seal.hash)} aria-label={`Commit ${day.seal.short}`}>{day.seal.short}</a> at {timeET(day.seal.time)}</p>}
       </li>
       <li class="step" data-reveal="up" data-delay="0.12">
         <span class="step__n" aria-hidden="true">3</span>

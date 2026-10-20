@@ -1,5 +1,6 @@
 ---
 import Base from '../layouts/Base.astro';
+import Arrow from '../components/Arrow.astro';
 import { backtest, site } from '../data/site';
 import { latestDay } from '../lib/data';
 import { nf } from '../lib/format';
@@ -49,20 +50,35 @@ const b = backtest;
       <p>
         Walk-forward over {b.seasons}: each game was predicted using only what was known before it, then compared with the closing betting line. {nf(b.games)} games had a closing line.
       </p>
-      <div class="ledger__scroll">
-        <table class="table table--method">
-          <caption class="sr-only">Walk-forward results, {b.seasons}</caption>
-          <thead>
-            <tr><th scope="col"></th><th scope="col" class="num">Picked the winner</th><th scope="col" class="num">Brier score</th><th scope="col" class="num">Log loss</th></tr>
-          </thead>
-          <tbody>
-            <tr><th scope="row"><span class="key key--model" aria-hidden="true"></span>Model</th><td class="num">{b.model.accuracy}%</td><td class="num">{b.model.brier.toFixed(4)}</td><td class="num">{b.model.logLoss.toFixed(4)}</td></tr>
-            <tr><th scope="row"><span class="key key--market" aria-hidden="true"></span>Closing market</th><td class="num">{b.market.accuracy}%</td><td class="num">{b.market.brier.toFixed(4)}</td><td class="num">{b.market.logLoss.toFixed(4)}</td></tr>
-            <tr><th scope="row">Always pick home</th><td class="num">{b.home.low} to {b.home.high}% a season</td><td class="num"></td><td class="num"></td></tr>
-          </tbody>
-        </table>
+      <div class="btrails" aria-hidden="true">
+        <p class="btrails__cap">Share of winners picked, on a 50 to 75% scale</p>
+        {[
+          { key: 'model', label: 'Model', lo: b.model.accuracy, hi: b.model.accuracy, text: `${b.model.accuracy}%` },
+          { key: 'home', label: 'Always pick home', lo: b.home.low, hi: b.home.high, text: `${b.home.low} to ${b.home.high}%` },
+          { key: 'market', label: 'Closing market', lo: b.market.accuracy, hi: b.market.accuracy, text: `${b.market.accuracy}%` },
+        ].map((r) => (
+          <div class:list={['btrail', `btrail--${r.key}`]}>
+            <span class="btrail__label">{r.label}</span>
+            <span class="btrail__val">{r.text}</span>
+            <span class="btrail__track">
+              <span class="btrail__fill" style={`--p:${(r.lo - 50) / 25}`}></span>
+              {r.hi !== r.lo && <span class="btrail__range" style={`--a:${(r.lo - 50) / 25}; --b:${(r.hi - 50) / 25}`}></span>}
+            </span>
+          </div>
+        ))}
+        <div class="btrail__scale">{[50, 55, 60, 65, 70, 75].map((v) => <span style={`--p:${(v - 50) / 25}`}>{v}%</span>)}</div>
+        <p class="btrails__fit">Brier score: model {b.model.brier.toFixed(4)}, market {b.market.brier.toFixed(4)}. Log loss: model {b.model.logLoss.toFixed(4)}, market {b.market.logLoss.toFixed(4)}.</p>
       </div>
-      <p class="small">Lower is better for Brier score and log loss. Both measure how good the stated chances were, not just the picks.</p>
+      <table class="sr-only">
+        <caption>Walk-forward results, {b.seasons}</caption>
+        <thead><tr><th scope="col">Line</th><th scope="col">Picked the winner</th><th scope="col">Brier score</th><th scope="col">Log loss</th></tr></thead>
+        <tbody>
+          <tr><th scope="row">Model</th><td>{b.model.accuracy}%</td><td>{b.model.brier.toFixed(4)}</td><td>{b.model.logLoss.toFixed(4)}</td></tr>
+          <tr><th scope="row">Closing market</th><td>{b.market.accuracy}%</td><td>{b.market.brier.toFixed(4)}</td><td>{b.market.logLoss.toFixed(4)}</td></tr>
+          <tr><th scope="row">Always pick home</th><td>{b.home.low} to {b.home.high}% a season</td><td>not applicable</td><td>not applicable</td></tr>
+        </tbody>
+      </table>
+      <p class="small">Lower is better for Brier score and log loss; both measure how good the stated chances were, not just the picks.</p>
       <ul class="plain">
         <li>The market was ahead in every one of the six seasons, by {b.marketLeadRange} points of accuracy.</li>
         <li>In the {nf(b.disagreements.games)} games where the two disagreed (a different winner, or margins at least 10 points apart), the model was right {b.disagreements.model}% of the time and the market {b.disagreements.market}%.</li>
@@ -109,7 +125,7 @@ git log --format='%h %ci %s' -- predictions/</code></pre>
       <p>
         This is a public record of a model's calls, kept to see how close free data can get to the market. It is not a tip sheet. Nothing here says to bet on anything.
       </p>
-      <p><a class="more" href={href('/')}><span>Back to the latest calls</span><span class="more__arrow" aria-hidden="true">→</span></a></p>
+      <p><a class="more" href={href('/')}><span>Back to the latest calls</span><span class="more__arrow" aria-hidden="true"><Arrow /></span></a></p>
     </section>
   </article>
   <aside class="toc" aria-label="On this page">
@@ -123,12 +139,15 @@ git log --format='%h %ci %s' -- predictions/</code></pre>
         <li><a class="draw" href="#m-verify">How to verify a call</a></li>
         <li><a class="draw" href="#m-no">Not betting advice</a></li>
       </ol>
-      <dl class="toc__figs">
-        <div><dt><span class="key key--model" aria-hidden="true"></span>Model picked</dt><dd>{b.model.accuracy}%</dd></div>
-        <div><dt><span class="key key--market" aria-hidden="true"></span>Market picked</dt><dd>{b.market.accuracy}%</dd></div>
-        <div><dt>Games tested</dt><dd>{nf(b.games)}</dd></div>
-      </dl>
-      <p class="toc__note">Walk-forward, {b.seasons.replaceAll('-', '\u2011')}, games with a closing line.</p>
+      <div class="stamp stamp--card">
+        <span class="stamp__word">Backtest</span>
+        <dl class="card__figs">
+          <div class="card__fig card__fig--model"><dt>Model picked</dt><dd>{b.model.accuracy}%</dd></div>
+          <div class="card__fig"><dt>Market picked</dt><dd>{b.market.accuracy}%</dd></div>
+          <div class="card__fig card__fig--n"><dt>Games tested</dt><dd>{nf(b.games)}</dd></div>
+        </dl>
+        <span class="stamp__lead">walk-forward, <span class="nw">{b.seasons}</span></span>
+      </div>
     </div>
   </aside>
 </div>

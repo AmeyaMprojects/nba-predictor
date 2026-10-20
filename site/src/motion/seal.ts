@@ -5,7 +5,7 @@
 // Reduced motion: no tweens; every marker sits at its true position.
 import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
-import { ease, onPage, prefersReducedMotion } from '../engine';
+import { ease, onPage, prefersReducedMotion, quickIntro } from '../engine';
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -33,6 +33,7 @@ const et = (ms: number) => `${etClock.format(new Date(ms)).replace(' AM', ' am')
 export function startSeal() {
   onPage(({ intro }) => {
     const reduced = prefersReducedMotion();
+    const quick = quickIntro();
     const off: (() => void)[] = [];
 
     // --- the stamp press -------------------------------------------------------------------
@@ -41,9 +42,10 @@ export function startSeal() {
       // The stamp-down: tilted and lifted (CSS) to its resting -2deg, shadow collapsing to 1px.
       // Tweens CSS variables, so transform stays the only thing that changes (no opacity: the text
       // is visible and the LCP from the first paint).
+      // Phones and arrivals by page transition get a shorter press so the screen settles fast.
       const press = gsap.fromTo(s,
-        { '--st-r': '-8deg', '--st-s': 1.12, '--st-sh': '9px' },
-        { '--st-r': '-2deg', '--st-s': 1, '--st-sh': '1px', duration: 0.45, ease: ease.stamp, paused: true,
+        quick ? { '--st-r': '-4deg', '--st-s': 1.05, '--st-sh': '5px' } : { '--st-r': '-8deg', '--st-s': 1.12, '--st-sh': '9px' },
+        { '--st-r': '-2deg', '--st-s': 1, '--st-sh': '1px', duration: quick ? 0.25 : 0.45, ease: ease.stamp, paused: true,
           onComplete: () => s.classList.add('is-pressed') });
       intro.add(() => press.play(), 0.1);
     });
@@ -86,7 +88,7 @@ export function startSeal() {
       if (reduced || frac() >= 1) { applyRail(frac()); introDone = true; }
       else {
         applyRail(0);
-        intro.add(gsap.to(shown, { p: frac(), duration: 0.9, ease: ease.out, onUpdate: () => applyRail(shown.p), onComplete: () => { introDone = true; } }), 0.2);
+        intro.add(gsap.to(shown, { p: frac(), duration: quick ? 0.5 : 0.9, ease: ease.out, onUpdate: () => applyRail(shown.p), onComplete: () => { introDone = true; } }), 0.2);
       }
     }
 
@@ -142,8 +144,11 @@ export function startSeal() {
       const trail = court.querySelector<HTMLElement>('[data-trail]');
       const mx = parseFloat(getComputedStyle(court).getPropertyValue('--mx')) || 0.5;
       const kx = parseFloat(getComputedStyle(court).getPropertyValue('--kx')) || 0.5;
-      const tl = gsap.timeline({ paused: true });
+      // Marks render at their true positions in the HTML; the slide is built only when the line
+      // comes into view (threshold 0), so a line is never shown empty or parked at centre court.
       const w = () => court.clientWidth;
+      const play = () => {
+      const tl = gsap.timeline();
       if (dot) tl.from(dot, { x: () => (0.5 - mx) * w(), duration: 0.9, ease: ease.out }, 0);
       if (ring) tl.from(ring, { x: () => (0.5 - kx) * w(), duration: 0.9, ease: ease.out }, 0.06);
       if (trail) tl.from(trail, { scaleX: 0, duration: 0.9, ease: ease.out }, 0.5);
@@ -151,13 +156,15 @@ export function startSeal() {
         const bx = ball.style.left ? parseFloat(ball.style.left) / 100 : 0.5;
         tl.from(ball, { x: () => (mx - bx) * w(), autoAlpha: 0, duration: 0.9, ease: ease.out }, 0.5);
       }
-      ScrollTrigger.create({ trigger: court, start: 'top 92%', once: true, onEnter: () => tl.play() });
+      };
+      ScrollTrigger.create({ trigger: court, start: 'top bottom', once: true, onEnter: play });
     });
 
     // --- record bars fill along their rails -------------------------------------------------------
     document.querySelectorAll<HTMLElement>('[data-bar]').forEach((bar, i) => {
       if (reduced) return;
-      gsap.from(bar, { scaleX: 0, duration: 0.9, ease: ease.out, delay: i * 0.06, scrollTrigger: { trigger: bar, start: 'top 92%', once: true } });
+      ScrollTrigger.create({ trigger: bar, start: 'top bottom', once: true,
+        onEnter: () => gsap.from(bar, { scaleX: 0, duration: 0.9, ease: ease.out, delay: i * 0.06 }) });
     });
 
     return () => off.forEach((f) => f());

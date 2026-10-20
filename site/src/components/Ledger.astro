@@ -3,7 +3,7 @@
 import type { Day } from '../lib/data';
 import { site } from '../data/site';
 import { dayHref } from '../lib/url';
-import { duration, gameDate, gameMonth, timeIST } from '../lib/format';
+import { duration, gameDate, gameMonth, timeET } from '../lib/format';
 
 interface Props { days: Day[] }
 const days = [...Astro.props.days].reverse();
@@ -46,7 +46,7 @@ const tally = (t: { right: number; of: number }) => (t.of ? `${t.right}/${t.of}`
                 <td class="num">{d.graded ? tally(d.model) : <span class="muted">pending</span>}</td>
                 <td class="num opt">{d.graded ? tally(d.home) : <span class="muted">pending</span>}</td>
                 <td class="num">{d.graded ? (d.market.of ? tally(d.market) : <span class="muted">no line</span>) : <span class="muted">pending</span>}</td>
-                <td class="opt gap">{d.seal ? timeIST(d.seal.time) : <span class="muted">not yet committed</span>}</td>
+                <td class="opt gap">{d.seal ? timeET(d.seal.time) : <span class="muted">not yet committed</span>}</td>
                 <td class="opt">{lead == null ? '' : lead >= 0 ? duration(lead) : <span class="late">{duration(lead)} after</span>}</td>
                 <td>{d.seal ? <a class="hash" href={site.commit(d.seal.hash)}>{d.seal.short}</a> : <span class="muted">none</span>}</td>
               </tr>

@@ -27,11 +27,14 @@ const ld = jsonLd ?? {
   author: { '@type': 'Person', name: site.owner.name, url: site.repo },
 };
 const fonts = {
-  archivo: href('/fonts/archivo.woff2'),
+  text: href('/fonts/archivo-text.woff2'),
+  display: href('/fonts/archivo-display.woff2'),
   mono: href('/fonts/jetbrains-mono.woff2'),
 };
+// Subset builds (scripts/subset-fonts.py): body at width 100, display pinned at width 64, mono.
 const fontCss = `
-@font-face{font-family:'Archivo';src:url('${fonts.archivo}') format('woff2');font-weight:400 800;font-stretch:62% 100%;font-style:normal;font-display:swap}
+@font-face{font-family:'Archivo';src:url('${fonts.text}') format('woff2');font-weight:400 700;font-style:normal;font-display:swap}
+@font-face{font-family:'Archivo Display';src:url('${fonts.display}') format('woff2');font-weight:700 800;font-stretch:50% 150%;font-style:normal;font-display:swap}
 @font-face{font-family:'JetBrains Mono';src:url('${fonts.mono}') format('woff2');font-weight:400 500;font-style:normal;font-display:swap}`;
 ---
 <!doctype html>
@@ -60,8 +63,8 @@ const fontCss = `
     <meta name="twitter:title" content={fullTitle} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={ogImage} />
-    <link rel="preload" href={fonts.archivo} as="font" type="font/woff2" crossorigin />
-    <link rel="preload" href={fonts.mono} as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href={fonts.text} as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href={fonts.display} as="font" type="font/woff2" crossorigin />
     <style is:inline set:html={fontCss}></style>
     <script type="application/ld+json" set:html={JSON.stringify(ld)} />
     <script is:inline>
@@ -79,9 +82,9 @@ const fontCss = `
     </main>
     <Footer />
     <script>
-      import { start } from '../engine/astro';
-      import { setupMotion } from '../motion/setup';
-      start(setupMotion);
+      // The motion engine (GSAP, ScrollTrigger, Lenis) loads as a separate chunk so it never holds
+      // up the page: the HTML, CSS and fonts are complete on their own.
+      Promise.all([import('../engine/astro'), import('../motion/setup')]).then(([{ start }, { setupMotion }]) => start(setupMotion));
     </script>
   </body>
 </html>

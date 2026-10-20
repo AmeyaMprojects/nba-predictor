@@ -1,18 +1,38 @@
 ---
 import Base from '../layouts/Base.astro';
-import { href } from '../lib/url';
+import Arrow from '../components/Arrow.astro';
+import { getData } from '../lib/data';
+import { dayHref, href } from '../lib/url';
+import { gameDate } from '../lib/format';
+const recent = [...getData().days].reverse().slice(0, 3);
 ---
 <Base title="No call sealed here" description="This page does not exist. No call was sealed for it.">
   <section class="lost" aria-labelledby="lost-h">
     <p class="label">404</p>
-    <h1 id="lost-h" class="lost__title">
-      <span class="stamp stamp--open stamp--hero stamp--lost" data-stamp>
+    <div class="lost__title">
+      <p class="stamp stamp--open stamp--hero stamp--lost" data-stamp aria-hidden="true">
         <span class="stamp__word">Unsealed</span>
         <span class="stamp__time">404</span>
-        <span class="stamp__lead">No call was sealed for this page.</span>
-      </span>
-    </h1>
+      </p>
+    </div>
+    <h1 id="lost-h" class="lost__h1">No call was sealed for this page</h1>
     <p class="lost__text">The address may be from an old link, or a day the model did not run.</p>
-    <p><a class="more" href={href('/')}><span>Go to the latest calls</span><span class="more__arrow" aria-hidden="true">→</span></a></p>
+    <p><a class="more" href={href('/')}><span>Go to the latest calls</span><span class="more__arrow" aria-hidden="true"><Arrow /></span></a></p>
+    {recent.length > 0 && (
+      <nav class="lost__days" aria-label="Recent sealed days">
+        <p class="label">Recently sealed</p>
+        <ul>
+          {recent.map((d) => (
+            <li>
+              <a class="lostday" href={dayHref(d.date)}>
+                <span class="lostday__date">{gameDate(d.date, 'long')}</span>
+                <span class="lostday__meta">{d.called.length} {d.called.length === 1 ? 'call' : 'calls'}{d.graded ? `, model ${d.model.right} of ${d.graded}` : ', results pending'}</span>
+                <span class="lostday__arrow" aria-hidden="true"><Arrow /></span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </nav>
+    )}
   </section>
 </Base>

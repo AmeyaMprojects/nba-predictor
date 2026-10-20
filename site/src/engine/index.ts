@@ -7,11 +7,11 @@ import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { initScroll, resetScroll, startScroll, stopScroll } from './scroll';
 import { initReveals } from './reveal';
 import { playEnter, playLeave } from './transition';
-import { prefersReducedMotion } from './env';
+import { markNavigated, prefersReducedMotion } from './env';
 
 export { onScroll, scrollState, scrollToTarget, stopScroll, startScroll } from './scroll';
 export { setTransition, setDestination } from './transition';
-export { ease, isTouch, isMobile, prefersReducedMotion } from './env';
+export { ease, isTouch, isMobile, prefersReducedMotion, quickIntro } from './env';
 
 export type PageFn = (page: { intro: gsap.core.Timeline; path: string }) => void | (() => void);
 const pageFns = new Set<PageFn>();
@@ -75,6 +75,7 @@ export function cleanup() {
 
 export async function enter({ transition = true, scrollTop = true } = {}) {
   if (!booted) return;
+  markNavigated();
   cleanup();
   if (scrollTop) resetScroll();
   initPage();

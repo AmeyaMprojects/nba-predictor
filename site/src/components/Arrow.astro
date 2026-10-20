@@ -1,0 +1,8 @@
+---
+// Drawn arrow (none of the three typefaces carries arrow glyphs, so nothing falls back to a system font).
+interface Props { dir?: 'right' | 'left' }
+const { dir = 'right' } = Astro.props;
+---
+<svg class="arrow" viewBox="0 0 16 10" width="1em" height="0.625em" aria-hidden="true" style={dir === 'left' ? 'rotate:180deg' : undefined}>
+  <path d="M0 5h14M10 1l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="square" />
+</svg>

@@ -4,7 +4,7 @@
 // Skipped under reduced motion; CSS keeps content visible without JS.
 import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
-import { ease, prefersReducedMotion } from './env';
+import { ease, prefersReducedMotion, quickIntro } from './env';
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -33,8 +33,10 @@ function blockTween(el: HTMLElement, paused: boolean) {
 export function initReveals(root: ParentNode = document) {
   const intro = gsap.timeline({ paused: true });
   if (prefersReducedMotion()) return intro;
+  const quick = quickIntro();
   root.querySelectorAll<HTMLElement>('[data-reveal]').forEach((el) => {
     const isIntro = el.hasAttribute('data-intro');
+    if (isIntro && quick) return void gsap.set(el, { visibility: 'visible' });
     const t = blockTween(el, isIntro);
     if (isIntro) intro.add(() => t.play(), 0);
   });

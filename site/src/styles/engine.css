@@ -11,7 +11,6 @@ body {
   min-height: 100dvh;
   font-family: var(--f-body);
   font-size: var(--t-body);
-  font-variation-settings: 'wdth' 100;
   line-height: 1.5;
   background: var(--c-bg);
   -webkit-font-smoothing: antialiased;

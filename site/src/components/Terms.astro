@@ -1,17 +1,22 @@
 ---
 // The model's margin, term by term. Each bar grows from the centre toward the side it favours.
 import type { Game } from '../lib/data';
+import Arrow from './Arrow.astro';
 import { modelSpread, TERM_LABELS, termText } from '../lib/format';
 interface Props { game: Game }
 const { game: g } = Astro.props;
 const terms = g.terms!;
 const scale = Math.max(8, ...TERM_LABELS.map(([k]) => Math.abs(terms[k] ?? 0)), Math.abs(g.spread ?? 0));
 const w = (v: number) => Math.min(1, Math.abs(v) / scale) / 2;
+// Only terms that move the line get a bar; the rest fold into one "even" line.
+const moving = TERM_LABELS.filter(([k]) => Math.abs(terms[k] ?? 0) >= 0.05);
+const flat = TERM_LABELS.filter(([k]) => Math.abs(terms[k] ?? 0) < 0.05).map(([, l]) => l);
+const flatText = flat.length ? `${flat.map((l, i) => (i ? l.toLowerCase() : l)).join(', ')}: even` : null;
 ---
 <div class="terms">
-  <p class="terms__axis" aria-hidden="true"><span>← {g.away_team}</span><span>{g.home_team} →</span></p>
+  <p class="terms__axis" aria-hidden="true"><span><Arrow dir="left" /> {g.away_team}</span><span>{g.home_team} <Arrow /></span></p>
   <dl>
-    {TERM_LABELS.map(([k, label]) => {
+    {moving.map(([k, label]) => {
       const v = terms[k] ?? 0;
       return (
         <div class="term">
@@ -23,6 +28,12 @@ const w = (v: number) => Math.min(1, Math.abs(v) / scale) / 2;
         </div>
       );
     })}
+    {flatText && (
+      <div class="term term--flat">
+        <dt>{flatText}</dt>
+        <dd><span class="term__val">no effect</span></dd>
+      </div>
+    )}
     <div class="term term--total">
       <dt>Model margin</dt>
       <dd>

@@ -1,5 +1,5 @@
-// Method page: the "On this page" index marks the section being read (one clock: ScrollTrigger).
-import { ScrollTrigger } from 'gsap/ScrollTrigger';
+// Method page: the "On this page" index marks the section being read. IntersectionObserver, so it
+// works the same with or without motion (reduced motion turns off smooth scroll, not the spy).
 import { onPage } from '../engine';
 
 export function startToc() {
@@ -11,15 +11,15 @@ export function startToc() {
       a.closest('li')?.classList.toggle('is-current', on);
       if (on) a.setAttribute('aria-current', 'location'); else a.removeAttribute('aria-current');
     });
-    links.forEach((a) => {
-      const id = a.getAttribute('href')!.slice(1);
-      const section = document.getElementById(id)?.closest('section');
-      if (!section) return;
-      ScrollTrigger.create({
-        trigger: section, start: 'top 45%', end: 'bottom 45%',
-        onToggle: (st) => { if (st.isActive) mark(id); },
-      });
-    });
-    mark(links[0].getAttribute('href')!.slice(1));
+    const sections = links
+      .map((a) => document.getElementById(a.getAttribute('href')!.slice(1))?.closest('section'))
+      .filter((s): s is HTMLElement => !!s);
+    // A thin band at 40% of the viewport height: the section crossing it is the one being read.
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) if (e.isIntersecting) mark(e.target.querySelector('h2')!.id);
+    }, { rootMargin: '-40% 0px -59% 0px' });
+    sections.forEach((s) => io.observe(s));
+    mark(sections[0]?.querySelector('h2')?.id ?? '');
+    return () => io.disconnect();
   });
 }

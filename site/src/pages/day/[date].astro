@@ -1,5 +1,6 @@
 ---
 import Base from '../../layouts/Base.astro';
+import Arrow from '../../components/Arrow.astro';
 import Stamp from '../../components/Stamp.astro';
 import Rail from '../../components/Rail.astro';
 import GameRow from '../../components/GameRow.astro';
@@ -8,7 +9,7 @@ import Path from '../../components/Path.astro';
 import { getData, type Day } from '../../lib/data';
 import { site } from '../../data/site';
 import { dayHref, href } from '../../lib/url';
-import { gameDate, gameDayNum, gameMonth, modelPick, timeET, timeIST, dayIST } from '../../lib/format';
+import { gameDate, gameDayNum, gameMonth, modelPick, timeET, dayET, marketWhen } from '../../lib/format';
 
 export function getStaticPaths() {
   const { days } = getData();
@@ -30,7 +31,7 @@ const sharedWritten = same(called.map((g) => g.predicted_at));
 const sharedCode = same(called.map((g) => `${g.code_version ?? ''}|${!!g.code_dirty}`));
 const code = called[0]?.code_version;
 const dirty = called[0]?.code_dirty;
-const mkt = (g: typeof called[number]) => (g.market_p_home != null ? `${g.market_label ?? 'market line'}, ${g.market_books ?? 'unknown number of'} books` : 'no market line was available');
+const mkt = (g: typeof called[number]) => (g.market_p_home != null ? `${marketWhen(g.market_observed_at)}, ${g.market_books ?? 'unknown number of'} books` : 'no market line was available');
 const sharedMarket = same(called.map(mkt));
 const sharedGraded = same(called.filter((g) => g.grade).map((g) => g.grade!.graded_at));
 const h1 = `${gameDate(day.date, 'weekday')} ${gameDayNum(day.date)} ${gameMonth(day.date)} ${year}: ${day.called.length} ${day.called.length === 1 ? 'call' : 'calls'}`;
@@ -43,21 +44,20 @@ const h1 = `${gameDate(day.date, 'weekday')} ${gameDayNum(day.date)} ${gameMonth
       <span aria-current="page">{day.date}</span>
     </nav>
     <div class="dayhero__grid">
-      <h1 id="day-h" class="dayhero__title">
-        <span class="sr-only">{h1}</span>
-        <span class="dayhero__num" aria-hidden="true">{gameDayNum(day.date)}</span>
-        <span class="dayhero__month" aria-hidden="true">{gameMonth(day.date)} {year}</span>
-        <span class="dayhero__weekday" aria-hidden="true">{gameDate(day.date, 'weekday')}, {day.called.length} {day.called.length === 1 ? 'call' : 'calls'}</span>
-      </h1>
+      <div class="dayhero__title">
+        <p class="dayhero__num" aria-hidden="true">{gameDayNum(day.date)}</p>
+        <p class="dayhero__month" aria-hidden="true">{gameMonth(day.date)} {year}</p>
+        <h1 id="day-h" class="dayhero__weekday">{h1}</h1>
+      </div>
       <div class="dayhero__side" data-reveal="fade" data-intro data-delay="0.2">
         <Stamp day={day} size="page" />
         <dl class="proof__facts">
           <div><dt>Commit</dt><dd>{day.seal ? <a class="hash" href={site.commit(day.seal.hash)}>{day.seal.short}</a> : 'not yet committed'}</dd></div>
           <div><dt>Graded</dt><dd>{day.graded} of {day.called.length}{day.graded > 0 && `, model ${day.model.right} right`}</dd></div>
           {day.graded > 0 && day.market.of > 0 && <div><dt>Market right</dt><dd>{day.market.right} of {day.market.of}</dd></div>}
-          {sharedWritten && <div><dt>Written</dt><dd>{timeIST(sharedWritten)}, {dayIST(sharedWritten)}</dd></div>}
+          {sharedWritten && <div><dt>Written</dt><dd>{timeET(sharedWritten)}, {dayET(sharedWritten)}</dd></div>}
           {sharedMarket && <div><dt>Market line</dt><dd>{sharedMarket}</dd></div>}
-          {sharedGraded && day.graded === called.length && <div><dt>Graded at</dt><dd>{timeIST(sharedGraded)}, {dayIST(sharedGraded)}</dd></div>}
+          {sharedGraded && day.graded === called.length && <div><dt>Graded at</dt><dd>{timeET(sharedGraded)}, {dayET(sharedGraded)}</dd></div>}
           {sharedCode && code && <div><dt>Code</dt><dd><a class="hash" href={site.commit(code)}>{code}</a>{dirty && ' with uncommitted changes'}</dd></div>}
         </dl>
       </div>
@@ -84,18 +84,18 @@ const h1 = `${gameDate(day.date, 'weekday')} ${gameDayNum(day.date)} ${gameMonth
               </>
             )}
             <dl class="facts">
-              {!sharedWritten && <div><dt>Written</dt><dd>{timeIST(g.predicted_at)}, {dayIST(g.predicted_at)}</dd></div>}
+              {!sharedWritten && <div><dt>Written</dt><dd>{timeET(g.predicted_at)}, {dayET(g.predicted_at)}</dd></div>}
               {g.seal?.hash !== day.seal?.hash && <div>
                 <dt>Sealed</dt>
                 <dd>
                   {g.seal
-                    ? <><a class="hash" href={site.commit(g.seal.hash)}>{g.seal.short}</a> at {timeIST(g.seal.time)} ({timeET(g.seal.time)})</>
+                    ? <><a class="hash" href={site.commit(g.seal.hash)}>{g.seal.short}</a> at {timeET(g.seal.time)}, {dayET(g.seal.time)}</>
                     : 'not yet committed'}
                 </dd>
               </div>}
               <div><dt>Line</dt><dd><a class="ulink" href={`${site.rawFile(g.file)}#L${g.line}`}><Path path={g.file} /> line {g.line}</a></dd></div>
               {g.status === 'predicted' && !sharedMarket && <div><dt>Market</dt><dd>{mkt(g)}</dd></div>}
-              {g.grade && <div><dt>Grade</dt><dd>{g.grade.correct ? 'model right' : 'model wrong'}{g.grade.market_correct != null && `, market ${g.grade.market_correct ? 'right' : 'wrong'}`}{!(sharedGraded && day.graded === called.length) && `, graded ${timeIST(g.grade.graded_at)}`}</dd></div>}
+              {g.grade && <div><dt>Grade</dt><dd>{g.grade.correct ? 'model right' : 'model wrong'}{g.grade.market_correct != null && `, market ${g.grade.market_correct ? 'right' : 'wrong'}`}{!(sharedGraded && day.graded === called.length) && `, graded ${timeET(g.grade.graded_at)}`}</dd></div>}
               {!sharedCode && g.code_version && <div><dt>Code</dt><dd><a class="hash" href={site.commit(g.code_version)}>{g.code_version}</a>{g.code_dirty && ' with uncommitted changes'}</dd></div>}
             </dl>
           </div>
@@ -105,7 +105,7 @@ const h1 = `${gameDate(day.date, 'weekday')} ${gameDayNum(day.date)} ${gameMonth
   </ol>
 
   <nav class="pager" aria-label="Other days">
-    {prev ? <a class="more more--back" href={dayHref(prev)}><span class="more__arrow" aria-hidden="true">←</span><span>{gameDate(prev, 'long')}</span></a> : <span></span>}
-    {next ? <a class="more" href={dayHref(next)}><span>{gameDate(next, 'long')}</span><span class="more__arrow" aria-hidden="true">→</span></a> : <a class="more" href={href('/')}><span>Back to the latest slate</span><span class="more__arrow" aria-hidden="true">→</span></a>}
+    {prev ? <a class="more more--back" href={dayHref(prev)}><span class="more__arrow" aria-hidden="true"><Arrow dir="left" /></span><span>{gameDate(prev, 'long')}</span></a> : <span></span>}
+    {next ? <a class="more" href={dayHref(next)}><span>{gameDate(next, 'long')}</span><span class="more__arrow" aria-hidden="true"><Arrow /></span></a> : <a class="more" href={href('/')}><span>Back to the latest slate</span><span class="more__arrow" aria-hidden="true"><Arrow /></span></a>}
   </nav>
 </Base>

@@ -1,19 +1,20 @@
 ---
-// The seal stamp: when the day's calls entered a public commit, and how long before the first tip.
-// Rendered as a <p> (the page heading stays plain text); the seal time is a real <time>.
+// The seal stamp: when the day's calls entered a public commit, ET first (the league's clock),
+// India time on the small line. Rendered as a <p>; the seal time is a real <time>.
 import type { Day } from '../lib/data';
-import { duration, timeIST, timeET } from '../lib/format';
+import { duration, partsET, timeIST } from '../lib/format';
 interface Props { day: Day; size?: 'hero' | 'page' }
 const { day, size = 'hero' } = Astro.props;
 const lead = day.seal ? Date.parse(day.firstTip) - Date.parse(day.seal.time) : null;
+const et = day.seal ? partsET(day.seal.time) : null;
 ---
 {day.seal ? (
   <p class:list={['stamp', `stamp--${size}`]} data-stamp>
     <span class="stamp__word">Sealed</span>
-    <time class="stamp__time" datetime={day.seal.time}>{timeIST(day.seal.time).replace(' IST', '')}<span class="stamp__tz"> IST</span></time>
+    <time class="stamp__time" datetime={day.seal.time}>{et!.hm}<span class="stamp__tz"> {et!.ampm} ET</span></time>
     <span class="stamp__lead">
-      <span>sealed <time datetime={day.seal.time}>{timeET(day.seal.time)}</time></span>
-      <span class="stamp__et">{lead! >= 0 ? `${duration(lead!)} before the first tip` : `${duration(lead!)} after the first tip`}</span>
+      <span>{lead! >= 0 ? `${duration(lead!)} before the first tip` : `${duration(lead!)} after the first tip`}</span>
+      <span class="stamp__et">{timeIST(day.seal.time)} in India</span>
     </span>
   </p>
 ) : (

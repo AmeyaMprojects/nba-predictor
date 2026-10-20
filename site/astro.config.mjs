@@ -8,5 +8,5 @@ export default defineConfig({
   base: '/nba-predictor',
   trailingSlash: 'always',
   prefetch: { prefetchAll: true, defaultStrategy: 'hover' },
-  build: { inlineStylesheets: 'auto', format: 'directory' },
+  build: { inlineStylesheets: 'always', format: 'directory' },
 });
