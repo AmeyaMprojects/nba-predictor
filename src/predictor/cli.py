@@ -460,6 +460,94 @@ def _capture_results(target: str):
         con.close()
 
 
+def _grade_seasons(con, repo_dir, season: str, now) -> tuple[int, set[str]]:
+    """Grade `season`'s prediction log and, when it exists, the previous
+    season's -- the one grading rule shared by `predict-today` and
+    `capture-results`. Returns (grade lines appended, seasons touched).
+
+    A season boundary can leave predictions from the PREVIOUS season still
+    ungraded (its games' results arrive after today's slate has already
+    rolled over to a new season label) -- grade that log too, whenever it
+    exists, so those predictions are not stranded ungraded forever. grade()
+    is a no-op (appends nothing) for every game already graded, so this is
+    always safe to run again -- whichever command ran it first."""
+    from predictor.config import previous_season_label
+    from predictor.model.live import grade, log_path
+
+    graded = 0
+    seasons_touched = {season}
+    previous_season = previous_season_label(season)
+    if log_path(repo_dir, previous_season).exists():
+        graded += grade(con, repo_dir, previous_season, now)
+        seasons_touched.add(previous_season)
+    graded += grade(con, repo_dir, season, now)
+    return graded, seasons_touched
+
+
+def _prediction_paths(repo_dir, seasons) -> list:
+    """Each season's prediction log and grades file -- what a publish
+    commits (only ever paths under `predictions/`)."""
+    from predictor.model.live import grades_path, log_path
+
+    return [
+        p
+        for s in sorted(seasons)
+        for p in (log_path(repo_dir, s), grades_path(repo_dir, s))
+    ]
+
+
+def _grade_and_publish(season: str) -> None:
+    """After a successful `capture-results`: grade what just became
+    gradable and publish it, so the site shows grades without waiting for
+    the evening predict-today run. With no new grades, still push any
+    earlier prediction commits that never made it out (e.g. the 18:00 push
+    failed for lack of network). Best effort: every failure is one plain
+    line and never fails the capture, which is already safely recorded --
+    the next run retries."""
+    from predictor import db
+    from predictor.model import publish
+    from predictor.model.live import slate_date
+
+    repo_dir = _repo_dir()
+    # The capture stamps its rows with the real time it fetched them --
+    # read `now` after it, as predict-today's catch-up does.
+    now = _now()
+    try:
+        con = db.connect_with_retry(read_only=True)
+        try:
+            graded, seasons_touched = _grade_seasons(con, repo_dir, season, now)
+        finally:
+            con.close()
+    except Exception as exc:  # noqa: BLE001 -- best effort; the capture is done
+        typer.echo(
+            f"capture-results: results recorded, but grading failed ({exc}); "
+            "the next run will try again."
+        )
+        return
+
+    typer.echo(f"grades appended: {graded}")
+    if graded:
+        publish_result = publish.commit_and_push(
+            repo_dir,
+            _prediction_paths(repo_dir, seasons_touched),
+            f"predictions: grades {slate_date(now).isoformat()}",
+        )
+    else:
+        # Nothing new to commit -- but an earlier run's prediction commit
+        # may still be waiting to go out (its push failed). Quiet unless
+        # there is something unpushed: the usual case is nothing at all.
+        if not publish.unpushed_commits(repo_dir):
+            return
+        publish_result = publish.push_pending(repo_dir)
+
+    # Same wording as predict-today -- except that even a genuine git
+    # failure only warns here: the capture itself succeeded.
+    if publish_result.pushed:
+        typer.echo(publish_result.message)
+    else:
+        typer.echo(f"WARNING: {publish_result.message}")
+
+
 @app.command("capture-results")
 def capture_results_cmd(
     season: str = typer.Option(
@@ -503,6 +591,8 @@ def capture_results_cmd(
             "finished) -- not recorded this run; a later run will record them."
         )
 
+    _grade_and_publish(target)
+
     if result.dropped:
         ids = ", ".join(result.dropped)
         typer.echo(
@@ -531,14 +621,11 @@ def predict_today_cmd(
     import duckdb
 
     from predictor import db, net
-    from predictor.config import previous_season_label, season_label
+    from predictor.config import season_label
     from predictor.model import publish
     from predictor.model import settings as model_settings
     from predictor.model.live import (
         LogError,
-        grade,
-        grades_path,
-        log_path,
         market_odds_due,
         predict_today,
         results_missing,
@@ -645,20 +732,7 @@ def predict_today_cmd(
         slate = slate_for(con, now)
         season = slate[0].season if slate else season_label(now)
 
-        # A season boundary can leave predictions from the PREVIOUS season
-        # still ungraded (its games' results arrive after today's slate has
-        # already rolled over to a new season label) -- grade that log too,
-        # whenever it exists, so those predictions are not stranded
-        # ungraded forever. grade() is a no-op (appends nothing) once
-        # everything in it is already graded, so this is always safe to run.
-        graded = 0
-        seasons_touched = {season}
-        previous_season = previous_season_label(season)
-        if log_path(repo_dir, previous_season).exists():
-            graded += grade(con, repo_dir, previous_season, now)
-            seasons_touched.add(previous_season)
-
-        graded += grade(con, repo_dir, season, now)
+        graded, seasons_touched = _grade_seasons(con, repo_dir, season, now)
         result = predict_today(con, loaded_settings, repo_dir, now)
     except LogError as exc:
         typer.echo(str(exc))
@@ -676,11 +750,7 @@ def predict_today_cmd(
     # than today's slate -- publish every log this run actually appended to.
     seasons_touched |= {line["season"] for line in result.lines_written}
     date_str = slate_date(now).isoformat()
-    paths = [
-        p
-        for s in sorted(seasons_touched)
-        for p in (log_path(repo_dir, s), grades_path(repo_dir, s))
-    ]
+    paths = _prediction_paths(repo_dir, seasons_touched)
     publish_result = publish.commit_and_push(
         repo_dir, paths, f"predictions: {date_str} slate", push=not no_push
     )

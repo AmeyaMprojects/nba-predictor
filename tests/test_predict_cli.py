@@ -865,3 +865,199 @@ def test_no_network_wait_when_no_catch_up_is_due(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert hosts == []
+
+
+# --- capture-results grades and publishes as soon as results arrive --------
+
+
+def _predicted_game_awaiting_result(con, repo_dir, now, game_id="0022600901"):
+    """A game that tipped 5 hours before `now` (past FINISHED_AFTER_TIP),
+    predicted before tip-off, with no FINAL row yet."""
+    import json
+
+    tip = now - timedelta(hours=5)
+    insert_schedule_row(con, game_id, date(2026, 11, 9), "PHI", "NYK", tip, season=SEASON)
+    con.close()
+    path = log_path(repo_dir, SEASON)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(_predicted_line(game_id, SEASON, "2026-11-09", tip,
+                                           tip - timedelta(hours=6)), sort_keys=True) + "\n")
+    assert _git(repo_dir, "add", "predictions").returncode == 0
+    assert _git(repo_dir, "commit", "-m", "predictions: 2026-11-09 slate").returncode == 0
+    assert _git(repo_dir, "push", "origin", "main").returncode == 0
+    return game_id
+
+
+def _download_finishing(monkeypatch, now, df):
+    monkeypatch.setattr(
+        results, "download",
+        lambda season: _REAL_DOWNLOAD(season, fetched_at=now, fetch=lambda s: df),
+    )
+
+
+def _spy_publish(monkeypatch):
+    from predictor.model import publish
+
+    calls = {"commit": [], "push_pending": 0}
+    real_commit, real_pending = publish.commit_and_push, publish.push_pending
+
+    def commit(repo_dir, paths, message, push=True):
+        calls["commit"].append((list(paths), message))
+        return real_commit(repo_dir, paths, message, push=push)
+
+    def pending(repo_dir):
+        calls["push_pending"] += 1
+        return real_pending(repo_dir)
+
+    monkeypatch.setattr(publish, "commit_and_push", commit)
+    monkeypatch.setattr(publish, "push_pending", pending)
+    return calls
+
+
+def test_capture_results_grades_new_finals_and_publishes_them(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 6, 30, tzinfo=UTC)  # 12:00 IST
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    game_id = _predicted_game_awaiting_result(con, repo_dir, now)
+    _download_finishing(
+        monkeypatch, now, _finished_game_df(game_id, "2026-11-09", "PHI", "NYK", 110, 100)
+    )
+    calls = _spy_publish(monkeypatch)
+
+    result = runner.invoke(cli.app, ["capture-results"])
+
+    assert result.exit_code == 0, result.output
+    assert "1 new game result(s) recorded" in result.output
+    assert "grades appended: 1" in result.output
+    assert "committed and pushed" in result.output
+    (g,) = read_log(grades_path(repo_dir, SEASON))
+    assert g["game_id"] == game_id and g["correct"] is True
+    (paths, message), = calls["commit"]
+    assert grades_path(repo_dir, SEASON) in paths
+    assert all(p.parent == repo_dir / "predictions" for p in paths)
+    assert message == "predictions: grades 2026-11-09"
+    remote_log = _git(remote_dir, "log", "-1", "--format=%s%n%b", "main").stdout
+    assert remote_log.startswith("predictions: grades 2026-11-09")
+    assert "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" in remote_log
+
+
+def test_capture_results_with_nothing_new_retries_an_earlier_failed_push(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 16, 30, tzinfo=UTC)  # 22:00 IST
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    con.close()
+    # The 18:00 run committed its slate but could not push (no network).
+    path = log_path(repo_dir, SEASON)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    import json
+
+    tip = now + timedelta(hours=8)
+    path.write_text(json.dumps(_predicted_line("0022600950", SEASON, "2026-11-10", tip,
+                                               now - timedelta(hours=4)), sort_keys=True) + "\n",
+                    encoding="utf-8")
+    assert _git(repo_dir, "add", "predictions").returncode == 0
+    assert _git(repo_dir, "commit", "-m", "predictions: 2026-11-10 slate").returncode == 0
+    _download_finishing(monkeypatch, now, _finished_game_df("0022600999", "2026-11-10",
+                                                            "PHI", "NYK", 1, 0).iloc[0:0])
+    calls = _spy_publish(monkeypatch)
+
+    result = runner.invoke(cli.app, ["capture-results"])
+
+    assert result.exit_code == 0, result.output
+    assert "grades appended: 0" in result.output
+    assert calls["push_pending"] == 1
+    assert calls["commit"] == []  # nothing new to commit: push only
+    assert "pushed 1 earlier prediction commit(s)" in result.output
+    assert "predictions: 2026-11-10 slate" in _git(remote_dir, "log", "--format=%s", "main").stdout
+
+
+def test_capture_results_with_nothing_to_publish_is_quiet(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 16, 30, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    con.close()
+    _download_finishing(monkeypatch, now, _finished_game_df("0022600999", "2026-11-10",
+                                                            "PHI", "NYK", 1, 0).iloc[0:0])
+
+    result = runner.invoke(cli.app, ["capture-results"])
+
+    assert result.exit_code == 0, result.output
+    assert "grades appended: 0" in result.output
+    assert "WARNING" not in result.output
+    assert result.output.strip().splitlines()[-1] == "grades appended: 0"
+
+
+def test_capture_results_publish_failure_is_one_line_and_exit_0(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 6, 30, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    game_id = _predicted_game_awaiting_result(con, repo_dir, now)
+    _download_finishing(
+        monkeypatch, now, _finished_game_df(game_id, "2026-11-09", "PHI", "NYK", 110, 100)
+    )
+    hook = repo_dir / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\necho 'hook says no' >&2\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+
+    result = runner.invoke(cli.app, ["capture-results"])
+
+    assert result.exit_code == 0, result.output
+    failure_lines = [line for line in result.output.splitlines() if "git commit failed" in line]
+    assert len(failure_lines) == 1
+    assert "Traceback" not in result.output
+    # The capture and the grade are both safely on disk for the next run.
+    assert len(read_log(grades_path(repo_dir, SEASON))) == 1
+
+
+def test_capture_results_push_failure_is_a_warning_and_exit_0(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 6, 30, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    game_id = _predicted_game_awaiting_result(con, repo_dir, now)
+    _download_finishing(
+        monkeypatch, now, _finished_game_df(game_id, "2026-11-09", "PHI", "NYK", 110, 100)
+    )
+    assert _git(
+        repo_dir, "remote", "set-url", "origin", str(tmp_path / "does-not-exist")
+    ).returncode == 0
+
+    result = runner.invoke(cli.app, ["capture-results"])
+
+    assert result.exit_code == 0, result.output
+    assert "WARNING" in result.output
+    assert "next run will push it" in result.output
+
+
+def test_capture_results_grading_failure_is_one_line_and_exit_0(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 6, 30, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    game_id = _predicted_game_awaiting_result(con, repo_dir, now)
+    _download_finishing(
+        monkeypatch, now, _finished_game_df(game_id, "2026-11-09", "PHI", "NYK", 110, 100)
+    )
+    with log_path(repo_dir, SEASON).open("a", encoding="utf-8") as f:
+        f.write('{"cut off')  # an incomplete last line: grade() refuses to touch it
+
+    result = runner.invoke(cli.app, ["capture-results"])
+
+    assert result.exit_code == 0, result.output
+    assert "1 new game result(s) recorded" in result.output
+    lines = [line for line in result.output.splitlines() if "incomplete line" in line]
+    assert len(lines) == 1
+    assert "Traceback" not in result.output
+
+
+def test_predict_today_appends_no_grade_for_a_game_capture_results_graded(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 6, 30, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    game_id = _predicted_game_awaiting_result(con, repo_dir, now)
+    _download_finishing(
+        monkeypatch, now, _finished_game_df(game_id, "2026-11-09", "PHI", "NYK", 110, 100)
+    )
+    first = runner.invoke(cli.app, ["capture-results"])
+    assert "grades appended: 1" in first.output, first.output
+    before = grades_path(repo_dir, SEASON).read_text(encoding="utf-8")
+
+    later = datetime(2026, 11, 10, 12, 30, tzinfo=UTC)  # 18:00 IST
+    monkeypatch.setattr(cli, "_now", lambda: later)
+    second = runner.invoke(cli.app, ["predict-today"])
+
+    assert second.exit_code == 0, second.output
+    assert "grades appended: 0" in second.output
+    assert grades_path(repo_dir, SEASON).read_text(encoding="utf-8") == before

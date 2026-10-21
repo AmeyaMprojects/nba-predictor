@@ -81,6 +81,10 @@ _REJECTED_MESSAGE = (
 )
 
 
+NOTHING_TO_COMMIT = "nothing to commit"
+NOTHING_TO_PUSH = "nothing to push"
+
+
 @dataclass(frozen=True)
 class PublishResult:
     committed: bool
@@ -243,7 +247,7 @@ def commit_and_push(
         # Nothing to even `git add` -- a pathspec-less `diff`/`commit` below
         # would wrongly fall back to "everything", so this must short-circuit
         # here rather than fall through with an empty pathspec list.
-        return PublishResult(committed=False, pushed=False, message="nothing to commit")
+        return PublishResult(committed=False, pushed=False, message=NOTHING_TO_COMMIT)
 
     add_result = _git(repo_dir, ["add", "--", *existing])
     if add_result.returncode != 0:
@@ -260,7 +264,7 @@ def commit_and_push(
     # `git diff`/`git commit` fail outright.
     staged = _git(repo_dir, ["diff", "--cached", "--quiet", "--", *existing])
     if staged.returncode == 0:
-        return PublishResult(committed=False, pushed=False, message="nothing to commit")
+        return PublishResult(committed=False, pushed=False, message=NOTHING_TO_COMMIT)
 
     full_message = f"{message}\n\n{_COAUTHOR_TRAILER}\n"
     # `--only -- <paths>`: commit ONLY these paths' content, regardless of
@@ -281,18 +285,29 @@ def commit_and_push(
             committed=True, pushed=False, message="committed; push skipped (--no-push)"
         )
 
+    return _push_if_safe(repo_dir, committed=True)
+
+
+def _push_if_safe(repo_dir: Path, *, committed: bool) -> PublishResult:
+    """Push ``main`` to ``origin`` -- but only if EVERY commit on ``main``
+    not yet on ``origin/main`` is one of our own automated prediction
+    commits, and never the very first push. Shared by ``commit_and_push``
+    (right after its own commit) and ``push_pending`` (retrying an earlier
+    failed push); ``committed`` only shapes the wording of the result."""
+    lead = "committed, but" if committed else "earlier prediction commit(s) are waiting, but"
+
     if not _has_remote(repo_dir):
         return PublishResult(
-            committed=True,
+            committed=committed,
             pushed=False,
-            message="committed, but no GitHub remote configured yet",
+            message=f"{lead} no GitHub remote configured yet",
         )
 
     if _git(repo_dir, ["rev-parse", "--verify", "origin/main"]).returncode != 0:
         return PublishResult(
-            committed=True,
+            committed=committed,
             pushed=False,
-            message="committed, but the first push must be done by hand",
+            message=f"{lead} the first push must be done by hand",
         )
 
     unpushed = _git(repo_dir, ["rev-list", "origin/main..main"])
@@ -300,24 +315,26 @@ def commit_and_push(
         # Without the list there is no way to prove every unpushed commit
         # is our own -- so nothing is pushed.
         return PublishResult(
-            committed=True,
+            committed=committed,
             pushed=False,
             message=(
-                "committed, but the push was refused because git could not "
+                f"{lead} the push was refused because git could not "
                 f"list the unpushed commits ({unpushed.stderr.strip()}); "
                 "inspect the checkout by hand (git status, git log origin/main..main)"
             ),
         )
     shas = [s.strip() for s in unpushed.stdout.splitlines() if s.strip()]
+    if not shas and not committed:
+        return PublishResult(committed=False, pushed=False, message=NOTHING_TO_PUSH)
     offending = [
         _commit_subject(repo_dir, sha) for sha in shas if not _is_safe_prediction_commit(repo_dir, sha)
     ]
     if offending:
         return PublishResult(
-            committed=True,
+            committed=committed,
             pushed=False,
             message=(
-                "committed, but push was refused because main has unpushed "
+                f"{lead} push was refused because main has unpushed "
                 "commit(s) that are not automated prediction commits "
                 f"({'; '.join(offending)}); push those by hand first"
             ),
@@ -327,17 +344,56 @@ def commit_and_push(
     if push_result.returncode != 0:
         stderr = push_result.stderr.lower()
         if any(marker in stderr for marker in _REJECTED_MARKERS):
-            return PublishResult(committed=True, pushed=False, message=_REJECTED_MESSAGE)
+            return PublishResult(committed=committed, pushed=False, message=_REJECTED_MESSAGE)
         return PublishResult(
-            committed=True,
+            committed=committed,
             pushed=False,
             message=(
-                "committed, but the push failed "
+                f"{lead} the push failed "
                 f"({push_result.stderr.strip()}); the commit is kept and the "
                 "next run will push it"
             ),
         )
-    return PublishResult(committed=True, pushed=True, message="committed and pushed")
+    if committed:
+        return PublishResult(committed=True, pushed=True, message="committed and pushed")
+    return PublishResult(
+        committed=False,
+        pushed=True,
+        message=f"pushed {len(shas)} earlier prediction commit(s)",
+    )
+
+
+def push_pending(repo_dir: Path) -> PublishResult:
+    """Push prediction commits an earlier run made but could not push (e.g.
+    no network at 18:00) -- committing nothing itself.
+
+    Same rules as ``commit_and_push``'s push: nothing happens off ``main``
+    or while a merge/cherry-pick/revert/rebase is in progress, the very
+    first push is left to a human, and a push only happens when EVERY
+    unpushed commit is an automated prediction commit touching only
+    ``predictions/``. With nothing unpushed this is a no-op whose message
+    is ``NOTHING_TO_PUSH``.
+    """
+    branch = current_branch(repo_dir)
+    if branch != "main":
+        where = f"'{branch}'" if branch is not None else "a detached HEAD"
+        return PublishResult(
+            committed=False,
+            pushed=False,
+            message=f"nothing pushed because the checkout is not on main (it is on {where})",
+        )
+    in_progress = _operation_in_progress(repo_dir)
+    if in_progress is not None:
+        return PublishResult(
+            committed=False,
+            pushed=False,
+            message=(
+                f"refusing to push: a git operation ({in_progress}) is in "
+                f"progress in {repo_dir}; it was left untouched -- finish or "
+                "abort it by hand first"
+            ),
+        )
+    return _push_if_safe(repo_dir, committed=False)
 
 
 def unpushed_commits(repo_dir: Path) -> int | None:

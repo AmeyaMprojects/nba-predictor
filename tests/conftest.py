@@ -51,3 +51,16 @@ def _network_is_up(monkeypatch):
     from predictor import net
 
     monkeypatch.setattr(net, "wait_for_network", lambda *a, **k: True)
+
+
+@pytest.fixture(autouse=True)
+def _repo_dir_is_never_the_real_checkout(monkeypatch, tmp_path_factory):
+    """`capture-results` and `predict-today` grade and publish
+    `predictions/*.jsonl` in `cli._repo_dir()` -- by default the REAL
+    checkout. Every test gets an empty, non-git throwaway directory instead
+    (tests that need a real temp repo pin their own via `_wire`), so no test
+    can ever append to or commit/push the real public prediction log."""
+    from predictor import cli
+
+    scratch = tmp_path_factory.mktemp("not-the-real-repo")
+    monkeypatch.setattr(cli, "_repo_dir", lambda: scratch)

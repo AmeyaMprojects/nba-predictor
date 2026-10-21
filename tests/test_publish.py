@@ -585,3 +585,94 @@ def test_prediction_files_problem_mid_operation(tmp_path):
     problem = publish.prediction_files_problem(repo)
     assert problem is not None
     assert "MERGE_HEAD" in problem
+
+
+# --- push_pending: retry a failed earlier push, commit nothing --------------
+
+
+def test_push_pending_pushes_unpushed_prediction_commits(tmp_path):
+    from predictor.model.publish import push_pending
+
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    log_path = _write_log(repo)
+    first = commit_and_push(repo, [log_path], "predictions: 2026-10-21 slate", push=False)
+    assert first.committed and not first.pushed
+
+    result = push_pending(repo)
+
+    assert result.pushed is True and result.committed is False and result.error is False
+    assert unpushed_commits(repo) == 0
+    assert "predictions: 2026-10-21 slate" in _git(remote, "log", "--format=%s", "main").stdout
+
+
+def test_push_pending_with_nothing_unpushed_pushes_nothing(tmp_path):
+    from predictor.model.publish import NOTHING_TO_PUSH, push_pending
+
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+
+    result = push_pending(repo)
+
+    assert result == PublishResult(committed=False, pushed=False, message=NOTHING_TO_PUSH)
+
+
+def test_push_pending_refuses_when_a_non_prediction_commit_is_unpushed(tmp_path):
+    from predictor.model.publish import push_pending
+
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    log_path = _write_log(repo)
+    commit_and_push(repo, [log_path], "predictions: 2026-10-21 slate", push=False)
+    (repo / "README.md").write_text("seed, updated\n", encoding="utf-8")
+    assert _git(repo, "add", "README.md").returncode == 0
+    assert _git(repo, "commit", "-m", "chore: tweak readme").returncode == 0
+
+    result = push_pending(repo)
+
+    assert result.pushed is False and result.error is False
+    assert "chore: tweak readme" in result.message
+    assert unpushed_commits(repo) == 2
+
+
+def test_push_pending_refuses_off_main(tmp_path):
+    from predictor.model.publish import push_pending
+
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    log_path = _write_log(repo)
+    commit_and_push(repo, [log_path], "predictions: 2026-10-21 slate", push=False)
+    assert _git(repo, "checkout", "-b", "feature").returncode == 0
+
+    result = push_pending(repo)
+
+    assert result.pushed is False
+    assert "not on main" in result.message
+    assert "predictions:" not in _git(remote, "log", "--format=%s", "main").stdout
+
+
+def test_push_pending_refuses_during_a_merge(tmp_path):
+    from predictor.model.publish import push_pending
+
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    log_path = _write_log(repo)
+    commit_and_push(repo, [log_path], "predictions: 2026-10-21 slate", push=False)
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    (repo / ".git" / "MERGE_HEAD").write_text(head + "\n", encoding="utf-8")
+
+    result = push_pending(repo)
+
+    assert result.pushed is False
+    assert "MERGE_HEAD" in result.message
+    assert unpushed_commits(repo) == 1
