@@ -1,17 +1,16 @@
 // All site copy and links live here.
-// Assumptions (placeholder: true): the owner's display name is taken from the repo account;
-// the LinkedIn URL is a placeholder the owner must replace.
+// Owner name and LinkedIn profile confirmed by the owner (2026-10-21).
 export const site = {
   name: 'Sealed before tip-off',
   short: 'Sealed',
-  owner: { name: 'Ameya Mhatre', placeholder: true },
+  owner: { name: 'Ameya Mhatre', placeholder: false },
   url: 'https://ameyamprojects.github.io/nba-predictor/',
   description:
     'Every NBA game called before tip-off and sealed in a public git commit. Tonight\'s calls, the running record against the market, and the proof of when each call was made.',
   repo: 'https://github.com/AmeyaMprojects/nba-predictor',
   commit: (hash: string) => `https://github.com/AmeyaMprojects/nba-predictor/commit/${hash}`,
   rawFile: (path: string) => `https://github.com/AmeyaMprojects/nba-predictor/blob/main/${path}`,
-  linkedin: { href: 'https://www.linkedin.com/', placeholder: true },
+  linkedin: { href: 'https://www.linkedin.com/in/ameya-mhatre-553003307/', placeholder: false },
   nav: [
     { label: 'Tonight', path: '/#tonight' },
     { label: 'Record', path: '/#record' },
