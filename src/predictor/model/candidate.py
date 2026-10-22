@@ -54,7 +54,7 @@ from predictor.backtest.replay import Prediction
 from predictor.model import evaluate as evaluate_mod
 from predictor.model import fit, tuning
 from predictor.model.adjustments import FEATURE_NAMES
-from predictor.model.availability import InjuryHistory
+from predictor.model.availability import InjuryHistory, Listing
 from predictor.model.fit import FitError, _Game
 from predictor.model.player_ids import PlayerIndex
 from predictor.model.player_ratings import HALF_LIFE_GRID, REGRESSION_GRID, PlayerParams
@@ -166,6 +166,9 @@ class CandidateEvaluation:
     # meant to be read from here: extras do not depend on the player
     # settings, the roster and injury gaps do.
     features: dict[str, GameFeatures] = field(default_factory=dict)
+    # Every injury-report listing the replay collected (Task 10 estimates the
+    # shipped availability table from them).
+    listings: list[Listing] = field(default_factory=list)
 
 
 def load_player_index(con) -> PlayerIndex:
@@ -450,7 +453,7 @@ def evaluate_candidate(
     final = _fit_job(
         world, tuning.Job(TUNING_SEASONS, winner.half_life), current.final.ratings, None
     )
-    return CandidateEvaluation(tuple(results), winner, final, current, first)
+    return CandidateEvaluation(tuple(results), winner, final, current, first, listings)
 
 
 # -- the switch-over bar ---------------------------------------------------------

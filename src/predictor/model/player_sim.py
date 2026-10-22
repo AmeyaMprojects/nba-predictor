@@ -167,12 +167,14 @@ class PlayerLines:
         self,
         rows: Iterable[tuple[PlayerGameRow, str]],
         tip_index: dict[tuple[date, str], datetime] | None = None,
+        *,
+        include_test_seasons: bool = False,
     ) -> None:
         by_date: dict[date, DayRows] = defaultdict(list)
         played: dict[str, set[int]] = defaultdict(set)
         names: dict[int, tuple[date, str]] = {}
         for row, season_type in rows:
-            if row.season in TEST_SEASONS:
+            if row.season in TEST_SEASONS and not include_test_seasons:
                 continue
             by_date[row.game_date].append((row, season_type in RATING_SEASON_TYPES))
             if _played(row):
@@ -194,27 +196,62 @@ class PlayerLines:
         plus the schedule's tip-off index."""
         table = db.POINT_IN_TIME_TABLES["player_games"]
         tests = ", ".join("?" for _ in TEST_SEASONS)
-        cols = ", ".join(_STAT_FIELDS)
         rows = con.execute(
-            f"SELECT game_id, season, game_date, player_id, player_name, team, minutes, "
-            f"{cols}, plus_minus, season_type FROM {table} "
+            f"SELECT {_LINE_COLUMNS} FROM {table} "
             f"WHERE season NOT IN ({tests}) "
             "QUALIFY row_number() OVER (PARTITION BY game_id, player_id "
             "ORDER BY observed_at DESC) = 1 "
             "ORDER BY game_date, game_id, player_id",
             list(TEST_SEASONS),
         ).fetchall()
-        parsed = []
-        for gid, season, gd, pid, name, team, mins, *rest in rows:
-            stats, pm, season_type = rest[:-2], rest[-2], rest[-1]
-            parsed.append((
-                PlayerGameRow(
-                    gid, season, gd, int(pid), name, team, _float(mins),
-                    *(_int(v) for v in stats), _float(pm),
-                ),
-                season_type,
-            ))
-        return cls(parsed, tipoff_mod.tipoff_index(con))
+        return cls(_parse_lines(rows), tipoff_mod.tipoff_index(con))
+
+    @classmethod
+    def from_view(cls, view, before: date) -> PlayerLines:
+        """What an ``AsOfView`` shows: the latest-observed visible row per
+        (game_id, player_id), for games dated strictly before ``before``.
+
+        Test seasons are kept (this is the prediction path, not a fit), and
+        there is no tip-off index (the caller already knows its call time).
+        Rows are parsed exactly as ``from_db`` parses them (NULL and NaN
+        numbers become None).
+        """
+        rows = view.table("player_games").project(
+            f"{_LINE_COLUMNS}, observed_at"
+        ).fetchall()
+        latest: dict[tuple[str, int], tuple] = {}
+        for row in rows:
+            if row[2] >= before:
+                continue
+            key = (row[0], int(row[3]))
+            seen = latest.get(key)
+            if seen is None or row[-1] > seen[-1]:
+                latest[key] = row
+        ordered = sorted(latest.values(), key=lambda r: (r[2], r[0], int(r[3])))
+        return cls(_parse_lines([r[:-1] for r in ordered]), include_test_seasons=True)
+
+
+_LINE_COLUMNS = (
+    "game_id, season, game_date, player_id, player_name, team, minutes, "
+    + ", ".join(_STAT_FIELDS)
+    + ", plus_minus, season_type"
+)
+
+
+def _parse_lines(rows) -> list[tuple[PlayerGameRow, str]]:
+    """``_LINE_COLUMNS`` rows as (PlayerGameRow, season_type); NULL and NaN
+    numbers become None."""
+    parsed = []
+    for gid, season, gd, pid, name, team, mins, *rest in rows:
+        stats, pm, season_type = rest[:-2], rest[-2], rest[-1]
+        parsed.append((
+            PlayerGameRow(
+                gid, season, gd, int(pid), name, team, _float(mins),
+                *(_int(v) for v in stats), _float(pm),
+            ),
+            season_type,
+        ))
+    return parsed
 
 
 # -- rosters ---------------------------------------------------------------
@@ -472,6 +509,81 @@ def availability_tables(listings: Iterable[Listing], season: str) -> dict[str, A
     return {call: estimate(listings, season, call) for call in CALLS}
 
 
+@dataclass(frozen=True)
+class CallTerms:
+    """One game's player terms at one call (shared by the replay and the
+    ``AsOfView`` predictor, so the two cannot drift apart).
+
+    ``absent`` is empty when there is no snapshot. ``continuity`` is the
+    (home, away) share of available minutes from recent players (None for
+    an empty rotation). ``statuses`` lists every status looked up, for the
+    unknown-status counter.
+    """
+
+    roster_gap: dict[str, float]
+    injury_gap: dict[str, float]
+    absent: tuple[tuple[str, str, str], ...]
+    continuity: list[float | None]
+    statuses: tuple[str, ...]
+
+
+def call_terms(
+    teams: Sequence[str],
+    game_date: date,
+    season: str,
+    snap: Snapshot | None,
+    linker: _Linker,
+    rosters: Rosters,
+    book: PlayerBook,
+    table: AvailabilityTable,
+    names: dict[int, str],
+) -> CallTerms:
+    """Roster and injury gaps (home minus away) for one game and call.
+
+    Every read passes ``as_of=game_date``. With no snapshot the injury gap
+    is 0 and nobody is absent."""
+    d = game_date
+    listed = _snapshot_by_player(snap, season, linker)
+    roster_gap = {f: 0.0 for f in FORMULAS}
+    injury_gap = {f: 0.0 for f in FORMULAS}
+    absent: list[tuple[int, float, str, str, str]] = []
+    shares: list[float | None] = []
+    statuses: list[str] = []
+    for side, lineup in enumerate(_lineups(teams, listed, rosters, d)):
+        sign = 1.0 if side == 0 else -1.0
+        q: dict[int, float] = {}
+        for pid, status in lineup.status.items():
+            statuses.append(status)
+            q[pid] = table.prob(status)
+        avail = minutes_mod.available_minutes(lineup.normal, q)
+        recent = rosters.recent_players(lineup.team, CONTINUITY_GAMES, as_of=d)
+        total = sum(avail.values())
+        shares.append(
+            sum(m for p, m in avail.items() if p in recent) / total if total > 0 else None
+        )
+        for f in FORMULAS:
+            ratings = {p: book.rating(p, f, as_of=d) for p in lineup.normal}
+            s_normal = minutes_mod.strength(lineup.normal, ratings)
+            s_avail = minutes_mod.strength(avail, ratings)
+            roster_gap[f] += sign * s_normal
+            if snap is not None:
+                injury_gap[f] += sign * (s_avail - s_normal)
+        for pid, p in q.items():
+            if p < 1.0:
+                name = names.get(pid, str(pid))
+                absent.append((side, -lineup.normal[pid], name, lineup.team,
+                               lineup.status[pid]))
+    absent.sort()
+    return CallTerms(
+        roster_gap,
+        injury_gap,
+        tuple((team, name, status) for _, _, name, team, status in absent)
+        if snap is not None else (),
+        shares,
+        tuple(statuses),
+    )
+
+
 # -- the pass --------------------------------------------------------------
 
 def _replay(
@@ -480,10 +592,16 @@ def _replay(
     visit: Callable[[_Game, Rosters], None],
     book: PlayerBook | None = None,
     after_day: Callable[[date, list[_Game], DayRows], None] | None = None,
-) -> None:
-    """Visit every game on D (before D's rows), then apply D's rows."""
+    *,
+    allow_test_seasons: bool = False,
+) -> Rosters:
+    """Visit every game on D (before D's rows), then apply D's rows.
+
+    Returns the rosters as they stand after the last day. Test-season games
+    are refused unless ``allow_test_seasons`` (the prediction path, which
+    replays what an ``AsOfView`` shows, never a fit)."""
     for g in games:
-        if g.result.season in TEST_SEASONS:
+        if g.result.season in TEST_SEASONS and not allow_test_seasons:
             raise FitError(
                 f"internal error: the player simulation was given a test-season game "
                 f"({g.result.game_id}, season {g.result.season}); refusing to use it"
@@ -524,6 +642,7 @@ def _replay(
                     rated[row.game_id].append(row)
             for gid in sorted(rated):
                 book.apply_game(rated[gid], margins_by_game.get(gid, {}))
+    return rosters
 
 
 def collect_listings(
@@ -579,55 +698,25 @@ def simulate(
             for (team, name) in snap.statuses:
                 if team in teams:
                     seen_names.add((name, team))
-        listed = _snapshot_by_player(snap, r.season, linker)
         if r.season not in tables:
             tables[r.season] = availability_tables(listings, r.season)
-        table = tables[r.season][call]
-        roster_gap = {f: 0.0 for f in FORMULAS}
-        injury_gap = {f: 0.0 for f in FORMULAS}
-        absent: list[tuple[int, float, str, str, str]] = []
-        shares: list[float | None] = []
-        for side, lineup in enumerate(_lineups(teams, listed, rosters, d)):
-            sign = 1.0 if side == 0 else -1.0
-            q: dict[int, float] = {}
-            for pid, status in lineup.status.items():
-                unknown.record(r.season, status)
-                q[pid] = table.prob(status)
-            avail = minutes_mod.available_minutes(lineup.normal, q)
-            recent = rosters.recent_players(lineup.team, CONTINUITY_GAMES, as_of=d)
-            total = sum(avail.values())
-            shares.append(
-                sum(m for p, m in avail.items() if p in recent) / total if total > 0 else None
-            )
-            for f in FORMULAS:
-                ratings = {p: book.rating(p, f, as_of=d) for p in lineup.normal}
-                s_normal = minutes_mod.strength(lineup.normal, ratings)
-                s_avail = minutes_mod.strength(avail, ratings)
-                roster_gap[f] += sign * s_normal
-                if snap is not None:
-                    injury_gap[f] += sign * (s_avail - s_normal)
-            for pid, p in q.items():
-                if p < 1.0:
-                    name = lines.names.get(pid, str(pid))
-                    absent.append((side, -lineup.normal[pid], name, lineup.team,
-                                   lineup.status[pid]))
-        continuity[call] = shares
+        terms = call_terms(
+            teams, d, r.season, snap, linker, rosters, book, tables[r.season][call],
+            lines.names,
+        )
+        for status in terms.statuses:
+            unknown.record(r.season, status)
+        continuity[call] = terms.continuity
         if snap is None:
             no_report[call][r.season] += 1
-            return CallFeatures(roster_gap, injury_gap, (), None, False, True)
+            return CallFeatures(terms.roster_gap, terms.injury_gap, (), None, False, True)
         report_at = snap.observed_at
         latest = history.latest_report_at(at)
         fell_back = report_at < at - FALLBACK_AFTER or (latest is not None and latest > report_at)
         if fell_back:
             fallback[call][r.season] += 1
-        absent.sort()
         return CallFeatures(
-            roster_gap,
-            injury_gap,
-            tuple((team, name, status) for _, _, name, team, status in absent),
-            report_at,
-            fell_back,
-            False,
+            terms.roster_gap, terms.injury_gap, terms.absent, report_at, fell_back, False,
         )
 
     def visit(g: _Game, rosters: Rosters) -> None:

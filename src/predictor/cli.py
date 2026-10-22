@@ -1652,37 +1652,32 @@ def _historical_lines(con):
     return market.historical_lines(con)
 
 
-def _candidate_report(con, ev, lines_by_game, progress) -> tuple[str, bool]:
-    """The candidate section of evaluate-model, and whether it failed (an
-    expected, plain-English failure: the current model's sections still
-    print first)."""
+def _player_rows(con) -> int:
     import duckdb
 
     from predictor import db
-    from predictor.model import candidate as cand
-    from predictor.model import correction
-    from predictor.model import evaluate as evaluate_mod
-    from predictor.model import fit as fit_mod
 
     try:
         table = db.POINT_IN_TIME_TABLES["player_games"]
         (rows,) = con.execute(f"SELECT count(*) FROM {table}").fetchone()
     except duckdb.Error:
         rows = 0
-    if rows == 0:
-        return cand.NO_PLAYER_LOGS, False
-    try:
-        cev = cand.evaluate_candidate(con, ev, progress=progress)
-        progress("training the optional correction model...")
-        tried = correction.apply_corrections(cev.winner, cev.features)
-    except fit_mod.FitError as exc:
-        return f"{cand.REPORT_TITLE}\n  Cannot fit the player model candidate: {exc}.", True
-    except duckdb.Error as exc:
-        return (
-            f"{cand.REPORT_TITLE}\n  The database is missing tables the player model "
-            f"needs ({exc}). Run 'predictor ingest-player-logs' first.",
-            True,
-        )
+    return rows
+
+
+def _candidate_decision(con, ev, progress):
+    """Walk the candidate forward, decide on the correction and score the
+    switch-over bar -- shared by evaluate-model and fit-player-model.
+
+    Returns (cev, tried, corrected, shipped, bar). Raises FitError and
+    duckdb.Error for the callers to report.
+    """
+    from predictor.model import candidate as cand
+    from predictor.model import correction
+
+    cev = cand.evaluate_candidate(con, ev, progress=progress)
+    progress("training the optional correction model...")
+    tried = correction.apply_corrections(cev.winner, cev.features)
     corrected = (
         tried if tried is not None and correction.correction_helps(cev.winner, tried)
         else None
@@ -1691,6 +1686,31 @@ def _candidate_report(con, ev, lines_by_game, progress) -> tuple[str, bool]:
     bar = cand.switch_over_bar(
         ev.winner.predictions, shipped.final_call.predictions, cev.final
     )
+    return cev, tried, corrected, shipped, bar
+
+
+def _candidate_report(con, ev, lines_by_game, progress) -> tuple[str, bool]:
+    """The candidate section of evaluate-model, and whether it failed (an
+    expected, plain-English failure: the current model's sections still
+    print first)."""
+    import duckdb
+
+    from predictor.model import candidate as cand
+    from predictor.model import evaluate as evaluate_mod
+    from predictor.model import fit as fit_mod
+
+    if _player_rows(con) == 0:
+        return cand.NO_PLAYER_LOGS, False
+    try:
+        cev, tried, corrected, shipped, bar = _candidate_decision(con, ev, progress)
+    except fit_mod.FitError as exc:
+        return f"{cand.REPORT_TITLE}\n  Cannot fit the player model candidate: {exc}.", True
+    except duckdb.Error as exc:
+        return (
+            f"{cand.REPORT_TITLE}\n  The database is missing tables the player model "
+            f"needs ({exc}). Run 'predictor ingest-player-logs' first.",
+            True,
+        )
     text = cand.format_candidate(
         cev,
         bar,
@@ -1700,6 +1720,69 @@ def _candidate_report(con, ev, lines_by_game, progress) -> tuple[str, bool]:
         tried=tried if corrected is None else None,
     )
     return text, False
+
+
+BAR_NOT_MET = "Switch-over bar not met -- nothing was saved; the current model stays live."
+
+
+@app.command("fit-player-model")
+def fit_player_model_cmd() -> None:
+    """Fit the player-model candidate and save player_settings.json, but
+    only if it passes the switch-over bar. Never touches the current
+    model's settings, and does not make the candidate live."""
+    import duckdb
+
+    from predictor.model import candidate as cand
+    from predictor.model import evaluate as evaluate_mod
+    from predictor.model import fit as fit_mod
+    from predictor.model import player_settings
+    from predictor.model import player_stage1
+
+    def progress(message: str) -> None:
+        typer.echo(message, err=True)
+
+    con = _open_for_fitting()
+    try:
+        ev = _run_evaluation(fit_mod, evaluate_mod, con, progress=progress)
+        if _player_rows(con) == 0:
+            typer.echo(cand.NO_PLAYER_LOGS.strip())
+            raise typer.Exit(code=1)
+        try:
+            cev, _tried, corrected, _shipped, bar = _candidate_decision(con, ev, progress)
+            settings = None
+            if bar.met:
+                progress("writing the candidate's settings...")
+                settings = player_stage1.settings_from_candidate(con, cev, corrected)
+        except fit_mod.FitError as exc:
+            typer.echo(f"Cannot fit the player model candidate: {exc}.")
+            raise typer.Exit(code=1) from None
+        except duckdb.Error as exc:
+            typer.echo(
+                f"The database is missing tables the player model needs ({exc}). "
+                "Run 'predictor ingest-player-logs' first."
+            )
+            raise typer.Exit(code=1) from None
+    finally:
+        con.close()
+
+    if not bar.met:
+        typer.echo(BAR_NOT_MET)
+        for reason in bar.reasons():
+            typer.echo(f"  - {reason}")
+        return
+    path = player_settings.SETTINGS_PATH
+    try:
+        player_settings.save(settings, path)
+    except OSError as exc:
+        typer.echo(f"Could not save the player-model settings to {path} ({exc}).")
+        raise typer.Exit(code=1) from None
+    typer.echo("Switch-over bar met.")
+    typer.echo(
+        "Correction model: included." if settings.correction is not None
+        else "Correction model: not included."
+    )
+    typer.echo(f"Saved to {path}.")
+    typer.echo("The current model stays live until plan 3 switches it over.")
 
 if __name__ == "__main__":
     app()
