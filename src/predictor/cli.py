@@ -1598,7 +1598,14 @@ def fit_model_cmd() -> None:
 
 
 @app.command("evaluate-model")
-def evaluate_model_cmd() -> None:
+def evaluate_model_cmd(
+    candidate: bool = typer.Option(
+        True,
+        "--candidate/--no-candidate",
+        help="Also walk the player-model candidate forward and score it against "
+        "the switch-over bar (the default).",
+    ),
+) -> None:
     """Walk-forward evaluate every recency variant and print the result
     (does not save anything -- see 'predictor fit-model' for that)."""
     from predictor.model import evaluate as evaluate_mod
@@ -1609,24 +1616,90 @@ def evaluate_model_cmd() -> None:
 
     import duckdb
 
+    candidate_text = None
+    failed = False
     con = _open_for_fitting()
     try:
         ev = _run_evaluation(fit_mod, evaluate_mod, con, progress=progress)
         try:
+            lines_by_game = _historical_lines(con)
             market_text = evaluate_mod.format_market_comparison(
-                evaluate_mod.market_games(con, ev.winner)
+                evaluate_mod.match_market(ev.winner, lines_by_game)
             )
         except duckdb.Error as exc:
+            lines_by_game = {}
             market_text = (
                 "  Model vs market (closing lines)\n"
                 f"  Could not read the stored odds ({exc})."
             )
+        if candidate:
+            candidate_text, failed = _candidate_report(con, ev, lines_by_game, progress)
     finally:
         con.close()
     typer.echo(evaluate_mod.format_evaluation(ev))
     typer.echo("")
     typer.echo(market_text)
+    if candidate_text is not None:
+        typer.echo("")
+        typer.echo(candidate_text)
+    if failed:
+        raise typer.Exit(code=1)
 
+
+def _historical_lines(con):
+    from predictor.model import market
+
+    return market.historical_lines(con)
+
+
+def _candidate_report(con, ev, lines_by_game, progress) -> tuple[str, bool]:
+    """The candidate section of evaluate-model, and whether it failed (an
+    expected, plain-English failure: the current model's sections still
+    print first)."""
+    import duckdb
+
+    from predictor import db
+    from predictor.model import candidate as cand
+    from predictor.model import correction
+    from predictor.model import evaluate as evaluate_mod
+    from predictor.model import fit as fit_mod
+
+    try:
+        table = db.POINT_IN_TIME_TABLES["player_games"]
+        (rows,) = con.execute(f"SELECT count(*) FROM {table}").fetchone()
+    except duckdb.Error:
+        rows = 0
+    if rows == 0:
+        return cand.NO_PLAYER_LOGS, False
+    try:
+        cev = cand.evaluate_candidate(con, ev, progress=progress)
+        progress("training the optional correction model...")
+        tried = correction.apply_corrections(cev.winner, cev.features)
+    except fit_mod.FitError as exc:
+        return f"{cand.REPORT_TITLE}\n  Cannot fit the player model candidate: {exc}.", True
+    except duckdb.Error as exc:
+        return (
+            f"{cand.REPORT_TITLE}\n  The database is missing tables the player model "
+            f"needs ({exc}). Run 'predictor ingest-player-logs' first.",
+            True,
+        )
+    corrected = (
+        tried if tried is not None and correction.correction_helps(cev.winner, tried)
+        else None
+    )
+    shipped = corrected if corrected is not None else cev.winner
+    bar = cand.switch_over_bar(
+        ev.winner.predictions, shipped.final_call.predictions, cev.final
+    )
+    text = cand.format_candidate(
+        cev,
+        bar,
+        corrected,
+        evaluate_mod.match_market(shipped.final_call, lines_by_game),
+        evaluate_mod.match_market(ev.winner, lines_by_game),
+        tried=tried if corrected is None else None,
+    )
+    return text, False
 
 if __name__ == "__main__":
     app()

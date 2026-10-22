@@ -363,3 +363,17 @@ def test_switch_over_bar_rejects_different_game_sets():
 def test_switch_over_bar_has_no_home_comparison():
     names = [f.name for f in dataclasses.fields(cand.SwitchOverBar)]
     assert not any("home" in n for n in names)
+
+
+def test_switch_over_bar_equal_brier_season_is_not_better():
+    """3 seasons better, 1 season with exactly the current model's Brier
+    (identical predictions), 2 slightly worse: the equal season does not
+    count, so seasons_better is 3 and the bar is not met."""
+    current, candidate = _bar_preds(better=3)
+    equal = SEASONS[3]
+    candidate = [p for p in candidate if p.season != equal] + _season_preds(equal, 0.65, 0.65)
+    bar = cand.switch_over_bar(current, candidate, _choice())
+    assert bar.seasons_better == 3
+    assert bar.enough_seasons is False
+    assert bar.met is False
+    assert any("3 of 6" in r for r in bar.reasons())

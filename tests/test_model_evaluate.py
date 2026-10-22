@@ -131,7 +131,6 @@ def test_format_evaluation_has_every_required_section(tmp_path):
         assert season in text
     assert "Final settings for 2026-27" in text
     assert "the walk-forward above scores the method, not these exact settings" in text
-    assert "evaluated season" in text
     assert "Calibration -- when it said X%, how often did that happen?" in text
     # Fix round 1 (controller ruling, 2026-10-02): the publishing-bar MET
     # verdict must never be read as the clean test -- this is walk-forward
@@ -141,10 +140,14 @@ def test_format_evaluation_has_every_required_section(tmp_path):
         "method was chosen after a first look at 2023-26. The clean test, including "
         "any calibration claim, is 2026-27 predicted live."
     ) in text
-    # The caveat must come AFTER the publishing bar's verdict, not before it
-    # (a reader must see the MET/NOT MET line before the caveat that
-    # qualifies it).
-    assert text.index("Verdict:") < text.index("This is a walk-forward result")
+    # Task 9 (owner decision): the publishing bar (always-pick-home plus a
+    # calibration verdict) is no longer printed here; the calibration table
+    # stays, and the caveat follows it.
+    assert "Verdict:" not in text
+    assert "always-pick-home" not in text
+    assert text.index("Calibration -- when it said") < text.index(
+        "This is a walk-forward result"
+    )
 
 
 def test_evaluate_model_cli_prints_the_evaluation(tmp_path, monkeypatch):

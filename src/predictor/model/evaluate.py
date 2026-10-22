@@ -23,11 +23,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, time
 
 from predictor.backtest import metrics
-from predictor.backtest.report import (
-    format_calibration_table,
-    format_publishing_bar,
-    publishing_bar,
-)
+from predictor.backtest.report import format_calibration_table
 from predictor.backtest.replay import Prediction
 from predictor.model import fit, market, tuning
 from predictor.model.market import MarketView
@@ -238,17 +234,11 @@ def format_evaluation(ev: Evaluation) -> str:
             f"    {season}  k {r.k:g} cap {r.margin_cap:g} reg {r.season_regression:g} "
             f"window {r.hca_window:g} sigma {choice.sigma:.2f}   "
             f"model {metrics.accuracy(season_preds) * 100:.1f}%   "
-            f"home {metrics.home_rate(season_preds) * 100:.1f}%   "
             f"Brier {metrics.brier_score(season_preds):.4f}"
         )
     lines.append("")
     lines.append(format_calibration_table(metrics.calibration_bins(ev.winner.predictions)))
     lines.append("")
-    lines.append(
-        format_publishing_bar(
-            publishing_bar(ev.winner.predictions), season_word="evaluated season"
-        )
-    )
     lines.append(
         "  This is a walk-forward result on the tuning seasons, not a clean test: the "
         "method was chosen after a first look at 2023-26. The clean test, including any "

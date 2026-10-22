@@ -33,6 +33,8 @@ features.
 from __future__ import annotations
 
 import math
+import textwrap
+from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time
@@ -565,3 +567,279 @@ def switch_over_bar(
         calibration_met=bar.calibration_met,
         includes_terms=_nonzero(choice, "roster_") and _nonzero(choice, "injury_"),
     )
+
+
+# -- the report (evaluate-model) -------------------------------------------------
+
+REPORT_TITLE = (
+    "  Player model candidate (walk-forward, final call = tip-off minus 45 minutes)"
+)
+SIGMA_NOTE = (
+    "Its sigma (how far results stray from the expected margin) is fitted only on "
+    "games that had an injury report at the final call."
+)
+NAME_INDEX_NOTE = (
+    "Injury-report names are matched to players using every season's game logs, for "
+    "identity only (who is who on which team), never for performance data."
+)
+NO_PLAYER_LOGS = "  No player game logs -- run predictor ingest-player-logs"
+TOP_UNLINKED = 10
+
+def _wrap(text: str) -> list[str]:
+    return textwrap.wrap(
+        text, width=96, initial_indent="  ", subsequent_indent="  ",
+        break_on_hyphens=False,
+    )
+
+
+def _verdict(cur: float, new: float) -> str:
+    if new < cur:
+        return "better"
+    if new > cur:
+        return "worse"
+    return "same"
+
+
+def _metrics_cells(preds: Sequence[Prediction]) -> str:
+    return (
+        f"  {metrics.brier_score(preds):>8.4f}{metrics.log_loss(preds):>10.4f}"
+        f"{metrics.accuracy(preds) * 100:>9.1f}%"
+    )
+
+
+def _season_table(
+    current: Sequence[Prediction], candidate: Sequence[Prediction]
+) -> list[str]:
+    """Per-season current vs candidate, then the pooled row. ``better`` /
+    ``worse`` compares Brier (strictly lower is better)."""
+    lines = [
+        " " * 23 + f"  {' current model ':-^28}  {' candidate ':-^28}",
+        f"    {'Season':<12}{'games':>7}"
+        + f"  {'Brier':>8}{'log loss':>10}{'accuracy':>10}" * 2,
+    ]
+
+    def row(label: str, cur: Sequence[Prediction], new: Sequence[Prediction]) -> str:
+        return (
+            f"    {label:<12}{len(cur):>7,}{_metrics_cells(cur)}{_metrics_cells(new)}"
+            f"   {_verdict(metrics.brier_score(cur), metrics.brier_score(new))}"
+        )
+
+    for season in sorted({p.season for p in current}):
+        lines.append(row(
+            season,
+            [p for p in current if p.season == season],
+            [p for p in candidate if p.season == season],
+        ))
+    lines.append(row("all seasons", current, candidate))
+    return lines
+
+
+def _mark(ok: bool) -> str:
+    return "[pass]" if ok else "[fail]"
+
+
+def _bar_lines(bar: SwitchOverBar) -> list[str]:
+    (bc, bk), (lc, lk), (ac, ak) = bar.pooled_brier, bar.pooled_log_loss, bar.pooled_accuracy
+    if bar.worst_bucket_gap is None:
+        calibration = f"no bucket of {CALIBRATION_BAR_MIN_GAMES}+ games to check"
+    else:
+        calibration = f"worst bucket off by {bar.worst_bucket_gap:.1f} points"
+    lines = [
+        f"  Switch-over bar: {'MET' if bar.met else 'NOT MET'}",
+        f"    {_mark(bar.scores_better)} Pooled Brier and log loss both lower: "
+        f"Brier {bk:.4f} vs {bc:.4f}, log loss {lk:.4f} vs {lc:.4f}",
+        f"    {_mark(bar.accuracy_not_lower)} Accuracy not lower: "
+        f"{ak * 100:.1f}% vs {ac * 100:.1f}%",
+        f"    {_mark(bar.enough_seasons)} Brier lower in at least "
+        f"{SEASONS_BETTER_NEEDED} of {bar.seasons} seasons: "
+        f"lower in {bar.seasons_better}",
+        f"    {_mark(bar.calibration_met)} Calibration within "
+        f"{CALIBRATION_BAR_POINTS:g} points in every bucket of "
+        f"{CALIBRATION_BAR_MIN_GAMES}+ games: {calibration}",
+        f"    {_mark(bar.includes_terms)} Uses both a roster-strength term and an "
+        f"injury term: {'yes' if bar.includes_terms else 'no'}",
+    ]
+    if not bar.met:
+        lines.append("  The current model stays live.")
+        for reason in bar.reasons():
+            lines += textwrap.wrap(
+                reason, width=96, initial_indent="    - ", subsequent_indent="      "
+            )
+    return lines
+
+
+def _choice_line(label: str, c: CandidateChoice) -> str:
+    terms = "  ".join(
+        f"{name.replace('_', ' ')} {coef:+.3f}"
+        for name, coef in zip(c.feature_names, c.coefficients, strict=True)
+        if name.startswith(("roster_", "injury_"))
+    )
+    return (
+        f"    {label:<9}formula {c.formula}  w {c.w:g}  "
+        f"half-life {c.player.half_life_minutes:g} min  "
+        f"regression {c.player.season_regression:g}  {terms}  sigma {c.sigma:.2f}"
+    )
+
+
+def _correction_line(
+    base: CandidateResult, corrected: CandidateResult | None,
+    tried: CandidateResult | None,
+) -> str:
+    def change(r: CandidateResult) -> str:
+        b, c = base.final_call, r.final_call
+        return (
+            f"pooled Brier {b.brier:.4f} -> {c.brier:.4f}, "
+            f"log loss {b.log_loss:.4f} -> {c.log_loss:.4f}"
+        )
+
+    if corrected is not None:
+        return f"  Correction model: included ({change(corrected)})"
+    if tried is not None:
+        detail = change(tried)
+    else:
+        detail = "it could not be trained: no season had two earlier seasons of errors"
+    return f"  Correction model: dropped -- it did not improve the walk-forward ({detail})"
+
+
+def _market_block(
+    market_final: Sequence[evaluate_mod.MarketGame],
+    market_current: Sequence[evaluate_mod.MarketGame],
+) -> list[str]:
+    lines = ["  Gap to the closing market (for information only; there is no bar here)"]
+    if not market_final and not market_current:
+        return lines + [f"  {evaluate_mod.NO_MARKET_DATA}"]
+    lines += _wrap(
+        "Each model's walk-forward predictions next to the closing line, for the games "
+        "that have one."
+    )
+    lines.append(f"  {evaluate_mod.CLOSING_LINE_CAVEAT}")
+    lines += [
+        " " * 25 + f"{' model ':-^26}   {' market ':-^26}   {'market chance from':>18}",
+        f"    {'Model':<12}{'games':>7}  "
+        + f"{'accuracy':>8}{'Brier':>8}{'log loss':>10}   " * 2
+        + f"{'moneyline':>10}{'spread':>8}",
+        evaluate_mod._market_row("current", market_current),
+        evaluate_mod._market_row("candidate", market_final),
+    ]
+    return lines
+
+
+def _data_quality(stats: SimStats) -> list[str]:
+    seasons = sorted(
+        set().union(
+            *(stats.fallback.get(c, Counter()) for c in ("final", "early")),
+            *(stats.no_report.get(c, Counter()) for c in ("final", "early")),
+            stats.unlinked_by_season,
+            stats.unknown_by_season,
+        )
+    )
+    lines = [
+        "  Data quality (injury reports and names)",
+        "    fallback = the report for that time was missing, so an earlier one was used;",
+        "    no report = no report listed the game, so the injury term is 0.",
+        " " * 16 + f"{' final call ':-^20}  {' early call ':-^20}",
+        f"    {'Season':<12}" + f"{'fallback':>10}{'no report':>10}  " * 2
+        + f"{'unlinked names':>15}{'unknown statuses':>18}",
+    ]
+    for s in seasons:
+        cells = "".join(
+            f"{stats.fallback.get(c, Counter())[s]:>10,}"
+            f"{stats.no_report.get(c, Counter())[s]:>10,}  "
+            for c in ("final", "early")
+        )
+        rep = stats.unlinked_by_season.get(s)
+        unlinked = sum(rep.unlinked.values()) if rep else 0
+        unknown = sum(stats.unknown_by_season.get(s, {}).values())
+        lines.append(f"    {s:<12}{cells}{unlinked:>15,}{unknown:>18,}")
+    names = stats.unlinked.unlinked
+    total = sum(names.values())
+    lines.append(
+        f"  Unlinked injury-report names (treated as available): {total:,} listings, "
+        f"{len(names):,} distinct names"
+        + (f"; the {min(TOP_UNLINKED, len(names))} most common:" if names else ".")
+    )
+    top = sorted(names.items(), key=lambda kv: (-kv[1], kv[0]))[:TOP_UNLINKED]
+    for (name, team), n in top:
+        lines.append(f"    {name} ({team}) ×{n}")
+    unknown = stats.unknown_status
+    if unknown:
+        listed = ", ".join(
+            f"{status} ×{n}" for status, n in sorted(unknown.items(), key=lambda kv: (-kv[1], kv[0]))
+        )
+    else:
+        listed = "none"
+    lines.append(f"  Unknown injury statuses (treated as Questionable): {listed}")
+    lines.append(f"  Games with no known tip-off: {stats.no_tip:,}")
+    return lines
+
+
+def format_candidate(
+    cev: CandidateEvaluation,
+    bar: SwitchOverBar,
+    corrected: CandidateResult | None,
+    market_final: list[evaluate_mod.MarketGame],
+    market_current: list[evaluate_mod.MarketGame],
+    *,
+    tried: CandidateResult | None = None,
+) -> str:
+    """The candidate section of ``evaluate-model``.
+
+    ``corrected`` is the corrected result when the correction is included
+    (then it is the candidate scored here), else None. ``tried`` is the
+    corrected result that was dropped, if there was one, so the report can
+    show what it would have done. ``bar`` and ``market_final`` must be for
+    the same candidate (corrected if included).
+    """
+    shipped = corrected if corrected is not None else cev.winner
+    current = cev.current.winner.predictions
+    lines = [REPORT_TITLE]
+    lines += _wrap(
+        "The candidate adds each team's player roster strength and the latest injury "
+        "report to the current model. Every season is predicted with settings chosen "
+        "only on earlier seasons, on exactly the same games as the current model. "
+        "Brier and log loss: lower is better; 'better' or 'worse' compares the "
+        "candidate's Brier with the current model's for that season."
+    )
+    lines += _wrap(TEAM_SETTINGS_NOTE)
+    lines += _wrap(SIGMA_NOTE)
+    lines += _wrap(NAME_INDEX_NOTE)
+    lines.append("")
+    lines += _season_table(current, shipped.final_call.predictions)
+    lines.append(
+        f"  Recency variant: {evaluate_mod.variant_label(cev.winner.half_life)} "
+        "(lowest log loss, as for the current model)"
+    )
+    lines.append("")
+    lines += _bar_lines(bar)
+    lines.append("")
+    lines.append("  Chosen settings by season (fitted on earlier seasons only):")
+    lines += _wrap(
+        "w = how much of the team-rating gap the player terms replace (0 = none, "
+        "1 = all); half-life = minutes played over which a player's past games "
+        "lose half their weight; regression = pull toward average at a new season; "
+        "roster/injury = points per unit of each term (box score, plus-minus)."
+    )
+    for season, choice in sorted(shipped.choices.items()):
+        lines.append(_choice_line(season, choice))
+    lines.append(_choice_line(TEST_SEASONS[0], cev.final))
+    lines.append(
+        f"    ({TEST_SEASONS[0]} = fitted on all tuning seasons; it would be used if the "
+        "candidate went live)"
+    )
+    lines.append("")
+    lines.append(_correction_line(cev.winner, corrected, tried))
+    lines.append("")
+    lines.append(
+        "  The early call -- 08:30 ET (12:30 UTC) on game day, with the injury report "
+        "known by then:"
+    )
+    lines += _wrap(
+        "Same settings as above. The current model has no injury input, so its "
+        "numbers are the same as at the final call."
+    )
+    lines += _season_table(current, shipped.early_call.predictions)
+    lines.append("")
+    lines += _market_block(market_final, market_current)
+    lines.append("")
+    lines += _data_quality(shipped.stats)
+    return "\n".join(lines)
