@@ -270,19 +270,46 @@ _COLUMNS = (
 )
 
 
+_INT_COLUMNS = ("player_id", *(field for field, _ in _BOX_COLUMNS))
+_FLOAT_COLUMNS = ("minutes", "plus_minus")
+# Casts applied when copying from the registered frame, so every column
+# lands with the table's own type whatever pandas inferred.
+_CASTS = {"game_date": "DATE", "observed_at": "TIMESTAMPTZ", "reconstructed": "BOOLEAN"}
+
+
+def _frame_of(rows: list[list]) -> pd.DataFrame:
+    """The rows as a DataFrame in ``_COLUMNS`` order. Integer and float
+    columns use pandas' nullable dtypes, so a missing value stays NULL
+    (never NaN, never a float)."""
+    frame = pd.DataFrame(rows, columns=list(_COLUMNS), dtype=object)
+    for col in _INT_COLUMNS:
+        frame[col] = pd.array(list(frame[col]), dtype="Int64")
+    for col in _FLOAT_COLUMNS:
+        frame[col] = pd.array(list(frame[col]), dtype="Float64")
+    frame["game_date"] = pd.to_datetime(frame["game_date"]).dt.date
+    frame["observed_at"] = pd.to_datetime(list(frame["observed_at"]), utc=True)
+    frame["reconstructed"] = frame["reconstructed"].astype(bool)
+    return frame
+
+
 def load(con, downloaded: Downloaded) -> LoadResult:
     """INSERT OR REPLACE one download's rows in a single transaction.
 
-    Rolls back and re-raises on any error -- nothing is left half-written.
+    The rows go in as ONE bulk statement from a registered DataFrame:
+    row-by-row ``executemany`` INSERT OR REPLACE on this keyed table ran
+    DuckDB out of memory (6.3 GiB at ~26k rows) on real data. Rolls back
+    and re-raises on any error -- nothing is left half-written.
     """
     table = db.POINT_IN_TIME_TABLES["player_games"]
     games_table = db.POINT_IN_TIME_TABLES["games"]
     tag = SEASON_TYPE_TAGS[downloaded.season_type]
-    sql = (
-        f"INSERT OR REPLACE INTO {table} ({', '.join(_COLUMNS)})"
-        f" VALUES ({', '.join('?' for _ in _COLUMNS)})"
+    cols = ", ".join(_COLUMNS)
+    select = ", ".join(
+        f"CAST({c} AS {_CASTS[c]})" if c in _CASTS else c for c in _COLUMNS
     )
+    sql = f"INSERT OR REPLACE INTO {table} ({cols}) SELECT {select} FROM incoming"
     con.execute("BEGIN")
+    registered = False
     try:
         params = []
         for row in downloaded.rows:
@@ -298,7 +325,9 @@ def load(con, downloaded: Downloaded) -> LoadResult:
                 ]
             )
         if params:
-            con.executemany(sql, params)
+            con.register("incoming", _frame_of(params))
+            registered = True
+            con.execute(sql)
         game_ids = sorted({row.game_id for row in downloaded.rows})
         known = {
             r[0]
@@ -311,6 +340,9 @@ def load(con, downloaded: Downloaded) -> LoadResult:
     except BaseException:
         con.execute("ROLLBACK")
         raise
+    finally:
+        if registered:
+            con.unregister("incoming")
     return LoadResult(
         season=downloaded.season,
         season_type=downloaded.season_type,

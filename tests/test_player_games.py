@@ -400,3 +400,62 @@ def test_cli_load_failure_names_seasons_already_saved(tmp_path, settings, monkey
     assert result.exit_code == 1
     assert "Could not save player game logs for 2024-25 Pre Season" in result.output
     assert "Earlier seasons were saved: 2023-24." in result.output
+
+
+def test_load_30000_rows_quickly_and_idempotently(con, settings):
+    """A full season of logs goes in as one bulk statement (row-by-row
+    INSERT OR REPLACE on the keyed table ran out of memory on real data),
+    keeps NULLs as NULL and integers as integers, and a rerun changes
+    nothing."""
+    import time as time_mod
+    from datetime import date, timedelta
+
+    rows = []
+    for i in range(30_000):
+        gd = date(2023, 10, 24) + timedelta(days=i // 300)
+        rows.append(player_games.PlayerGameRow(
+            f"00223{i // 30:05d}", "2023-24", gd, 1_000_000 + i % 30 + (i // 30) * 100,
+            f"Player {i}", "BOS" if i % 2 else "NYK",
+            None if i % 97 == 0 else 20.0 + i % 17,
+            *((None if i % 89 == 0 else (i + k) % 40) for k in range(14)),
+            None if i % 83 == 0 else float(i % 21 - 10),
+        ))
+    downloaded = player_games.Downloaded(
+        season="2023-24", season_type="Regular Season", fetched_at=FETCHED,
+        blob_key="synthetic", rows=rows,
+    )
+    start = time_mod.perf_counter()
+    result = player_games.load(con, downloaded)
+    first = time_mod.perf_counter() - start
+    assert result.rows_written == 30_000
+    assert result.games == 1_000
+    assert _count(con) == 30_000
+    start = time_mod.perf_counter()
+    player_games.load(con, downloaded)
+    second = time_mod.perf_counter() - start
+    assert _count(con) == 30_000
+    assert first < 10.0 and second < 10.0
+
+    table = db.POINT_IN_TIME_TABLES["player_games"]
+    nulls = con.execute(
+        f"SELECT count(*) FILTER (WHERE minutes IS NULL), count(*) FILTER (WHERE pts IS NULL),"
+        f" count(*) FILTER (WHERE plus_minus IS NULL), count(*) FILTER (WHERE isnan(minutes))"
+        f" FROM {table}"
+    ).fetchone()
+    assert nulls == (
+        sum(i % 97 == 0 for i in range(30_000)),
+        sum(i % 89 == 0 for i in range(30_000)),
+        sum(i % 83 == 0 for i in range(30_000)),
+        0,
+    )
+    r = rows[1]
+    got = con.execute(
+        f"SELECT game_date, player_id, minutes, pts, fga, plus_minus, observed_at, "
+        f"season_type, source, reconstructed FROM {table} "
+        "WHERE game_id = ? AND player_id = ?", [r.game_id, r.player_id],
+    ).fetchone()
+    assert got == (
+        r.game_date, r.player_id, r.minutes, r.pts, r.fga, r.plus_minus,
+        datetime(2023, 10, 25, 12, tzinfo=UTC), "regular", "nba_stats", True,
+    )
+    assert type(got[3]) is int
