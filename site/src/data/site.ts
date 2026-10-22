@@ -25,7 +25,6 @@ export const backtest = {
   games: 7227,
   model: { accuracy: 65.4, brier: 0.2158, logLoss: 0.6205 },
   market: { accuracy: 67.9, brier: 0.2052, logLoss: 0.596 },
-  home: { low: 54, high: 58 },
   disagreements: { games: 2372, model: 58.5, market: 65.9 },
   againstSpread: { games: 7166, model: 50.0 },
   marketLeadRange: '0.9 to 3.6',

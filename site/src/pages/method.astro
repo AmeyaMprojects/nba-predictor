@@ -54,7 +54,6 @@ const b = backtest;
         <p class="btrails__cap">Share of winners picked, on a 50 to 75% scale</p>
         {[
           { key: 'model', label: 'Model', lo: b.model.accuracy, hi: b.model.accuracy, text: `${b.model.accuracy}%` },
-          { key: 'home', label: 'Always pick home', lo: b.home.low, hi: b.home.high, text: `${b.home.low} to ${b.home.high}%` },
           { key: 'market', label: 'Closing market', lo: b.market.accuracy, hi: b.market.accuracy, text: `${b.market.accuracy}%` },
         ].map((r) => (
           <div class:list={['btrail', `btrail--${r.key}`]}>
@@ -75,7 +74,6 @@ const b = backtest;
         <tbody>
           <tr><th scope="row">Model</th><td>{b.model.accuracy}%</td><td>{b.model.brier.toFixed(4)}</td><td>{b.model.logLoss.toFixed(4)}</td></tr>
           <tr><th scope="row">Closing market</th><td>{b.market.accuracy}%</td><td>{b.market.brier.toFixed(4)}</td><td>{b.market.logLoss.toFixed(4)}</td></tr>
-          <tr><th scope="row">Always pick home</th><td>{b.home.low} to {b.home.high}% a season</td><td>not applicable</td><td>not applicable</td></tr>
         </tbody>
       </table>
       <p class="small">Lower is better for Brier score and log loss; both measure how good the stated chances were, not just the picks.</p>

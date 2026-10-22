@@ -1,5 +1,5 @@
 ---
-// The running record: model right / always-pick-home right / market right, always with n.
+// The running record: model right / market right, always with n.
 import type { Totals } from '../lib/data';
 import { backtest, SMALL_SAMPLE } from '../data/site';
 import { nf, pct } from '../lib/format';
@@ -10,7 +10,6 @@ const { record: r, pendingTonight } = Astro.props;
 const none = r.graded === 0;
 const rows = [
   { key: 'model', label: 'Model', t: r.model, ref: backtest.model.accuracy, refLabel: `backtest ${backtest.model.accuracy}%` },
-  { key: 'home', label: 'Always pick home', t: r.home, ref: (backtest.home.low + backtest.home.high) / 2, refLabel: `backtest ${backtest.home.low} to ${backtest.home.high}%` },
   { key: 'market', label: 'Market', t: r.market, ref: backtest.market.accuracy, refLabel: `backtest ${backtest.market.accuracy}%` },
 ];
 const missingMarket = r.graded - r.market.of;
@@ -31,13 +30,12 @@ const missingMarket = r.graded - r.market.of;
       {[50, 55, 60, 65, 70, 75].map((v) => <span class="refrail__scale" style={`--p:${(v - 50) / 25}`}>{v}%</span>)}
       {rows.map((row, i) => (
         <span class:list={['refrail__tick', `refrail__tick--${row.key}`]} style={`--p:${(row.ref - 50) / 25}; --row:${i}`}>
-          <span>{row.label} {row.key === 'home' ? `${backtest.home.low} to ${backtest.home.high}%` : `${row.ref}%`}</span>
+          <span>{row.label} {`${row.ref}%`}</span>
         </span>
       ))}
     </div>
     <ul class="sr-only">
       <li>Model: {backtest.model.accuracy}% in the backtest</li>
-      <li>Always pick home: {backtest.home.low} to {backtest.home.high}% a season</li>
       <li>Market: {backtest.market.accuracy}% in the backtest</li>
     </ul>
     <p class="record__note">Live results start at 0 games, so for now the backtest is the only record to read (<a class="ilink" href={href('/method/')}>method</a>). Each graded game will appear here with its sample size.</p>
