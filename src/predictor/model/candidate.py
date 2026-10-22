@@ -22,7 +22,8 @@ settings chosen only on the tuning seasons strictly before it
   games, leaving out games with no injury report at the final call (they are
   still predicted, with an injury term of 0). The lowest weighted MSE over
   player settings x formula x w wins; ties keep the first one seen.
-- Sigma is chosen with ``tuning._best_sigma`` on the winner.
+- Sigma is chosen with ``best_sigma`` (``tuning._best_sigma``, vectorised)
+  on the winner.
 
 The six player simulations are shared by every fold and recency variant.
 The early call is scored with the same settings, applied to the early-call
@@ -31,12 +32,14 @@ features.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, time
 from itertools import product
 
 import numpy as np
+from scipy.special import erf
 
 from predictor import db
 from predictor.backtest import metrics
@@ -257,7 +260,7 @@ def _fit_job(
         spread(g_, h_, row, coefficients, wt) for g_, h_, row in zip(gap, hc, X, strict=True)
     ]
     won = [g.result.home_points > g.result.away_points for g in fit_games]
-    sigma = tuning._best_sigma(spreads, won, w)
+    sigma = best_sigma(spreads, won, w)
     return CandidateChoice(
         team=team,
         player=player,
@@ -268,6 +271,41 @@ def _fit_job(
         sigma=sigma,
         games=int(idx.size),
     )
+
+
+def best_sigma(spreads: Sequence[float], won: Sequence[bool], weights: np.ndarray) -> float:
+    """``tuning._best_sigma``, vectorised; picks exactly the same sigma.
+
+    Weighted log loss for every sigma in ``tuning.SIGMA_GRID`` at once (scipy
+    ``erf``, numpy sums). Floating-point differences from the loop are ~1e-12
+    relative, so every sigma whose vectorised loss is within 1e-9 of the
+    minimum is re-scored with the loop's exact arithmetic (first in grid
+    order wins), which makes the result identical. (``tuning.py`` is not
+    modified by this plan.)
+    """
+    grid = np.array(tuning.SIGMA_GRID, dtype=float)
+    s = np.asarray(spreads, dtype=float)
+    if s.size == 0:
+        return tuning.SIGMA_GRID[0]
+    h = np.asarray(won, dtype=bool)
+    w = np.asarray(weights, dtype=float)
+    p = 0.5 * (1.0 + erf(s[:, None] / (grid[None, :] * math.sqrt(2.0))))
+    p = np.clip(p, 1e-12, 1 - 1e-12)
+    loss = -(w[:, None] * np.log(np.where(h[:, None], p, 1.0 - p))).sum(axis=0)
+    best = float(loss.min())
+    near = grid[loss <= best + 1e-9 * max(1.0, abs(best))]
+    if near.size == 1:
+        return float(near[0])
+    # The loop's own arithmetic, over the near-ties only, in grid order.
+    exact = None
+    for sigma in (float(v) for v in near):
+        total = 0.0
+        for sp, hw, wt in zip(spreads, won, weights):
+            q = min(max(win_probability(sp, sigma), 1e-12), 1 - 1e-12)
+            total -= wt * math.log(q if hw else 1 - q)
+        if exact is None or total < exact[0]:
+            exact = (total, sigma)
+    return exact[1]
 
 
 def _terms(choice: CandidateChoice, row: Sequence[float], prefix: str) -> float:

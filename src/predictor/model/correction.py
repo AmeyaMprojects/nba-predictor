@@ -10,8 +10,11 @@ models fitted strictly before each of those seasons, so nothing from S or
 later reaches S's correction.
 
 The model is trained on final-call rows and applied to both calls, each with
-its own call's inputs. Sigma for S is re-chosen with ``tuning._best_sigma``
-on the corrected training spreads (equal weights).
+its own call's inputs. Sigma for S is re-chosen (``candidate.best_sigma``,
+equal weights) on out-of-fold corrected spreads: for each earlier season e
+of S, a model trained on the other earlier seasons corrects e. The model
+that corrects S itself is trained on all of S's earlier seasons. So no
+prediction that chooses sigma comes from a model that saw its rows.
 
 Training is deterministic (``random_state=0``) and the model is never
 pickled: a saved setting records the training seasons and parameters, and
@@ -31,9 +34,8 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 
 from predictor.backtest.replay import Prediction
 from predictor.model import evaluate as evaluate_mod
-from predictor.model import tuning
 from predictor.model.adjustments import FEATURE_NAMES
-from predictor.model.candidate import CandidateResult, GameParts, _variant
+from predictor.model.candidate import CandidateResult, GameParts, _variant, best_sigma
 from predictor.model.fit import FitError
 from predictor.model.player_sim import GameFeatures
 from predictor.model.ratings import win_probability
@@ -52,6 +54,9 @@ GBM_PARAMS = dict(
     min_samples_leaf=100,
     l2_regularization=1.0,
     random_state=0,
+    # Controller ruling (amends the brief): sklearn turns early stopping on
+    # by itself above 10,000 rows; keep the fit the same at any size.
+    early_stopping=False,
 )
 MIN_TRAINING_SEASONS = 2
 
@@ -147,13 +152,23 @@ def apply_corrections(
         earlier = tuple(s for s in seasons if s < season)
         if len(earlier) < MIN_TRAINING_SEASONS:
             continue
-        rows = training_rows(result, features, earlier)
-        model = Correction.train(rows, seasons=earlier, season=season)
-        additive = np.array([r[0] for r, _ in rows])
-        spreads = additive + model.predict_many([r for r, _ in rows])
-        margins = additive + np.array([res for _, res in rows])
-        sigma = tuning._best_sigma(
-            [float(s) for s in spreads], [bool(m > 0) for m in margins], np.ones(len(rows))
+        by_season = {e: training_rows(result, features, (e,)) for e in earlier}
+        spreads: list[float] = []
+        won: list[bool] = []
+        for e in earlier:
+            others = tuple(s for s in earlier if s != e)
+            oof = Correction.train(
+                [r for s in others for r in by_season[s]], seasons=others, season=season
+            )
+            held = by_season[e]
+            delta = oof.predict_many([r for r, _ in held])
+            for (row, residual), d in zip(held, delta, strict=True):
+                additive = row[0]
+                spreads.append(float(additive + d))
+                won.append(bool(additive + residual > 0))
+        sigma = best_sigma(spreads, won, np.ones(len(spreads)))
+        model = Correction.train(
+            [r for e in earlier for r in by_season[e]], seasons=earlier, season=season
         )
         fitted[season] = (model, sigma)
     if not fitted:

@@ -14,6 +14,7 @@ import random
 from collections import Counter
 from datetime import UTC, date, datetime, time, timedelta
 
+import numpy as np
 import pytest
 
 from model_fixtures import add_game, fixture_con
@@ -34,6 +35,7 @@ from predictor.model import candidate as cand
 from predictor.model import correction as corr
 from predictor.model import evaluate as evaluate_mod
 from predictor.model import fit as fit_mod
+from predictor.model import tuning
 from predictor.model.adjustments import FEATURE_NAMES
 from predictor.model.availability import InjuryHistory
 from predictor.model.player_ids import LinkReport
@@ -141,16 +143,51 @@ def test_correction_trains_only_on_earlier_seasons(synthetic, monkeypatch):
     monkeypatch.setattr(corr.Correction, "train", classmethod(spy))
     corr.apply_corrections(base, features)
 
-    by_season = {s: (seasons, n) for s, seasons, n in calls}
-    seasons, n = by_season["2023-24"]
-    assert set(seasons) <= {"2020-21", "2021-22", "2022-23"}
-    assert set(seasons) == {"2020-21", "2021-22", "2022-23"}
-    assert n == 3 * GAMES
-    # Every training call: only strictly earlier seasons, at least two of them.
-    assert set(by_season) == set(SEASONS[2:])
-    for season, (seasons, _) in by_season.items():
-        assert len(seasons) >= corr.MIN_TRAINING_SEASONS
-        assert all(s < season for s in seasons)
+    # Every training call: only strictly earlier seasons.
+    assert {s for s, _, _ in calls} == set(SEASONS[2:])
+    for season, seasons, _ in calls:
+        assert seasons and all(s < season for s in seasons)
+    fold = [(seasons, n) for s, seasons, n in calls if s == "2023-24"]
+    for seasons, _ in fold:
+        assert set(seasons) <= {"2020-21", "2021-22", "2022-23"}
+    # The model that corrects 2023-24 is trained on all three earlier seasons,
+    # plus one leave-one-season-out model per earlier season (for sigma).
+    assert (("2020-21", "2021-22", "2022-23"), 3 * GAMES) in fold
+    assert len(fold) == 3 + 1
+
+
+def test_sigma_never_scored_by_a_model_that_saw_the_rows(synthetic, monkeypatch):
+    """Every prediction (the out-of-fold ones that choose sigma, and the
+    corrections themselves) comes from a model whose training seasons do not
+    include the rows it predicts; sigma is chosen on every earlier row."""
+    base, features, _ = synthetic
+    season_of: dict[tuple[float, ...], str] = {}
+    for s in SEASONS:
+        for row, _ in corr.training_rows(base, features, (s,)):
+            season_of[row] = s
+    predicted: list[tuple[tuple[str, ...], set[str]]] = []
+    real_predict = corr.Correction.predict_many
+
+    def spy_predict(self, xs):
+        predicted.append((self.seasons, {season_of.get(tuple(x), "?") for x in xs}))
+        return real_predict(self, xs)
+
+    sigma_sizes: list[int] = []
+    real_sigma = corr.best_sigma
+
+    def spy_sigma(spreads, won, weights):
+        sigma_sizes.append(len(spreads))
+        return real_sigma(spreads, won, weights)
+
+    monkeypatch.setattr(corr.Correction, "predict_many", spy_predict)
+    monkeypatch.setattr(corr, "best_sigma", spy_sigma)
+    corr.apply_corrections(base, features)
+
+    assert predicted
+    for trained, rows in predicted:
+        assert not set(trained) & rows
+    # One sigma per corrected season, chosen on all of its earlier seasons' rows.
+    assert sigma_sizes == [k * GAMES for k in range(2, len(SEASONS))]
 
 
 def test_correction_zero_without_two_training_seasons(synthetic):
@@ -287,7 +324,7 @@ def test_correction_features_layout():
     )
     assert corr.GBM_PARAMS == dict(
         max_depth=3, learning_rate=0.05, max_iter=200, min_samples_leaf=100,
-        l2_regularization=1.0, random_state=0,
+        l2_regularization=1.0, random_state=0, early_stopping=False,
     )
     assert corr.MIN_TRAINING_SEASONS == 2
 
@@ -403,3 +440,51 @@ def test_candidate_records_parts_and_extras(tmp_path, monkeypatch):
     assert ([p.game_id for p in corrected.final_call.predictions]
             == [p.game_id for p in winner.final_call.predictions])
     con.close()
+
+
+def test_best_sigma_matches_the_loop():
+    rng = random.Random(3)
+    for n, weighted in ((40, False), (400, True), (1500, True)):
+        spreads = [rng.gauss(0, 7) for _ in range(n)]
+        won = [rng.random() < win_probability(s, 11.0) for s in spreads]
+        w = np.array([rng.choice((1.0, 0.5, 0.25)) if weighted else 1.0 for _ in range(n)])
+        assert cand.best_sigma(spreads, won, w) == tuning._best_sigma(spreads, won, w)
+    # Degenerate inputs: every game won by the favourite, and a tie-prone grid edge.
+    spreads = [5.0, -5.0, 3.0]
+    won = [True, False, True]
+    ones = np.ones(3)
+    assert cand.best_sigma(spreads, won, ones) == tuning._best_sigma(spreads, won, ones)
+
+
+def test_extras_do_not_depend_on_player_settings(con):
+    from player_fixtures import add_report, final_at, report_name, ROSTERS
+
+    build_player_fixture(con)
+    add_report(con, final_at(D3), D3, "BOS", report_name(ROSTERS["BOS"][1]), "Out")
+    games = fit_mod._load(con, VenueIndex.from_db(con))
+    lines = PlayerLines.from_db(con)
+    history = InjuryHistory.from_db(con)
+    index = player_index(con)
+    extras = [
+        {g: f.extras for g, f in simulate(games, lines, history, index, p, [])[0].items()}
+        for p in cand.PLAYER_GRID
+    ]
+    assert extras[0][G3]["continuity_gap"] == pytest.approx(0.0)
+    for other in extras[1:]:
+        assert other == extras[0]
+
+
+def test_preseason_lineups_never_count_for_continuity(con):
+    """BOS player 8 played only G1 (competitive). Five BOS preseason lineups
+    without him after G3 must not push G1 out of the last five games."""
+    build_player_fixture(con)
+    players = db.POINT_IN_TIME_TABLES["player_games"]
+    con.execute(f"DELETE FROM {players} WHERE player_id = 8 AND game_id IN (?, ?)", [G2, G3])
+    d = D3
+    for k in range(5):
+        d = d + timedelta(days=1)
+        add_team_rows(con, f"00124002{k:02d}", d, "BOS", season_type="preseason", skip=(8,))
+    target = "0022400299"
+    add_game(con, target, SEASON, d + timedelta(days=1), "BOS", "NYK", 100, 99)
+    feats = _run(con)
+    assert feats[target].extras["continuity_gap"] == pytest.approx(0.0)

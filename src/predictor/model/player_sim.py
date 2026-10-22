@@ -45,7 +45,8 @@ point-in-time like the rest, NaN when a team has no history yet:
   FGA + 0.44 FTA - OREB + TOV.
 - ``continuity_gap`` / ``continuity_gap_early``: home minus away of the
   share of available expected minutes (final / early call) from players who
-  played in at least one of the team's last 5 games.
+  played in at least one of the team's last 5 competitive games (preseason
+  lineups never count here; they only set roster membership).
 """
 
 from __future__ import annotations
@@ -225,6 +226,8 @@ class Rosters:
     def __init__(self) -> None:
         self._last_team: dict[int, str] = {}
         self._team_games: dict[str, deque[frozenset[int]]] = {}
+        # Competitive games only (never preseason), for continuity.
+        self._competitive_games: dict[str, deque[frozenset[int]]] = {}
         self._minutes: dict[int, deque[tuple[str, float]]] = {}
         self._last_date: date | None = None
 
@@ -240,11 +243,14 @@ class Rosters:
             by_game[row.game_id].append((row, rates))
         for gid in sorted(by_game):
             lineups: dict[str, set[int]] = defaultdict(set)
+            competitive: set[str] = set()
             for row, rates in by_game[gid]:
                 if not _played(row):
                     continue
                 self._last_team[row.player_id] = row.team
                 lineups[row.team].add(row.player_id)
+                if rates:
+                    competitive.add(row.team)
                 if rates:
                     self._minutes.setdefault(
                         row.player_id, deque(maxlen=RECENT_GAMES)
@@ -253,6 +259,10 @@ class Rosters:
                 self._team_games.setdefault(
                     team, deque(maxlen=minutes_mod.ROTATION_GAMES)
                 ).append(frozenset(players))
+                if team in competitive:
+                    self._competitive_games.setdefault(
+                        team, deque(maxlen=CONTINUITY_GAMES)
+                    ).append(frozenset(players))
 
     def _check(self, as_of: date) -> None:
         if self._last_date is not None and self._last_date >= as_of:
@@ -278,10 +288,13 @@ class Rosters:
         return any(t == team for t, _ in self._minutes.get(player_id, ()))
 
     def recent_players(self, team: str, games: int, as_of: date) -> set[int]:
-        """Players who played in at least one of ``team``'s last ``games`` games."""
+        """Players who played in at least one of ``team``'s last ``games``
+        competitive games (preseason never counts; at most CONTINUITY_GAMES)."""
         self._check(as_of)
+        if games > CONTINUITY_GAMES:
+            raise ValueError(f"only the last {CONTINUITY_GAMES} games are kept, not {games}")
         out: set[int] = set()
-        for players in list(self._team_games.get(team, ()))[-games:]:
+        for players in list(self._competitive_games.get(team, ()))[-games:]:
             out |= players
         return out
 
