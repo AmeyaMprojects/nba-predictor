@@ -585,9 +585,12 @@ NAME_INDEX_NOTE = (
 NO_PLAYER_LOGS = "  No player game logs -- run predictor ingest-player-logs"
 TOP_UNLINKED = 10
 
+WIDTH = 96  # no report line is wider than this
+
+
 def _wrap(text: str) -> list[str]:
     return textwrap.wrap(
-        text, width=96, initial_indent="  ", subsequent_indent="  ",
+        text, width=WIDTH, initial_indent="  ", subsequent_indent="  ",
         break_on_hyphens=False,
     )
 
@@ -644,47 +647,54 @@ def _bar_lines(bar: SwitchOverBar) -> list[str]:
         calibration = f"no bucket of {CALIBRATION_BAR_MIN_GAMES}+ games to check"
     else:
         calibration = f"worst bucket off by {bar.worst_bucket_gap:.1f} points"
-    lines = [
-        f"  Switch-over bar: {'MET' if bar.met else 'NOT MET'}",
-        f"    {_mark(bar.scores_better)} Pooled Brier and log loss both lower: "
+    checks = [
+        f"{_mark(bar.scores_better)} Pooled Brier and log loss both lower: "
         f"Brier {bk:.4f} vs {bc:.4f}, log loss {lk:.4f} vs {lc:.4f}",
-        f"    {_mark(bar.accuracy_not_lower)} Accuracy not lower: "
+        f"{_mark(bar.accuracy_not_lower)} Accuracy not lower: "
         f"{ak * 100:.1f}% vs {ac * 100:.1f}%",
-        f"    {_mark(bar.enough_seasons)} Brier lower in at least "
+        f"{_mark(bar.enough_seasons)} Brier lower in at least "
         f"{SEASONS_BETTER_NEEDED} of {bar.seasons} seasons: "
         f"lower in {bar.seasons_better}",
-        f"    {_mark(bar.calibration_met)} Calibration within "
+        f"{_mark(bar.calibration_met)} Calibration within "
         f"{CALIBRATION_BAR_POINTS:g} points in every bucket of "
         f"{CALIBRATION_BAR_MIN_GAMES}+ games: {calibration}",
-        f"    {_mark(bar.includes_terms)} Uses both a roster-strength term and an "
+        f"{_mark(bar.includes_terms)} Uses both a roster-strength term and an "
         f"injury term: {'yes' if bar.includes_terms else 'no'}",
     ]
+    lines = [f"  Switch-over bar: {'MET' if bar.met else 'NOT MET'}"]
+    for check in checks:
+        lines += textwrap.wrap(
+            check, width=WIDTH, initial_indent="    ", subsequent_indent=" " * 11,
+            break_on_hyphens=False,
+        )
     if not bar.met:
         lines.append("  The current model stays live.")
         for reason in bar.reasons():
             lines += textwrap.wrap(
-                reason, width=96, initial_indent="    - ", subsequent_indent="      "
+                reason, width=WIDTH, initial_indent="    - ", subsequent_indent="      ",
+                break_on_hyphens=False,
             )
     return lines
 
 
-def _choice_line(label: str, c: CandidateChoice) -> str:
+def _choice_lines(label: str, c: CandidateChoice) -> list[str]:
     terms = "  ".join(
         f"{name.replace('_', ' ')} {coef:+.3f}"
         for name, coef in zip(c.feature_names, c.coefficients, strict=True)
         if name.startswith(("roster_", "injury_"))
     )
-    return (
+    return [
         f"    {label:<9}formula {c.formula}  w {c.w:g}  "
         f"half-life {c.player.half_life_minutes:g} min  "
-        f"regression {c.player.season_regression:g}  {terms}  sigma {c.sigma:.2f}"
-    )
+        f"regression {c.player.season_regression:g}",
+        f"{' ' * 6}{terms}  sigma {c.sigma:.2f}",
+    ]
 
 
 def _correction_line(
     base: CandidateResult, corrected: CandidateResult | None,
     tried: CandidateResult | None,
-) -> str:
+) -> list[str]:
     def change(r: CandidateResult) -> str:
         b, c = base.final_call, r.final_call
         return (
@@ -693,12 +703,36 @@ def _correction_line(
         )
 
     if corrected is not None:
-        return f"  Correction model: included ({change(corrected)})"
-    if tried is not None:
-        detail = change(tried)
+        text = f"Correction model: included ({change(corrected)})"
+    elif tried is not None:
+        text = (
+            "Correction model: dropped -- it did not improve the walk-forward "
+            f"({change(tried)})"
+        )
     else:
-        detail = "it could not be trained: no season had two earlier seasons of errors"
-    return f"  Correction model: dropped -- it did not improve the walk-forward ({detail})"
+        text = (
+            "Correction model: dropped -- it could not be trained (no season had two "
+            "earlier seasons of errors)."
+        )
+    return _wrap(text)
+
+
+def _market_cells(preds: Sequence[Prediction]) -> str:
+    return (
+        f"  {metrics.accuracy(preds) * 100:>7.1f}%{metrics.brier_score(preds):>8.4f}"
+        f"{metrics.log_loss(preds):>10.4f}"
+    )
+
+
+def _market_row(label: str, games: Sequence[evaluate_mod.MarketGame]) -> str:
+    """``evaluate._market_row``'s numbers, in a narrower layout (<= WIDTH)."""
+    from_spread = sum(1 for g in games if g.market.from_spread)
+    return (
+        f"    {label:<10}{len(games):>6,}"
+        f"{_market_cells([g.prediction for g in games])}"
+        f"{_market_cells([g.market_prediction for g in games])}"
+        f"  {len(games) - from_spread:>9,}{from_spread:>7,}"
+    )
 
 
 def _market_block(
@@ -712,14 +746,14 @@ def _market_block(
         "Each model's walk-forward predictions next to the closing line, for the games "
         "that have one."
     )
-    lines.append(f"  {evaluate_mod.CLOSING_LINE_CAVEAT}")
+    lines += _wrap(evaluate_mod.CLOSING_LINE_CAVEAT)
     lines += [
-        " " * 25 + f"{' model ':-^26}   {' market ':-^26}   {'market chance from':>18}",
-        f"    {'Model':<12}{'games':>7}  "
-        + f"{'accuracy':>8}{'Brier':>8}{'log loss':>10}   " * 2
-        + f"{'moneyline':>10}{'spread':>8}",
-        evaluate_mod._market_row("current", market_current),
-        evaluate_mod._market_row("candidate", market_final),
+        " " * 20 + f"  {' model ':-^26}  {' market ':-^26}  {'market chance from':>18}",
+        f"    {'Model':<10}{'games':>6}"
+        + f"  {'accuracy':>8}{'Brier':>8}{'log loss':>10}" * 2
+        + f"  {'moneyline':>9}{'spread':>7}",
+        _market_row("current", market_current),
+        _market_row("candidate", market_final),
     ]
     return lines
 
@@ -733,13 +767,16 @@ def _data_quality(stats: SimStats) -> list[str]:
             stats.unknown_by_season,
         )
     )
+    first_scored = evaluate_mod.WALK_FORWARD_SEASONS[0]
     lines = [
         "  Data quality (injury reports and names)",
         "    fallback = the report for that time was missing, so an earlier one was used;",
-        "    no report = no report listed the game, so the injury term is 0.",
-        " " * 16 + f"{' final call ':-^20}  {' early call ':-^20}",
-        f"    {'Season':<12}" + f"{'fallback':>10}{'no report':>10}  " * 2
-        + f"{'unlinked names':>15}{'unknown statuses':>18}",
+        "    no report = no report listed the game, so the injury term is 0;",
+        "    unlinked = injury-report names matched to no player (treated as available);",
+        "    unknown = statuses outside the five known ones (treated as Questionable).",
+        " " * 22 + f"{' final call ':-^20}  {' early call ':-^20}",
+        f"    {'Season':<18}" + f"{'fallback':>10}{'no report':>10}  " * 2
+        + f"{'unlinked':>9}{'unknown':>9}",
     ]
     for s in seasons:
         cells = "".join(
@@ -750,11 +787,17 @@ def _data_quality(stats: SimStats) -> list[str]:
         rep = stats.unlinked_by_season.get(s)
         unlinked = sum(rep.unlinked.values()) if rep else 0
         unknown = sum(stats.unknown_by_season.get(s, {}).values())
-        lines.append(f"    {s:<12}{cells}{unlinked:>15,}{unknown:>18,}")
+        label = f"{s} (warm-up)" if s < first_scored else s
+        lines.append(f"    {label:<18}{cells}{unlinked:>9,}{unknown:>9,}")
+    if any(s < first_scored for s in seasons):
+        lines += _wrap(
+            f"Seasons before {first_scored} are warm-up only: they train the ratings "
+            "and are not scored."
+        )
     names = stats.unlinked.unlinked
     total = sum(names.values())
-    lines.append(
-        f"  Unlinked injury-report names (treated as available): {total:,} listings, "
+    lines += _wrap(
+        f"Unlinked injury-report names (treated as available): {total:,} listings, "
         f"{len(names):,} distinct names"
         + (f"; the {min(TOP_UNLINKED, len(names))} most common:" if names else ".")
     )
@@ -764,11 +807,12 @@ def _data_quality(stats: SimStats) -> list[str]:
     unknown = stats.unknown_status
     if unknown:
         listed = ", ".join(
-            f"{status} ×{n}" for status, n in sorted(unknown.items(), key=lambda kv: (-kv[1], kv[0]))
+            f"{status} ×{n}"
+            for status, n in sorted(unknown.items(), key=lambda kv: (-kv[1], kv[0]))
         )
     else:
         listed = "none"
-    lines.append(f"  Unknown injury statuses (treated as Questionable): {listed}")
+    lines += _wrap(f"Unknown injury statuses (treated as Questionable): {listed}")
     lines.append(f"  Games with no known tip-off: {stats.no_tip:,}")
     return lines
 
@@ -820,22 +864,20 @@ def format_candidate(
         "roster/injury = points per unit of each term (box score, plus-minus)."
     )
     for season, choice in sorted(shipped.choices.items()):
-        lines.append(_choice_line(season, choice))
-    lines.append(_choice_line(TEST_SEASONS[0], cev.final))
+        lines += _choice_lines(season, choice)
+    lines += _choice_lines(TEST_SEASONS[0], cev.final)
     lines.append(
         f"    ({TEST_SEASONS[0]} = fitted on all tuning seasons; it would be used if the "
         "candidate went live)"
     )
     lines.append("")
-    lines.append(_correction_line(cev.winner, corrected, tried))
+    lines += _correction_line(cev.winner, corrected, tried)
     lines.append("")
-    lines.append(
-        "  The early call -- 08:30 ET (12:30 UTC) on game day, with the injury report "
-        "known by then:"
-    )
     lines += _wrap(
-        "Same settings as above. The current model has no injury input, so its "
-        "numbers are the same as at the final call."
+        "The early call -- 08:30 ET (12:30 UTC) on game day, with the injury report "
+        "known by then. Same candidate settings as above. It is compared with the same "
+        "current-model numbers as the final call: the current model has no injury "
+        "input, so its call does not depend on the call time."
     )
     lines += _season_table(current, shipped.early_call.predictions)
     lines.append("")

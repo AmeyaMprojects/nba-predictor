@@ -76,13 +76,18 @@ def _stats() -> SimStats:
     return SimStats(
         no_tip=2,
         fallback={"final": Counter({"2021-22": 5}), "early": Counter({"2021-22": 7})},
-        no_report={"final": Counter({"2020-21": 11}), "early": Counter({"2020-21": 13})},
+        no_report={"final": Counter({"2019-20": 4, "2020-21": 11}),
+                   "early": Counter({"2019-20": 6, "2020-21": 13})},
         unlinked=LinkReport(linked=110, unlinked=Counter({
             ("Morris, Marcus", "NYK"): 3, ("Smith, Jr., Dennis", "CHA"): 1})),
         unknown_status=Counter({"Suspended": 2}),
         unlinked_by_season=by_season,
         unknown_by_season={"2022-23": {"Suspended": 2}},
     )
+
+
+def _flat(text: str) -> str:
+    return " ".join(text.split())
 
 
 def _cev(better: int = 3):
@@ -128,7 +133,7 @@ def test_format_candidate_shows_bar_and_reasons():
     assert "[pass]" in text
     assert "The current model stays live." in text
     for reason in bar.reasons():
-        assert reason in text.replace("\n    ", " ")
+        assert reason in _flat(text)
     for season in SEASONS:
         assert season in text
     assert "better" in text and "worse" in text
@@ -155,21 +160,27 @@ def test_format_candidate_shows_chosen_settings():
     assert "half-life 1500 min" in text
     assert "regression 0.4" in text
     assert "roster box +0.800" in text
+    # The terms and sigma sit on their own indented line under the settings.
+    line = next(ln for ln in text.splitlines() if "roster box +0.800" in ln)
+    assert line.startswith(" " * 6) and "formula" not in line and "sigma 12.00" in line
     assert "injury box +0.900" in text
 
 
 def test_format_candidate_shows_dropped_correction():
     cev, bar = _cev()
     text = cand.format_candidate(cev, bar, None, [], [])
-    assert "Correction model: dropped" in text
+    assert (
+        "Correction model: dropped -- it could not be trained (no season had two "
+        "earlier seasons of errors)."
+    ) in _flat(text)
     tried = dataclasses.replace(
         cev.winner,
         final_call=_variant([dataclasses.replace(p, p_home=0.5)
                              for p in cev.winner.final_call.predictions]),
     )
     text = cand.format_candidate(cev, bar, None, [], [], tried=tried)
-    assert "Correction model: dropped -- it did not improve the walk-forward (" in text
-    assert "0.2500" in text  # the tried correction's Brier
+    assert "Correction model: dropped -- it did not improve the walk-forward (" in _flat(text)
+    assert "-> 0.2500" in _flat(text)  # the tried correction's Brier
 
 
 def test_format_candidate_shows_included_correction():
@@ -182,9 +193,9 @@ def test_format_candidate_shows_included_correction():
     )
     text = cand.format_candidate(cev, bar, corrected, [], [])
     assert (
-        f"  Correction model: included (pooled Brier {base.brier:.4f} -> 0.0100, "
+        f"Correction model: included (pooled Brier {base.brier:.4f} -> 0.0100, "
         f"log loss {base.log_loss:.4f} -> "
-    ) in text
+    ) in _flat(text)
 
 
 def test_format_candidate_has_early_and_market_blocks():
@@ -194,8 +205,10 @@ def test_format_candidate_has_early_and_market_blocks():
     )
     assert "early call" in text
     assert "08:30 ET (12:30 UTC)" in text
+    assert "same current-model numbers" in _flat(text)
+    assert "does not depend on the call time" in _flat(text)
     assert "closing" in text
-    assert evaluate_mod.CLOSING_LINE_CAVEAT in text
+    assert evaluate_mod.CLOSING_LINE_CAVEAT in _flat(text)
     assert "current" in text and "candidate" in text
     # Early-call candidate numbers: 0.66 everywhere -> Brier of that.
     early = cev.winner.early_call
@@ -223,6 +236,35 @@ def test_format_candidate_lists_unlinked_names():
     assert line_2122.split()[5] == "3"  # unlinked listings that season
     line_2021 = next(ln for ln in dq.splitlines() if ln.strip().startswith("2020-21"))
     assert line_2021.split()[1:5] == ["0", "11", "0", "13"]
+    assert "warm-up" not in line_2021
+    warm = next(ln for ln in dq.splitlines() if ln.strip().startswith("2019-20"))
+    assert warm.split()[1:6] == ["(warm-up)", "0", "4", "0", "6"]
+    assert (
+        "Seasons before 2020-21 are warm-up only: they train the ratings and are not "
+        "scored."
+    ) in _flat(dq)
+
+
+def test_no_report_line_is_wider_than_96():
+    """Worst case on the hand-built fixture: formula "both" with large
+    coefficients, a dropped correction with numbers, market lines, and the
+    full data-quality block."""
+    cev, bar = _cev()
+    names = cand.feature_names("both")
+    coef = tuple(-12.345678 if n.startswith(("roster_", "injury_")) else 0.1 for n in names)
+    wide = dataclasses.replace(cev.final, formula="both", feature_names=names,
+                               coefficients=coef, sigma=13.75)
+    winner = dataclasses.replace(cev.winner, choices={s: wide for s in SEASONS})
+    cev = dataclasses.replace(cev, winner=winner, final=wide)
+    tried = dataclasses.replace(cev.winner, final_call=_variant(
+        [dataclasses.replace(p, p_home=0.5) for p in cev.winner.final_call.predictions]))
+    for kwargs in ({"tried": tried}, {}):
+        text = cand.format_candidate(
+            cev, bar, None, _market(cev.winner.final_call), _market(cev.current.winner),
+            **kwargs,
+        )
+        too_wide = [ln for ln in text.splitlines() if len(ln) > 96]
+        assert too_wide == []
 
 
 def test_format_candidate_top_ten_unlinked_only():
@@ -295,6 +337,8 @@ def test_current_model_numbers_unchanged(tmp_path, monkeypatch):
     assert "Correction model:" in default.stdout
     head = default.stdout[: default.stdout.index(TITLE)]
     assert head.rstrip("\n") == without.stdout.rstrip("\n")
+    section = default.stdout[default.stdout.index(TITLE):]
+    assert [ln for ln in section.splitlines() if len(ln) > 96] == []
     for key in ("log loss", "Brier", "accuracy"):
         cur = [ln for ln in without.stdout.splitlines() if key in ln]
         assert cur and all(ln in head.splitlines() for ln in cur)
