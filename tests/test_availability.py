@@ -203,3 +203,13 @@ def test_from_view_respects_the_view_cutoff(con):
     snap = hist.snapshot_at(D, datetime(2025, 1, 16, tzinfo=UTC))
     assert snap.observed_at == t1
     assert snap.statuses == {("BOS", "Tatum,Jayson"): "Questionable"}
+
+
+def test_status_matching_ignores_case_and_whitespace():
+    table = av.estimate([], season="2021-22", call="final")
+    assert table.prob("  OUT ") == 0.0
+    assert table.prob("questionable") == 0.5
+    assert table.prob("PROBABLE") == 0.9
+    counter = av.UnknownStatusCounter()
+    assert counter.record("2021-22", " out ") is False
+    assert counter.total("2021-22") == 0

@@ -44,12 +44,16 @@ Call = Literal["early", "final"]
 CALLS: tuple[str, ...] = ("early", "final")
 
 
+_CANONICAL = {name.lower(): name for name in STATUS_PRIORS}
+
+
 def _known(status: object) -> str | None:
-    """The status as a known key, or None when it is not one of the five."""
+    """The status as a known key, or None when it is not one of the five.
+
+    Matching ignores surrounding whitespace and case ("  OUT " is "Out").
+    """
     if isinstance(status, str):
-        s = status.strip()
-        if s in STATUS_PRIORS:
-            return s
+        return _CANONICAL.get(status.strip().lower())
     return None
 
 
