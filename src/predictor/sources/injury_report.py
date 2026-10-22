@@ -68,6 +68,25 @@ class TransientFetchError(Exception):
         self.retry_after = retry_after
 
 
+# The CDN answers 403 to requests without a browser-like User-Agent, which
+# would read as "not published" for every slot. Every default session sends
+# these headers.
+BROWSER_HEADERS: dict[str, str] = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "application/pdf,*/*",
+}
+
+
+def new_session() -> requests.Session:
+    """A requests session that sends BROWSER_HEADERS on every request."""
+    session = requests.Session()
+    session.headers.update(BROWSER_HEADERS)
+    return session
+
+
 def report_url(day: date, hour_label: str) -> str:
     return f"{BASE_URL}/Injury-Report_{day.isoformat()}_{hour_label}.pdf"
 
@@ -219,7 +238,7 @@ def fetch_report(day: date, hour_label: str, session=None) -> bytes | None:
     (e.g. a `requests` exception not in that retryable set) propagates
     immediately, uncaught.
     """
-    session = session or requests.Session()
+    session = session or new_session()
     return _fetch_attempt(session, day, hour_label)
 
 
@@ -915,7 +934,7 @@ def backfill_range(
     before; resumability (via `skipped`) means a re-run only repeats work
     from that point forward, not from the start.
     """
-    session = session or requests.Session()
+    session = session or new_session()
     stats = {
         "fetched": 0,
         "skipped": 0,

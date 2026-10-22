@@ -157,6 +157,70 @@ def backfill_injuries(
         raise typer.Exit(code=1)
 
 
+@app.command("backfill-injury-slots")
+def backfill_injury_slots(
+    start: str = typer.Option("2020-12-22", help="ISO start game date."),
+    end: str = typer.Option(None, help="ISO end game date; defaults to today."),
+    delay: float = typer.Option(0.4, help="Seconds between network requests."),
+) -> None:
+    """Backfill the injury-report slots the replay's early and final calls need."""
+    from datetime import date as _date
+
+    from predictor import db
+    from predictor.config import settings
+    from predictor.sources import injury_slots
+
+    settings.ensure_dirs()
+    con = db.connect()
+    db.migrate(con)
+
+    targets = injury_slots.replay_targets(
+        con,
+        _date.fromisoformat(start),
+        _date.fromisoformat(end) if end else _date.today(),
+    )
+    stats = injury_slots.backfill_slots(con, targets, delay=delay)
+    for key, value in stats.items():
+        typer.echo(f"{key}: {value}")
+
+    if stats["unsatisfied"]:
+        typer.echo(
+            f"{stats['unsatisfied']} call time(s) have no report within "
+            "3 hours before them. Holes are normal; the replay falls back to "
+            "the latest earlier report."
+        )
+    transient = stats["transient"]
+    parse_failed = stats["parse_failed"]
+    bad_content = stats["bad_content"]
+    if transient:
+        typer.echo(
+            f"WARNING: {transient} slot(s) could not be checked (rate-limited "
+            "or a server error) and are NOT counted as absent. They were not "
+            "archived, so re-running this exact command will retry them "
+            "automatically."
+        )
+    if bad_content:
+        typer.echo(
+            f"WARNING: {bad_content} slot(s) returned a 200 response with a "
+            "body that was not a PDF (for example a CDN block or challenge "
+            "page). These are NOT counted as absent. They were not archived, "
+            "so re-running this exact command will retry them automatically."
+        )
+    if parse_failed:
+        typer.echo(
+            f"WARNING: {parse_failed} slot(s) were fetched but could not be "
+            "parsed, so nothing was ingested for them. The raw PDF is "
+            "archived on disk -- run 'predictor reingest-injuries' after "
+            "fixing the parser to recover them without re-fetching."
+        )
+    if transient or parse_failed or bad_content:
+        typer.echo(
+            f"RUN DID NOT FULLY SUCCEED: {transient + parse_failed + bad_content} "
+            "slot(s) are missing from the database. See the warnings above."
+        )
+        raise typer.Exit(code=1)
+
+
 @app.command("reingest-injuries")
 def reingest_injuries(
     start: str = typer.Option(None, help="ISO start date filter (inclusive)."),
