@@ -169,6 +169,19 @@ def test_snapshot_skips_reports_without_that_game_date(con):
     assert hist.snapshot_at(date(2025, 1, 17), datetime(2025, 1, 18, tzinfo=UTC)) is None
 
 
+def test_latest_report_at_spans_every_game_date(con):
+    t1 = datetime(2025, 1, 15, 20, 0, tzinfo=UTC)
+    t2 = datetime(2025, 1, 15, 22, 0, tzinfo=UTC)
+    _insert(con, t1, D, "BOS", "Tatum,Jayson", "Questionable")
+    _insert(con, t2, date(2025, 1, 16), "BOS", "Tatum,Jayson", "Out")
+    hist = InjuryHistory.from_db(con)
+    assert hist.latest_report_at(datetime(2025, 1, 15, 21, 59, tzinfo=UTC)) == t1
+    assert hist.latest_report_at(t2) == t2
+    assert hist.latest_report_at(datetime(2025, 1, 15, 19, 0, tzinfo=UTC)) is None
+    with pytest.raises(ValueError):
+        hist.latest_report_at(datetime(2025, 1, 15, 23, 0))
+
+
 def test_snapshot_at_rejects_naive_time(con):
     hist = InjuryHistory.from_db(con)
     with pytest.raises(ValueError):

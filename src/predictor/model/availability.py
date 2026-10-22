@@ -164,10 +164,13 @@ class InjuryHistory:
             by_date[game_date][observed_at][(team, player)] = status
         self._times: dict[date, list[datetime]] = {}
         self._snaps: dict[date, list[Snapshot]] = {}
+        all_times: set[datetime] = set()
         for game_date, reports in by_date.items():
             times = sorted(reports)
+            all_times.update(times)
             self._times[game_date] = times
             self._snaps[game_date] = [Snapshot(t, dict(reports[t])) for t in times]
+        self._all_times = sorted(all_times)
 
     _COLUMNS = "observed_at, game_date, team, player, status"
 
@@ -190,3 +193,13 @@ class InjuryHistory:
             return None
         i = bisect.bisect_right(times, at)
         return self._snaps[game_date][i - 1] if i else None
+
+    def latest_report_at(self, at: datetime) -> datetime | None:
+        """Time of the latest report of any game date with ``observed_at <= at``.
+
+        Compared with ``snapshot_at(...).observed_at`` it tells whether the
+        snapshot fell back past a later report that did not list the date.
+        """
+        at = db.require_utc(at, "at").astimezone(UTC)
+        i = bisect.bisect_right(self._all_times, at)
+        return self._all_times[i - 1] if i else None
