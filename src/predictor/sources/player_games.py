@@ -18,8 +18,10 @@ row here is `reconstructed=TRUE`, `source='nba_stats'`.
 Season types: `SEASON_TYPES` are the ones whose logs feed player ratings
 and minutes. Preseason logs ("Pre Season") are fetched too
 (`ALL_SEASON_TYPES`) and stored with `season_type='preseason'`, but only
-for roster membership -- so a summer signing or trade counts from his first
-preseason game. They must never feed ratings or minutes.
+roster membership may read them -- so a summer signing or trade counts
+from his first preseason game. They must never feed ratings or minutes:
+every ratings/minutes query filters with `rating_rows_sql()` (stored tags in
+`RATING_SEASON_TYPES`), and only roster-membership code may skip it.
 """
 
 from __future__ import annotations
@@ -53,7 +55,25 @@ SEASON_TYPE_TAGS = {
     "Playoffs": "playoffs",
 }
 
+# Stored `season_type` tags whose rows may feed ratings and minutes.
+RATING_SEASON_TYPES = ("regular", "playin", "playoffs")
+
 FIRST_SEASON = "2014-15"
+
+
+class ParseError(Exception):
+    """The logs were downloaded and archived but could not be read."""
+
+
+def rating_rows_sql(alias: str = "") -> str:
+    """SQL predicate keeping only rows that may feed ratings and minutes
+    (never preseason). `alias` qualifies the column, e.g. "p" ->
+    "p.season_type IN (...)"; it must be a plain identifier."""
+    if alias and not alias.isidentifier():
+        raise ValueError(f"alias must be a plain SQL identifier, got {alias!r}")
+    column = f"{alias}.season_type" if alias else "season_type"
+    tags = ", ".join(f"'{tag}'" for tag in RATING_SEASON_TYPES)
+    return f"{column} IN ({tags})"
 
 # See results._READ_DTYPE: without this, "0022300001" reads back as an int.
 _READ_DTYPE = {"GAME_ID": str}
@@ -204,7 +224,8 @@ def download(
 ) -> Downloaded:
     """Fetch, archive and parse one season type's logs. Touches no database.
 
-    The frame is archived BEFORE parsing and parsing reads the archived
+    A parse failure of the archived bytes raises `ParseError` (the blob stays
+    archived for a re-parse). The frame is archived BEFORE parsing and parsing reads the archived
     bytes back (`raw_store.load`), so what this returns is what was
     archived. `fetched_at`, when not given, is stamped after the fetch
     returns.
@@ -224,17 +245,21 @@ def download(
         fetched_at,
         meta={"season": season, "season_type": season_type},
     )
-    archived = pd.read_json(
-        io.BytesIO(gzip.decompress(raw_store.load(SOURCE, key))),
-        orient="split",
-        dtype=_READ_DTYPE,
-    )
+    try:
+        archived = pd.read_json(
+            io.BytesIO(gzip.decompress(raw_store.load(SOURCE, key))),
+            orient="split",
+            dtype=_READ_DTYPE,
+        )
+        rows = _parse(archived, season)
+    except (KeyError, ValueError, TypeError) as exc:
+        raise ParseError(f"archived as {key}: {exc!r}") from exc
     return Downloaded(
         season=season,
         season_type=season_type,
         fetched_at=fetched_at,
         blob_key=key,
-        rows=_parse(archived, season),
+        rows=rows,
     )
 
 

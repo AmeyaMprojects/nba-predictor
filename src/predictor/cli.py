@@ -260,7 +260,14 @@ def ingest_player_logs_cmd(
         for season_type in player_games.ALL_SEASON_TYPES:
             try:
                 downloads.append(player_games.download(target, season_type))
-            except Exception as exc:  # any failure: explain it, save nothing
+            except player_games.ParseError as exc:
+                typer.echo(
+                    f"Downloaded and archived player game logs for {target} "
+                    f"{season_type}, but could not read them ({exc}); nothing "
+                    "was loaded into the database."
+                )
+                raise typer.Exit(code=1) from None
+            except Exception as exc:  # any other failure: explain it, save nothing
                 typer.echo(
                     f"Could not download player game logs for {target} "
                     f"{season_type} ({exc}); nothing was saved."
@@ -277,27 +284,52 @@ def ingest_player_logs_cmd(
         )
         raise typer.Exit(code=1) from None
 
+    preseason_tag = player_games.SEASON_TYPE_TAGS[player_games.PRESEASON]
     totals: dict[str, dict] = {}
     for item in downloads:
         try:
             result = player_games.load(con, item)
         except duckdb.Error as exc:
+            done = [s for s in totals if s != item.season]
+            saved = (
+                f"Earlier seasons were saved: {', '.join(done)}."
+                if done
+                else "No earlier season was saved."
+            )
+            partial = totals.get(item.season, {}).get("types", [])
+            if partial:
+                saved += f" For {item.season}, {', '.join(partial)} were saved."
             typer.echo(
                 f"Could not save player game logs for {item.season} "
                 f"{item.season_type} ({exc}). Nothing from that download was "
-                "loaded; it is archived on disk."
+                f"loaded; it is archived on disk. {saved}"
             )
             raise typer.Exit(code=1) from None
-        entry = totals.setdefault(result.season, {"rows": 0, "games": set(), "unknown": set()})
+        entry = totals.setdefault(
+            result.season,
+            {"rows": 0, "games": set(), "unknown": set(), "preseason_unknown": set(),
+             "types": []},
+        )
         entry["rows"] += result.rows_written
         entry["games"].update(row.game_id for row in item.rows)
-        entry["unknown"].update(result.unknown_game_ids)
+        entry["types"].append(item.season_type)
+        if player_games.SEASON_TYPE_TAGS[item.season_type] == preseason_tag:
+            entry["preseason_unknown"].update(result.unknown_game_ids)
+        else:
+            entry["unknown"].update(result.unknown_game_ids)
 
     for target, entry in totals.items():
+        # The competitive count excludes preseason: preseason games are not
+        # in the games table by design, so they are reported on their own.
         typer.echo(
             f"player logs {target}: {entry['rows']} rows, {len(entry['games'])} games "
             f"({len(entry['unknown'])} not in the games table)"
         )
+        if entry["preseason_unknown"]:
+            typer.echo(
+                f"  {len(entry['preseason_unknown'])} preseason game(s) not in the "
+                "games table (expected: preseason games are kept for rosters only)"
+            )
 
 
 @app.command("ingest-schedule")

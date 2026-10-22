@@ -281,7 +281,9 @@ def test_cli_downloads_everything_then_loads_and_reports(tmp_path, settings, mon
     assert result.exit_code == 0, result.output
     assert order[-1] == ("connect",)
     assert [o[2] for o in order[:-1]] == list(player_games.ALL_SEASON_TYPES)
-    assert "player logs 2023-24: 4 rows, 4 games (4 not in the games table)" in result.output
+    # The competitive count excludes preseason; preseason is reported apart.
+    assert "player logs 2023-24: 4 rows, 4 games (3 not in the games table)" in result.output
+    assert "1 preseason game(s) not in the games table" in result.output
 
 
 def test_cli_default_seasons_run_from_2014_15_to_current(settings, monkeypatch):
@@ -312,3 +314,89 @@ def test_no_season_total_endpoints_in_src():
         text = path.read_text()
         for name in banned:
             assert name not in text, f"{name} appears in {path}"
+
+
+def test_rating_season_types_exclude_preseason():
+    assert player_games.RATING_SEASON_TYPES == ("regular", "playin", "playoffs")
+    assert "preseason" not in player_games.RATING_SEASON_TYPES
+    assert set(player_games.RATING_SEASON_TYPES) == {
+        player_games.SEASON_TYPE_TAGS[t] for t in player_games.SEASON_TYPES
+    }
+
+
+def test_rating_rows_sql_keeps_competitive_rows_only(con, settings):
+    for season_type, game_id in (("Pre Season", "0012300001"), ("Regular Season", "0022300001"),
+                                 ("PlayIn", "0052300001"), ("Playoffs", "0042300001")):
+        player_games.load(con, player_games.download(
+            "2023-24", season_type, FETCHED, fetch=_fetch_of(_frame(_row(game_id=game_id))),
+        ))
+    table = db.POINT_IN_TIME_TABLES["player_games"]
+    kept = con.execute(
+        f"SELECT season_type FROM {table} WHERE {player_games.rating_rows_sql()} ORDER BY 1"
+    ).fetchall()
+    assert [r[0] for r in kept] == ["playin", "playoffs", "regular"]
+    aliased = con.execute(
+        f"SELECT count(*) FROM {table} AS p WHERE {player_games.rating_rows_sql('p')}"
+    ).fetchone()[0]
+    assert aliased == 3
+
+
+def test_rating_rows_sql_rejects_a_non_identifier_alias():
+    with pytest.raises(ValueError):
+        player_games.rating_rows_sql("p; DROP TABLE x")
+
+
+def test_module_docstring_restricts_preseason_to_roster_membership():
+    doc = player_games.__doc__
+    assert "roster membership" in doc
+    assert "rating_rows_sql" in doc
+
+
+def test_download_wraps_parse_failures_in_parse_error(settings):
+    frame = _frame().drop(columns=["PLAYER_ID"])
+    with pytest.raises(player_games.ParseError):
+        player_games.download("2023-24", "Regular Season", FETCHED, fetch=_fetch_of(frame))
+
+
+def test_cli_parse_error_has_its_own_message(settings, monkeypatch):
+    connects = []
+    monkeypatch.setattr(db, "connect_with_retry", lambda *a, **k: connects.append(1))
+
+    def unreadable(season, season_type, fetched_at=None):
+        raise player_games.ParseError("missing column 'PLAYER_ID'")
+
+    monkeypatch.setattr(player_games, "download", unreadable)
+    result = runner.invoke(cli.app, ["ingest-player-logs", "--season", "2023-24"])
+    assert result.exit_code == 1
+    assert result.output.startswith(
+        "Downloaded and archived player game logs for 2023-24 Pre Season, but could not read them"
+    )
+    assert "Could not download" not in result.output
+    assert connects == []
+
+
+def test_cli_load_failure_names_seasons_already_saved(tmp_path, settings, monkeypatch):
+    import duckdb
+
+    real_download = player_games.download
+    real_load = player_games.load
+
+    def fake_download(season, season_type, fetched_at=None):
+        return real_download(season, season_type, FETCHED,
+                             fetch=_fetch_of(_frame(_row())))
+
+    def flaky_load(con, downloaded):
+        if downloaded.season == "2024-25":
+            raise duckdb.Error("disk full")
+        return real_load(con, downloaded)
+
+    monkeypatch.setattr(player_games, "download", fake_download)
+    monkeypatch.setattr(player_games, "load", flaky_load)
+    monkeypatch.setattr(db, "connect_with_retry",
+                        lambda *a, **k: db.connect(tmp_path / "cli.duckdb"))
+    result = runner.invoke(
+        cli.app, ["ingest-player-logs", "--season", "2023-24", "--season", "2024-25"]
+    )
+    assert result.exit_code == 1
+    assert "Could not save player game logs for 2024-25 Pre Season" in result.output
+    assert "Earlier seasons were saved: 2023-24." in result.output
