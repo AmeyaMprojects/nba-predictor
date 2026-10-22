@@ -233,6 +233,73 @@ def ingest_season_cmd(season: str = typer.Argument(..., help="e.g. 2024-25")) ->
         raise typer.Exit(code=1)
 
 
+@app.command("ingest-player-logs")
+def ingest_player_logs_cmd(
+    season: list[str] = typer.Option(
+        None,
+        "--season",
+        help="Season to fetch, e.g. 2024-25 (repeatable). Defaults to every "
+        "season from 2014-15 through the current one.",
+    ),
+) -> None:
+    """Fetch player game logs (preseason, regular season, play-in, playoffs),
+    archive them, and load them."""
+    import duckdb
+
+    from predictor import db
+    from predictor.config import settings
+    from predictor.sources import player_games
+
+    settings.ensure_dirs()
+    seasons = list(season) if season else player_games.default_seasons(_now())
+
+    # Every download happens BEFORE the database is opened: a long run of
+    # downloads must never hold the DuckDB write lock other jobs need.
+    downloads = []
+    for target in seasons:
+        for season_type in player_games.ALL_SEASON_TYPES:
+            try:
+                downloads.append(player_games.download(target, season_type))
+            except Exception as exc:  # any failure: explain it, save nothing
+                typer.echo(
+                    f"Could not download player game logs for {target} "
+                    f"{season_type} ({exc}); nothing was saved."
+                )
+                raise typer.Exit(code=1) from None
+
+    try:
+        con = db.connect_with_retry()
+        db.migrate(con)
+    except duckdb.Error as exc:
+        typer.echo(
+            f"Could not open the database to save player game logs ({exc}). "
+            "The downloads are archived on disk; nothing was loaded."
+        )
+        raise typer.Exit(code=1) from None
+
+    totals: dict[str, dict] = {}
+    for item in downloads:
+        try:
+            result = player_games.load(con, item)
+        except duckdb.Error as exc:
+            typer.echo(
+                f"Could not save player game logs for {item.season} "
+                f"{item.season_type} ({exc}). Nothing from that download was "
+                "loaded; it is archived on disk."
+            )
+            raise typer.Exit(code=1) from None
+        entry = totals.setdefault(result.season, {"rows": 0, "games": set(), "unknown": set()})
+        entry["rows"] += result.rows_written
+        entry["games"].update(row.game_id for row in item.rows)
+        entry["unknown"].update(result.unknown_game_ids)
+
+    for target, entry in totals.items():
+        typer.echo(
+            f"player logs {target}: {entry['rows']} rows, {len(entry['games'])} games "
+            f"({len(entry['unknown'])} not in the games table)"
+        )
+
+
 @app.command("ingest-schedule")
 def ingest_schedule_cmd(
     season: str = typer.Option(

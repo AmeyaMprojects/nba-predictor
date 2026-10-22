@@ -396,3 +396,15 @@ def test_odds_link_migration_upgrades_an_old_table_and_is_idempotent(tmp_path):
         " WHERE table_name = 'odds_snapshots_raw' AND constraint_type = 'PRIMARY KEY'"
     ).fetchone()[0]
     assert list(pk) == ["game_key", "book", "observed_at"]
+
+
+def test_player_games_table_is_registered_with_its_key_columns(con):
+    assert db.POINT_IN_TIME_TABLES["player_games"] == "player_games_raw"
+    db.migrate(con)
+    cols = {r[0]: r for r in con.execute("DESCRIBE player_games_raw").fetchall()}
+    assert {"game_id", "player_id", "season_type", "minutes", "plus_minus",
+            "source", "reconstructed", "observed_at"} <= set(cols)
+    # PRIMARY KEY (game_id, player_id, observed_at)
+    assert {name for name, row in cols.items() if row[3] == "PRI"} == {
+        "game_id", "player_id", "observed_at",
+    }

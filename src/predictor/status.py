@@ -39,6 +39,8 @@ the REAL refresh cadence of each source, not a single generic number:
   that day's schedule vintage (when a game moved, and when that became
   knowable) for good, so it gets the same one-missed-run threshold as
   injury_status.
+- player_games: like games, loaded in bulk (`ingest-player-logs`) with no
+  scheduled job, so it shares the games threshold and offseason reasoning.
 """
 
 from __future__ import annotations
@@ -73,6 +75,9 @@ STALENESS_HOURS: dict[str, float] = {
     # Fetched once a day at 10:30 local (scripts/com.predictor.schedule.plist).
     # One missed run of slack before alarming, same as injury_status.
     "schedule": 36,
+    # Ingested in bulk by `ingest-player-logs`, like games: no scheduled
+    # job, and the same ~120-day offseason gap, so the same threshold.
+    "player_games": 24 * 150,
 }
 
 
@@ -94,6 +99,9 @@ def _advice(name: str, latest: datetime | None, now: datetime) -> str:
     """Advice shown only when a source is stale. See module docstring."""
     if name == "games":
         return f"Run: predictor ingest-season {season_label(now)}"
+
+    if name == "player_games":
+        return f"Run: predictor ingest-player-logs --season {season_label(now)}"
 
     if name == "injury_status":
         if latest is None:
