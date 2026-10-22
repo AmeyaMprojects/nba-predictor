@@ -339,3 +339,11 @@ def test_features_cover_every_game_and_extras_empty(con):
     assert feats[G1].final.roster_gap == {"box": 0.0, "pm": 0.0}  # nobody known yet
     assert feats[G2].extras == {}
     assert feats[G2].game_id == G2
+
+
+def test_player_row_dated_differently_from_its_game_is_refused(con):
+    build_player_fixture(con)
+    add_player_row(con, G3, D3 - timedelta(days=1), 99, "BOS", 30.0, name="Zz Zed")
+    with pytest.raises(fit_mod.FitError, match=r"0022400003.*2024-11-04.*2024-11-05|"
+                                               r"0022400003.*2024-11-05.*2024-11-04"):
+        _run(con)

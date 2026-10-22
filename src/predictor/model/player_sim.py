@@ -393,6 +393,17 @@ def _replay(
     by_date: dict[date, list[_Game]] = defaultdict(list)
     for g in games:
         by_date[g.result.game_date].append(g)
+    game_dates = {g.result.game_id: g.result.game_date for g in games}
+    # A row dated before its game would be applied before that game's
+    # features are computed -- a leak. Refuse any date mismatch.
+    for rows in lines.by_date.values():
+        for row, _ in rows:
+            expected = game_dates.get(row.game_id)
+            if expected is not None and expected != row.game_date:
+                raise FitError(
+                    f"player rows for game {row.game_id} are dated {row.game_date} "
+                    f"but the game is dated {expected}; refusing to simulate"
+                )
     margins_by_game = {
         g.result.game_id: {
             g.result.home_team: g.result.home_points - g.result.away_points,
