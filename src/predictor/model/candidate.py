@@ -32,7 +32,7 @@ features.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, time
 from itertools import product
 
@@ -126,12 +126,29 @@ class CandidateChoice:
 
 
 @dataclass(frozen=True)
+class GameParts:
+    """One predicted game's additive spread and its pieces, in points (the
+    optional correction's inputs, Task 8). ``team_gap`` is the raw rating gap
+    (before the ``1 - w`` scaling); ``roster``/``injury`` are the chosen
+    formula's coefficient x feature terms, summed over its columns."""
+
+    additive_spread: float
+    team_gap: float
+    home_court: float
+    x: tuple[float, ...]
+    roster: float
+    injury: float
+
+
+@dataclass(frozen=True)
 class CandidateResult:
     half_life: float | None
     final_call: evaluate_mod.VariantResult
     early_call: evaluate_mod.VariantResult
     choices: dict[str, CandidateChoice]  # keyed by the season it predicted
     stats: SimStats
+    # call ("final"/"early") -> game_id -> parts
+    parts: dict[str, dict[str, GameParts]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -140,6 +157,10 @@ class CandidateEvaluation:
     winner: CandidateResult
     final: CandidateChoice
     current: evaluate_mod.Evaluation
+    # Per-game features of the first player setting. Only ``extras`` is
+    # meant to be read from here: extras do not depend on the player
+    # settings, the roster and injury gaps do.
+    features: dict[str, GameFeatures] = field(default_factory=dict)
 
 
 def load_player_index(con) -> PlayerIndex:
@@ -249,9 +270,17 @@ def _fit_job(
     )
 
 
+def _terms(choice: CandidateChoice, row: Sequence[float], prefix: str) -> float:
+    return float(sum(
+        c * v for name, c, v in zip(choice.feature_names, choice.coefficients, row, strict=True)
+        if name.startswith(prefix)
+    ))
+
+
 def _predict(
     world: _World, choice: CandidateChoice, season: str, call: str,
     predictions: list[Prediction], details: dict[str, evaluate_mod.GameDetail],
+    parts: dict[str, GameParts] | None = None,
 ) -> None:
     """Predict the ``002`` games of ``season`` (the same games
     ``tuning.spreads_and_outcomes`` scores for the current model)."""
@@ -262,6 +291,15 @@ def _predict(
         if r.season != season or not r.game_id.startswith("002"):
             continue
         s = spread(pre[i, 0], pre[i, 1], X[i], choice.coefficients, choice.w)
+        if parts is not None:
+            parts[r.game_id] = GameParts(
+                additive_spread=float(s),
+                team_gap=float(pre[i, 0]),
+                home_court=float(pre[i, 1]),
+                x=tuple(float(v) for v in g.x),
+                roster=_terms(choice, X[i], "roster_"),
+                injury=_terms(choice, X[i], "injury_"),
+            )
         won = r.home_points > r.away_points
         details[r.game_id] = evaluate_mod.GameDetail(
             s, choice.sigma, r.home_points - r.away_points
@@ -345,6 +383,7 @@ def evaluate_candidate(
     for hl in tuning.HALF_LIVES:
         choices: dict[str, CandidateChoice] = {}
         preds = {"final": ([], {}), "early": ([], {})}
+        parts: dict[str, dict[str, GameParts]] = {"final": {}, "early": {}}
         for season in evaluate_mod.WALK_FORWARD_SEASONS:
             job = evaluate_mod.fold_job(season, hl)
             if any(s >= season for s in job.seasons):
@@ -355,13 +394,14 @@ def evaluate_candidate(
             choice = _fit_job(world, job, team, season)
             choices[season] = choice
             for call, (p, d) in preds.items():
-                _predict(world, choice, season, call, p, d)
+                _predict(world, choice, season, call, p, d, parts[call])
         results.append(CandidateResult(
             half_life=hl,
             final_call=_variant(hl, *preds["final"]),
             early_call=_variant(hl, *preds["early"]),
             choices=choices,
             stats=stats,
+            parts=parts,
         ))
 
     best = evaluate_mod.pick_winner([r.final_call for r in results])
@@ -370,7 +410,7 @@ def evaluate_candidate(
     final = _fit_job(
         world, tuning.Job(TUNING_SEASONS, winner.half_life), current.final.ratings, None
     )
-    return CandidateEvaluation(tuple(results), winner, final, current)
+    return CandidateEvaluation(tuple(results), winner, final, current, first)
 
 
 # -- the switch-over bar ---------------------------------------------------------

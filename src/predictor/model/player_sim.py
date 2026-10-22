@@ -32,6 +32,20 @@ Per game and call:
   call, or when a later report (at or before the call) did not list the date.
   With no report at all the injury gap is 0 and the call is "no report".
 - Games with no tip-off get both calls at 23:00 UTC on the game date.
+
+``GameFeatures.extras`` (for the optional correction, Task 8), all
+point-in-time like the rest, NaN when a team has no history yet:
+
+- ``recent_margin_gap``: home minus away of each team's mean margin over its
+  last 10 games. The correction subtracts the team-rating gap from it to get
+  ``recent_form_gap`` (the rating depends on the fold's team settings, which
+  this pass does not know).
+- ``pace_sum``: both teams' mean possessions over their last 10 games, where
+  a game's possessions are the sum over its competitive player rows of
+  FGA + 0.44 FTA - OREB + TOV.
+- ``continuity_gap`` / ``continuity_gap_early``: home minus away of the
+  share of available expected minutes (final / early call) from players who
+  played in at least one of the team's last 5 games.
 """
 
 from __future__ import annotations
@@ -70,6 +84,9 @@ from predictor.sources.player_games import RATING_SEASON_TYPES, PlayerGameRow
 
 NO_TIP_CALL_UTC = time(23, 0)
 FALLBACK_AFTER = timedelta(hours=1)
+FORM_GAMES = 10
+CONTINUITY_GAMES = 5
+EXTRA_KEYS = ("recent_margin_gap", "pace_sum", "continuity_gap", "continuity_gap_early")
 
 _STAT_FIELDS = (
     "pts", "fgm", "fga", "fg3m", "fg3a", "ftm", "fta", "oreb", "dreb", "ast",
@@ -260,6 +277,73 @@ class Rosters:
         self._check(as_of)
         return any(t == team for t, _ in self._minutes.get(player_id, ()))
 
+    def recent_players(self, team: str, games: int, as_of: date) -> set[int]:
+        """Players who played in at least one of ``team``'s last ``games`` games."""
+        self._check(as_of)
+        out: set[int] = set()
+        for players in list(self._team_games.get(team, ()))[-games:]:
+            out |= players
+        return out
+
+
+def _possessions(row: PlayerGameRow) -> float | None:
+    if row.fga is None or row.fta is None or row.oreb is None or row.tov is None:
+        return None
+    return row.fga + 0.44 * row.fta - row.oreb + row.tov
+
+
+class TeamForm:
+    """Each team's last ``FORM_GAMES`` margins (from final scores) and
+    possessions (from competitive player rows). Reads take ``as_of``."""
+
+    def __init__(self) -> None:
+        self._margins: dict[str, deque[float]] = {}
+        self._poss: dict[str, deque[float]] = {}
+        self._last_date: date | None = None
+
+    def apply_day(self, day: date, games: Sequence[_Game], rows: DayRows) -> None:
+        if self._last_date is not None and day < self._last_date:
+            raise ValueError(f"days must be applied in order: {day} after {self._last_date}")
+        self._last_date = day
+        for g in sorted(games, key=lambda g: g.result.game_id):
+            r = g.result
+            for team, m in ((r.home_team, r.home_points - r.away_points),
+                            (r.away_team, r.away_points - r.home_points)):
+                self._margins.setdefault(team, deque(maxlen=FORM_GAMES)).append(float(m))
+        poss: dict[tuple[str, str], float] = defaultdict(float)
+        for row, rates in rows:
+            if not rates:
+                continue
+            p = _possessions(row)
+            if p is not None:
+                poss[(row.game_id, row.team)] += p
+        for (_, team), p in sorted(poss.items()):
+            self._poss.setdefault(team, deque(maxlen=FORM_GAMES)).append(p)
+
+    def _check(self, as_of: date) -> None:
+        if self._last_date is not None and self._last_date >= as_of:
+            raise ValueError(f"read as of {as_of} after a game dated {self._last_date} was applied")
+
+    @staticmethod
+    def _mean(values) -> float | None:
+        return sum(values) / len(values) if values else None
+
+    def margin(self, team: str, as_of: date) -> float | None:
+        self._check(as_of)
+        return self._mean(self._margins.get(team, ()))
+
+    def pace(self, team: str, as_of: date) -> float | None:
+        self._check(as_of)
+        return self._mean(self._poss.get(team, ()))
+
+
+def _diff(a: float | None, b: float | None) -> float:
+    return math.nan if a is None or b is None else a - b
+
+
+def _total(a: float | None, b: float | None) -> float:
+    return math.nan if a is None or b is None else a + b
+
 
 # -- linking ---------------------------------------------------------------
 
@@ -382,6 +466,7 @@ def _replay(
     lines: PlayerLines,
     visit: Callable[[_Game, Rosters], None],
     book: PlayerBook | None = None,
+    after_day: Callable[[date, list[_Game], DayRows], None] | None = None,
 ) -> None:
     """Visit every game on D (before D's rows), then apply D's rows."""
     for g in games:
@@ -417,6 +502,8 @@ def _replay(
             visit(g, rosters)
         rows = lines.by_date.get(day, [])
         rosters.apply_day(rows)
+        if after_day is not None:
+            after_day(day, by_date.get(day, []), rows)
         if book is not None:
             rated: dict[str, list[PlayerGameRow]] = defaultdict(list)
             for row, rates in rows:
@@ -466,6 +553,8 @@ def simulate(
     no_report: dict[str, Counter[str]] = {c: Counter() for c in CALLS}
     no_tip = 0
     out: dict[str, GameFeatures] = {}
+    form = TeamForm()
+    continuity: dict[str, list[float | None]] = {}
 
     def call_features(g: _Game, call: str, at: datetime, rosters: Rosters,
                       seen_names: set[tuple[str, str]]) -> CallFeatures:
@@ -484,6 +573,7 @@ def simulate(
         roster_gap = {f: 0.0 for f in FORMULAS}
         injury_gap = {f: 0.0 for f in FORMULAS}
         absent: list[tuple[int, float, str, str, str]] = []
+        shares: list[float | None] = []
         for side, lineup in enumerate(_lineups(teams, listed, rosters, d)):
             sign = 1.0 if side == 0 else -1.0
             q: dict[int, float] = {}
@@ -491,6 +581,11 @@ def simulate(
                 unknown.record(r.season, status)
                 q[pid] = table.prob(status)
             avail = minutes_mod.available_minutes(lineup.normal, q)
+            recent = rosters.recent_players(lineup.team, CONTINUITY_GAMES, as_of=d)
+            total = sum(avail.values())
+            shares.append(
+                sum(m for p, m in avail.items() if p in recent) / total if total > 0 else None
+            )
             for f in FORMULAS:
                 ratings = {p: book.rating(p, f, as_of=d) for p in lineup.normal}
                 s_normal = minutes_mod.strength(lineup.normal, ratings)
@@ -503,6 +598,7 @@ def simulate(
                     name = lines.names.get(pid, str(pid))
                     absent.append((side, -lineup.normal[pid], name, lineup.team,
                                    lineup.status[pid]))
+        continuity[call] = shares
         if snap is None:
             no_report[call][r.season] += 1
             return CallFeatures(roster_gap, injury_gap, (), None, False, True)
@@ -536,9 +632,18 @@ def simulate(
         # Unlinked names are counted once per game (whichever calls list them).
         for name, team in sorted(seen_names):
             linker.count(name, team, r.season)
-        out[r.game_id] = GameFeatures(r.game_id, feats["final"], feats["early"], {})
+        home, away = r.home_team, r.away_team
+        extras = {
+            "recent_margin_gap": _diff(form.margin(home, as_of=r.game_date),
+                                       form.margin(away, as_of=r.game_date)),
+            "pace_sum": _total(form.pace(home, as_of=r.game_date),
+                               form.pace(away, as_of=r.game_date)),
+            "continuity_gap": _diff(*continuity["final"]),
+            "continuity_gap_early": _diff(*continuity["early"]),
+        }
+        out[r.game_id] = GameFeatures(r.game_id, feats["final"], feats["early"], extras)
 
-    _replay(games, lines, visit, book)
+    _replay(games, lines, visit, book, form.apply_day)
 
     by_season = {s: idx.report() for s, idx in sorted(linker.counting.items())}
     total_unlinked: Counter[tuple[str, str]] = Counter()

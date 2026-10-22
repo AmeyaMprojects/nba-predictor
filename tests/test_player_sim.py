@@ -332,12 +332,12 @@ def test_reads_are_guarded_by_as_of(con):
         rosters.rotation("BOS", as_of=D1)
 
 
-def test_features_cover_every_game_and_extras_empty(con):
+def test_features_cover_every_game_and_carry_extras(con):
     build_player_fixture(con)
     feats, _ = _run(con)
     assert set(feats) == {G1, G2, G3}
     assert feats[G1].final.roster_gap == {"box": 0.0, "pm": 0.0}  # nobody known yet
-    assert feats[G2].extras == {}
+    assert set(feats[G2].extras) == set(player_sim.EXTRA_KEYS)
     assert feats[G2].game_id == G2
 
 
