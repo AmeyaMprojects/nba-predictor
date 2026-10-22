@@ -22,6 +22,7 @@ Rows must already exclude preseason (see
 
 from __future__ import annotations
 
+import math
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -48,11 +49,15 @@ class PlayerParams:
 
 
 def _n(value: int | float | None) -> float:
-    return 0.0 if value is None else float(value)
+    """A stat as a float; None and NaN (missing in the source) count as 0."""
+    if value is None:
+        return 0.0
+    value = float(value)
+    return 0.0 if math.isnan(value) else value
 
 
 def game_score(row: PlayerGameRow) -> float:
-    """Hollinger game score. A missing stat counts as 0."""
+    """Hollinger game score. A missing (None or NaN) stat counts as 0."""
     return (
         _n(row.pts)
         + 0.4 * _n(row.fgm)
@@ -69,6 +74,8 @@ def game_score(row: PlayerGameRow) -> float:
 
 
 def ewma_update(r: float, obs: float, minutes: float, half_life: float) -> float:
+    if not math.isfinite(obs):
+        raise ValueError(f"rating observation must be finite, got {obs}")
     lam = 0.5 ** (minutes / half_life)
     clipped = max(-OBS_CLIP, min(OBS_CLIP, obs))
     return lam * r + (1.0 - lam) * clipped
@@ -144,7 +151,11 @@ class PlayerBook:
                 row.player_id, {f: ROOKIE_PRIOR for f in FORMULAS}
             )
             ratings["box"] = ewma_update(ratings["box"], per48 - league_mean, minutes, half_life)
-            if row.plus_minus is not None and row.team in margins:
+            if (
+                row.plus_minus is not None
+                and not math.isnan(row.plus_minus)
+                and row.team in margins
+            ):
                 pm_obs = 48.0 * row.plus_minus / minutes - margins[row.team]
                 ratings["pm"] = ewma_update(ratings["pm"], pm_obs, minutes, half_life)
             box_sum += 48.0 * game_score(row)
@@ -160,17 +171,32 @@ class PlayerBook:
             self._team_games.setdefault(team, deque(maxlen=RECENT_GAMES)).append(players)
 
     # -- reads -------------------------------------------------------------
-    def rating(self, player_id: int, formula: Formula) -> float:
+    def _check_as_of(self, as_of: date | None) -> None:
+        """Raise if a game dated on or after ``as_of`` is already applied.
+
+        Every read that serves a game on date D passes ``as_of=D``, so a
+        rating or minutes history can never include that day's games.
+        """
+        if as_of is not None and self._last_date is not None and self._last_date >= as_of:
+            raise ValueError(
+                f"read as of {as_of} after a game dated {self._last_date} was applied"
+            )
+
+    def rating(self, player_id: int, formula: Formula, as_of: date | None = None) -> float:
+        self._check_as_of(as_of)
         ratings = self._ratings.get(player_id)
         if ratings is None:
             return ROOKIE_PRIOR
         return ratings[formula]
 
-    def recent_minutes(self, player_id: int) -> list[float]:
+    def recent_minutes(self, player_id: int, as_of: date | None = None) -> list[float]:
+        self._check_as_of(as_of)
         return list(self._minutes.get(player_id, ()))
 
-    def last_team(self, player_id: int) -> str | None:
+    def last_team(self, player_id: int, as_of: date | None = None) -> str | None:
+        self._check_as_of(as_of)
         return self._last_team.get(player_id)
 
-    def team_recent_games(self, team: str) -> list[set[int]]:
+    def team_recent_games(self, team: str, as_of: date | None = None) -> list[set[int]]:
+        self._check_as_of(as_of)
         return [set(players) for players in self._team_games.get(team, ())]

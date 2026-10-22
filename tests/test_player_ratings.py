@@ -223,3 +223,53 @@ def test_apply_game_rejects_out_of_order_dates():
     book.apply_game([_row(game_date=date(2024, 11, 5))], {"BOS": 5})
     with pytest.raises(ValueError):
         book.apply_game([_row(game_id="x", game_date=date(2024, 11, 4))], {"BOS": 5})
+
+
+def test_nan_stat_counts_as_zero():
+    nan_book = PlayerBook(PARAMS)
+    zero_book = PlayerBook(PARAMS)
+    nan_book.apply_game([_row(pts=float("nan"))], {"BOS": 5})  # type: ignore[arg-type]
+    zero_book.apply_game([_row(pts=0)], {"BOS": 5})
+    assert game_score(_row(pts=float("nan"))) == pytest.approx(-6.0)  # type: ignore[arg-type]
+    assert nan_book.league_box_mean == pytest.approx(48 * -6.0 / 30)
+    assert nan_book.rating(1, "box") == pytest.approx(zero_book.rating(1, "box"))
+    assert nan_book.rating(1, "pm") == pytest.approx(zero_book.rating(1, "pm"))
+
+
+def test_nan_plus_minus_skips_only_pm():
+    book = PlayerBook(PARAMS)
+    book.apply_game([_row(plus_minus=float("nan"))], {"BOS": 5})
+    assert book.rating(1, "pm") == ROOKIE_PRIOR
+    assert book.rating(1, "box") != ROOKIE_PRIOR
+
+
+def test_ewma_update_rejects_non_finite_obs():
+    for bad in (float("nan"), float("inf"), float("-inf")):
+        with pytest.raises(ValueError):
+            ewma_update(0.0, bad, 30.0, 1500.0)
+
+
+def test_reads_with_as_of_pass_when_only_earlier_games_applied():
+    book = PlayerBook(PARAMS)
+    book.apply_game([_row(game_date=date(2024, 11, 1))], {"BOS": 5})
+    as_of = date(2024, 11, 2)
+    assert book.rating(1, "box", as_of=as_of) == book.rating(1, "box")
+    assert book.recent_minutes(1, as_of=as_of) == [30.0]
+    assert book.last_team(1, as_of=as_of) == "BOS"
+    assert book.team_recent_games("BOS", as_of=as_of) == [{1}]
+    # Before anything is applied any as_of passes.
+    assert PlayerBook(PARAMS).rating(1, "box", as_of=date(2000, 1, 1)) == ROOKIE_PRIOR
+
+
+def test_reads_with_as_of_raise_once_that_day_is_applied():
+    book = PlayerBook(PARAMS)
+    book.apply_game([_row(game_date=date(2024, 11, 2))], {"BOS": 5})
+    for as_of in (date(2024, 11, 2), date(2024, 11, 1)):
+        with pytest.raises(ValueError):
+            book.rating(1, "box", as_of=as_of)
+        with pytest.raises(ValueError):
+            book.recent_minutes(1, as_of=as_of)
+        with pytest.raises(ValueError):
+            book.last_team(1, as_of=as_of)
+        with pytest.raises(ValueError):
+            book.team_recent_games("BOS", as_of=as_of)

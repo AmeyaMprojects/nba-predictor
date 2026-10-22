@@ -9,6 +9,8 @@ renormalised, so his minutes flow to the rest of the rotation.
 
 from __future__ import annotations
 
+from predictor.model.player_ratings import ROOKIE_PRIOR
+
 TEAM_MINUTES = 240.0
 MINUTES_CAP = 44.0
 ROTATION_GAMES = 10
@@ -21,8 +23,10 @@ def normalize_minutes(
 ) -> dict[int, float]:
     """Scale to ``total``, then cap and re-spread until no one is over ``cap``.
 
-    If every player ends up capped, they all stay at the cap (the team sum is
-    then below ``total``). All-zero input stays zero.
+    If every player ends up capped, they all stay at the cap, and if the
+    excess has nowhere to go because every uncapped player has 0 minutes, it
+    is dropped. In both cases the team sum is then below ``total``.
+    All-zero input stays zero.
     """
     clean = {p: max(0.0, float(m)) for p, m in minutes.items()}
     current = sum(clean.values())
@@ -47,9 +51,17 @@ def normalize_minutes(
     return out
 
 
-def strength(minutes: dict[int, float], ratings: dict[int, float]) -> float:
-    """Team strength: sum over players of (minutes / 48) x per-48 rating."""
-    return sum((m / 48.0) * ratings[p] for p, m in minutes.items())
+def strength(
+    minutes: dict[int, float],
+    ratings: dict[int, float],
+    default: float = ROOKIE_PRIOR,
+) -> float:
+    """Team strength: sum over players of (minutes / 48) x per-48 rating.
+
+    A player missing from ``ratings`` is rated ``default`` (the rookie prior
+    unless the caller says otherwise).
+    """
+    return sum((m / 48.0) * ratings.get(p, default) for p, m in minutes.items())
 
 
 def available_minutes(

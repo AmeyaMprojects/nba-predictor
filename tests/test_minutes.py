@@ -81,3 +81,22 @@ def test_injury_gap_questionable():
 def test_available_minutes_missing_q_is_one():
     normal, _ = _eight()
     assert available_minutes(normal, {}) == pytest.approx(normal)
+
+
+def test_available_minutes_everyone_out_is_all_zero():
+    normal, _ = _eight()
+    assert available_minutes(normal, {p: 0.0 for p in normal}) == {p: 0.0 for p in normal}
+
+
+def test_normalize_minutes_cannot_respread_onto_zero_minute_players():
+    # Player 2 has no minutes to scale, so player 1's excess has nowhere to go
+    # and the team total stays below 240.
+    out = normalize_minutes({1: 300, 2: 0})
+    assert out == {1: 44.0, 2: 0.0}
+    assert sum(out.values()) < 240.0
+
+
+def test_strength_uses_default_for_unrated_players():
+    assert strength({1: 48.0, 2: 24.0}, {1: 3.0}, default=-2.0) == pytest.approx(2.0)
+    # The default is the rookie prior.
+    assert strength({2: 24.0}, {}) == pytest.approx(-1.0)
