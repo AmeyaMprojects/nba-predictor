@@ -199,7 +199,7 @@ Grade lines refer to the graded call. A secondary early-call grade is either sto
    - The stored archive holds one snapshot a day (the 5 PM ET report). Before replaying, the Mac backfills the report slots the replay actually needs for 2020-21..2025-26:
      - the latest report at or before each game's early-call time (08:30 ET);
      - the latest report at or before its final-call time (tip − 45 min).
-   - That is roughly 4 slots per game day, about 5,000 PDFs, not the full 35,000. Old-format files dated up to 2025-12-21 still return 200; only the old pattern after that date is 403.
+   - That is roughly 4 slots per game day, about 5,000 PDFs, not the full 35,000. Spot check 2026-10-22: old-format hourly files still download (2023-01-15 08AM and 07PM returned 200), but some slots were never published or are gone (2021-03-10 09PM returned 403). So the backfill must tolerate holes.
    - If a needed slot is missing, the replay falls back to the latest earlier report and counts how often that happened.
 2. **Schedule in the cloud.**
    - ESPN's scoreboard, looking 7 days ahead and refreshed every run, is the cloud's source of games and tip-off times. Each ESPN game is linked to the NBA game ID in the state schedule by ET date and teams.
