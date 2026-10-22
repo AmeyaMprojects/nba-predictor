@@ -141,6 +141,9 @@ def from_json(text: str) -> PlayerModelSettings:
         not math.isfinite(s.sigma) or s.sigma <= 0
         or not 0.0 <= s.w <= 1.0
         or s.team.hca_window < 1
+        or not math.isfinite(s.team.k) or s.team.k <= 0
+        or not math.isfinite(s.team.margin_cap) or s.team.margin_cap <= 0
+        or not 0.0 <= s.team.season_regression <= 1.0
         or not math.isfinite(s.player.half_life_minutes) or s.player.half_life_minutes <= 0
         or not 0.0 <= s.player.season_regression <= 1.0
         or (s.half_life is not None and (not math.isfinite(s.half_life) or s.half_life <= 0))
@@ -165,6 +168,10 @@ def load(path: Path = SETTINGS_PATH) -> PlayerModelSettings:
         text = path.read_text()
     except FileNotFoundError:
         raise SettingsError(f"No player-model settings found at {path}. {HINT}") from None
+    except (OSError, UnicodeDecodeError) as exc:
+        raise SettingsError(
+            f"Could not read the player-model settings at {path} ({exc}). {HINT}"
+        ) from None
     return from_json(text)
 
 

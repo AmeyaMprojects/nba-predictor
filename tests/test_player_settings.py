@@ -75,6 +75,12 @@ def test_settings_rejects_wrong_version():
     lambda d: d["availability"]["final"].update(Out=1.7),
     lambda d: d["correction"]["params"].update(max_depth=9),
     lambda d: d.pop("team"),
+    lambda d: d["team"].update(k=float("nan")),
+    lambda d: d["team"].update(k=-0.1),
+    lambda d: d["team"].update(margin_cap=0.0),
+    lambda d: d["team"].update(margin_cap=float("inf")),
+    lambda d: d["team"].update(season_regression=1.5),
+    lambda d: d["team"].update(season_regression=float("nan")),
 ])
 def test_settings_rejects_bad_files(mutate):
     import json
@@ -235,3 +241,16 @@ def test_settings_from_candidate_with_correction(tmp_path, monkeypatch):
     assert predictor.correction is not None
     assert predictor.correction.seasons == tuple(seasons)
     con.close()
+
+
+def test_load_unreadable_file(tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_bytes(b"\xff\xfe\x00garbage")
+    with pytest.raises(pset.SettingsError) as exc:
+        pset.load(bad)
+    assert str(exc.value).endswith("Run: predictor fit-player-model")
+    folder = tmp_path / "folder.json"
+    folder.mkdir()
+    with pytest.raises(pset.SettingsError) as exc:
+        pset.load(folder)
+    assert str(exc.value).endswith("Run: predictor fit-player-model")

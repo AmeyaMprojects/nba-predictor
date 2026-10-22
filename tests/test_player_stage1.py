@@ -10,6 +10,7 @@ or the network.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from datetime import UTC, date, datetime, time
 
@@ -151,9 +152,28 @@ def _game(g) -> GameToPredict:
     return GameToPredict(r.game_id, r.season, r.game_date, r.home_team, r.away_team)
 
 
+FITTED = {
+    "early": {"Out": 0.04, "Doubtful": 0.31, "Questionable": 0.62, "Probable": 0.88,
+              "Available": 0.97},
+    "final": {"Out": 0.02, "Doubtful": 0.17, "Questionable": 0.55, "Probable": 0.93,
+              "Available": 0.99},
+}
+
+
 @pytest.mark.parametrize("order", ["forward", "backward"])
-def test_parity_with_simulation(con, order):
-    settings = _settings()
+def test_parity_with_simulation(con, order, monkeypatch):
+    """Both paths get the same fitted (non-prior) availability table, so a
+    difference in how fitted probabilities are applied would show."""
+    from predictor.model.availability import AvailabilityTable
+
+    def fitted_tables(listings, season):
+        return {call: AvailabilityTable(probs=dict(FITTED[call]), samples={})
+                for call in CALLS}
+
+    monkeypatch.setattr(player_sim, "availability_tables", fitted_tables)
+    settings = dataclasses.replace(
+        _settings(), availability={call: dict(FITTED[call]) for call in CALLS}
+    )
     expected = _replay(con, settings)
     keys = sorted(expected, key=lambda k: (expected[k][1], k))
     if order == "backward":
