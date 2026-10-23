@@ -63,14 +63,39 @@ def test_report_leads_with_overall_verdict(con):
 def test_all_four_logical_sources_are_reported(con):
     health = status.check_sources(con, NOW)
     names = {h.name for h in health}
-    assert names == {"games", "injury_status", "odds_snapshots", "news_items", "schedule"}
+    assert names == {
+        "games", "injury_status", "odds_snapshots", "news_items", "schedule", "player_games",
+    }
 
 
 def test_report_names_every_source(con):
     _add_injury(con, NOW - timedelta(hours=1))
     text = status.format_report(status.check_sources(con, NOW))
-    for name in ("games", "injury_status", "odds_snapshots", "news_items", "schedule"):
+    for name in ("games", "injury_status", "odds_snapshots", "news_items", "schedule",
+                 "player_games"):
         assert name in text
+
+
+def test_status_lists_player_games_with_ingest_advice(con):
+    from predictor.config import season_label
+
+    assert status.STALENESS_HOURS["player_games"] == 24 * 150
+    health = {h.name: h for h in status.check_sources(con, NOW)}
+    entry = health["player_games"]
+    assert entry.stale is True
+    assert entry.advice == f"Run: predictor ingest-player-logs --season {season_label(NOW)}"
+
+
+def test_player_games_fresh_within_150_days_is_not_stale(con):
+    con.execute(
+        f"INSERT INTO {db.POINT_IN_TIME_TABLES['player_games']} (game_id, season, game_date,"
+        " season_type, player_id, player_name, team, source, reconstructed, observed_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        ["0022400001", SEASON, NOW.date(), "regular", 1, "x", "LAL", "nba_stats", True,
+         NOW - timedelta(days=149)],
+    )
+    health = {h.name: h for h in status.check_sources(con, NOW)}
+    assert health["player_games"].stale is False
 
 
 def _add_odds(con, observed_at, source="theoddsapi", book="fanduel"):

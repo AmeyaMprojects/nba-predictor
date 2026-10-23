@@ -18,6 +18,7 @@ _DEFAULT_LATEST_KEY: dict[str, tuple[str, ...]] = {
     "odds_snapshots": ("game_key", "book"),
     "news_items": ("item_key",),
     "schedule": ("game_id",),
+    "player_games": ("game_id", "player_id"),
 }
 
 

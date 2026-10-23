@@ -1,0 +1,46 @@
+{
+  "availability": {
+    "early": {
+      "Available": 0.8534322820037106,
+      "Doubtful": 0.06113843991567112,
+      "Out": 0.016004315770544866,
+      "Probable": 0.8767861957400916,
+      "Questionable": 0.5185148218385068
+    },
+    "final": {
+      "Available": 0.8548204693242861,
+      "Doubtful": 0.020454545454545454,
+      "Out": 0.001503626393065629,
+      "Probable": 0.917750439367311,
+      "Questionable": 0.5339608979000724
+    }
+  },
+  "coefficients": {
+    "altitude": -0.071932,
+    "back_to_back": -1.804111,
+    "injury_box": 0.654118,
+    "injury_pm": 1.086772,
+    "roster_box": 0.257845,
+    "roster_pm": 0.52112,
+    "third_in_four": -0.397948,
+    "travel_per_1000km": 0.168196,
+    "tz_per_hour": -0.49656
+  },
+  "correction": null,
+  "formula": "both",
+  "half_life": null,
+  "player": {
+    "half_life_minutes": 4000.0,
+    "season_regression": 0.4
+  },
+  "sigma": 12.9,
+  "team": {
+    "hca_window": 1230,
+    "k": 0.04,
+    "margin_cap": 40.0,
+    "season_regression": 0.5
+  },
+  "tuning_games": 7998,
+  "version": 1,
+  "w": 0.25
+}

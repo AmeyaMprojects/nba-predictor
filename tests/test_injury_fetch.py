@@ -249,3 +249,22 @@ def test_transient_retry_survives_real_sleep_with_zero_retry_after(monkeypatch):
         injury_report.fetch_report(date(2025, 1, 15), "05PM", session)
     assert exc_info.value.retry_after == 0.0
     assert len(session.calls) == injury_report._MAX_ATTEMPTS
+
+
+def test_default_session_sends_browser_user_agent(monkeypatch):
+    session = injury_report.new_session()
+    assert session.headers["User-Agent"].startswith("Mozilla/5.0")
+    assert session.headers["Accept"] == "application/pdf,*/*"
+    assert injury_report.BROWSER_HEADERS["User-Agent"].startswith("Mozilla/5.0")
+
+    fake = FakeSession({})
+    made = []
+
+    def fake_new_session():
+        made.append(fake)
+        return fake
+
+    monkeypatch.setattr(injury_report, "new_session", fake_new_session)
+    assert injury_report.fetch_report(date(2025, 1, 15), "05PM") is None
+    assert made == [fake]
+    assert len(fake.calls) == 1

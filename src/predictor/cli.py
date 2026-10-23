@@ -157,6 +157,70 @@ def backfill_injuries(
         raise typer.Exit(code=1)
 
 
+@app.command("backfill-injury-slots")
+def backfill_injury_slots(
+    start: str = typer.Option("2020-12-22", help="ISO start game date."),
+    end: str = typer.Option(None, help="ISO end game date; defaults to today."),
+    delay: float = typer.Option(0.4, help="Seconds between network requests."),
+) -> None:
+    """Backfill the injury-report slots the replay's early and final calls need."""
+    from datetime import date as _date
+
+    from predictor import db
+    from predictor.config import settings
+    from predictor.sources import injury_slots
+
+    settings.ensure_dirs()
+    con = db.connect()
+    db.migrate(con)
+
+    targets = injury_slots.replay_targets(
+        con,
+        _date.fromisoformat(start),
+        _date.fromisoformat(end) if end else _date.today(),
+    )
+    stats = injury_slots.backfill_slots(con, targets, delay=delay)
+    for key, value in stats.items():
+        typer.echo(f"{key}: {value}")
+
+    if stats["unsatisfied"]:
+        typer.echo(
+            f"{stats['unsatisfied']} call time(s) have no report within "
+            "3 hours before them. Holes are normal; the replay falls back to "
+            "the latest earlier report."
+        )
+    transient = stats["transient"]
+    parse_failed = stats["parse_failed"]
+    bad_content = stats["bad_content"]
+    if transient:
+        typer.echo(
+            f"WARNING: {transient} slot(s) could not be checked (rate-limited "
+            "or a server error) and are NOT counted as absent. They were not "
+            "archived, so re-running this exact command will retry them "
+            "automatically."
+        )
+    if bad_content:
+        typer.echo(
+            f"WARNING: {bad_content} slot(s) returned a 200 response with a "
+            "body that was not a PDF (for example a CDN block or challenge "
+            "page). These are NOT counted as absent. They were not archived, "
+            "so re-running this exact command will retry them automatically."
+        )
+    if parse_failed:
+        typer.echo(
+            f"WARNING: {parse_failed} slot(s) were fetched but could not be "
+            "parsed, so nothing was ingested for them. The raw PDF is "
+            "archived on disk -- run 'predictor reingest-injuries' after "
+            "fixing the parser to recover them without re-fetching."
+        )
+    if transient or parse_failed or bad_content:
+        typer.echo(
+            f"RUN DID NOT FULLY SUCCEED: {transient + parse_failed + bad_content} "
+            "slot(s) are missing from the database. See the warnings above."
+        )
+        raise typer.Exit(code=1)
+
+
 @app.command("reingest-injuries")
 def reingest_injuries(
     start: str = typer.Option(None, help="ISO start date filter (inclusive)."),
@@ -231,6 +295,105 @@ def ingest_season_cmd(season: str = typer.Argument(..., help="e.g. 2024-25")) ->
             "fixed and re-ingested."
         )
         raise typer.Exit(code=1)
+
+
+@app.command("ingest-player-logs")
+def ingest_player_logs_cmd(
+    season: list[str] = typer.Option(
+        None,
+        "--season",
+        help="Season to fetch, e.g. 2024-25 (repeatable). Defaults to every "
+        "season from 2014-15 through the current one.",
+    ),
+) -> None:
+    """Fetch player game logs (preseason, regular season, play-in, playoffs),
+    archive them, and load them."""
+    import duckdb
+
+    from predictor import db
+    from predictor.config import settings
+    from predictor.sources import player_games
+
+    settings.ensure_dirs()
+    seasons = list(season) if season else player_games.default_seasons(_now())
+
+    # Every download happens BEFORE the database is opened: a long run of
+    # downloads must never hold the DuckDB write lock other jobs need.
+    downloads = []
+    for target in seasons:
+        for season_type in player_games.ALL_SEASON_TYPES:
+            try:
+                downloads.append(player_games.download(target, season_type))
+            except player_games.ParseError as exc:
+                typer.echo(
+                    f"Downloaded and archived player game logs for {target} "
+                    f"{season_type}, but could not read them ({exc}); nothing "
+                    "was loaded into the database."
+                )
+                raise typer.Exit(code=1) from None
+            except Exception as exc:  # any other failure: explain it, save nothing
+                typer.echo(
+                    f"Could not download player game logs for {target} "
+                    f"{season_type} ({exc}); nothing was saved."
+                )
+                raise typer.Exit(code=1) from None
+
+    try:
+        con = db.connect_with_retry()
+        db.migrate(con)
+    except duckdb.Error as exc:
+        typer.echo(
+            f"Could not open the database to save player game logs ({exc}). "
+            "The downloads are archived on disk; nothing was loaded."
+        )
+        raise typer.Exit(code=1) from None
+
+    preseason_tag = player_games.SEASON_TYPE_TAGS[player_games.PRESEASON]
+    totals: dict[str, dict] = {}
+    for item in downloads:
+        try:
+            result = player_games.load(con, item)
+        except duckdb.Error as exc:
+            done = [s for s in totals if s != item.season]
+            saved = (
+                f"Earlier seasons were saved: {', '.join(done)}."
+                if done
+                else "No earlier season was saved."
+            )
+            partial = totals.get(item.season, {}).get("types", [])
+            if partial:
+                saved += f" For {item.season}, {', '.join(partial)} were saved."
+            typer.echo(
+                f"Could not save player game logs for {item.season} "
+                f"{item.season_type} ({exc}). Nothing from that download was "
+                f"loaded; it is archived on disk. {saved}"
+            )
+            raise typer.Exit(code=1) from None
+        entry = totals.setdefault(
+            result.season,
+            {"rows": 0, "games": set(), "unknown": set(), "preseason_unknown": set(),
+             "types": []},
+        )
+        entry["rows"] += result.rows_written
+        entry["games"].update(row.game_id for row in item.rows)
+        entry["types"].append(item.season_type)
+        if player_games.SEASON_TYPE_TAGS[item.season_type] == preseason_tag:
+            entry["preseason_unknown"].update(result.unknown_game_ids)
+        else:
+            entry["unknown"].update(result.unknown_game_ids)
+
+    for target, entry in totals.items():
+        # The competitive count excludes preseason: preseason games are not
+        # in the games table by design, so they are reported on their own.
+        typer.echo(
+            f"player logs {target}: {entry['rows']} rows, {len(entry['games'])} games "
+            f"({len(entry['unknown'])} not in the games table)"
+        )
+        if entry["preseason_unknown"]:
+            typer.echo(
+                f"  {len(entry['preseason_unknown'])} preseason game(s) not in the "
+                "games table (expected: preseason games are kept for rosters only)"
+            )
 
 
 @app.command("ingest-schedule")
@@ -1435,7 +1598,14 @@ def fit_model_cmd() -> None:
 
 
 @app.command("evaluate-model")
-def evaluate_model_cmd() -> None:
+def evaluate_model_cmd(
+    candidate: bool = typer.Option(
+        True,
+        "--candidate/--no-candidate",
+        help="Also walk the player-model candidate forward and score it against "
+        "the switch-over bar (the default).",
+    ),
+) -> None:
     """Walk-forward evaluate every recency variant and print the result
     (does not save anything -- see 'predictor fit-model' for that)."""
     from predictor.model import evaluate as evaluate_mod
@@ -1446,24 +1616,173 @@ def evaluate_model_cmd() -> None:
 
     import duckdb
 
+    candidate_text = None
+    failed = False
     con = _open_for_fitting()
     try:
         ev = _run_evaluation(fit_mod, evaluate_mod, con, progress=progress)
         try:
+            lines_by_game = _historical_lines(con)
             market_text = evaluate_mod.format_market_comparison(
-                evaluate_mod.market_games(con, ev.winner)
+                evaluate_mod.match_market(ev.winner, lines_by_game)
             )
         except duckdb.Error as exc:
+            lines_by_game = {}
             market_text = (
                 "  Model vs market (closing lines)\n"
                 f"  Could not read the stored odds ({exc})."
             )
+        if candidate:
+            candidate_text, failed = _candidate_report(con, ev, lines_by_game, progress)
     finally:
         con.close()
     typer.echo(evaluate_mod.format_evaluation(ev))
     typer.echo("")
     typer.echo(market_text)
+    if candidate_text is not None:
+        typer.echo("")
+        typer.echo(candidate_text)
+    if failed:
+        raise typer.Exit(code=1)
 
+
+def _historical_lines(con):
+    from predictor.model import market
+
+    return market.historical_lines(con)
+
+
+def _player_rows(con) -> int:
+    import duckdb
+
+    from predictor import db
+
+    try:
+        table = db.POINT_IN_TIME_TABLES["player_games"]
+        (rows,) = con.execute(f"SELECT count(*) FROM {table}").fetchone()
+    except duckdb.Error:
+        rows = 0
+    return rows
+
+
+def _candidate_decision(con, ev, progress):
+    """Walk the candidate forward, decide on the correction and score the
+    switch-over bar -- shared by evaluate-model and fit-player-model.
+
+    Returns (cev, tried, corrected, shipped, bar). Raises FitError and
+    duckdb.Error for the callers to report.
+    """
+    from predictor.model import candidate as cand
+    from predictor.model import correction
+
+    cev = cand.evaluate_candidate(con, ev, progress=progress)
+    progress("training the optional correction model...")
+    tried = correction.apply_corrections(cev.winner, cev.features)
+    corrected = (
+        tried if tried is not None and correction.correction_helps(cev.winner, tried)
+        else None
+    )
+    shipped = corrected if corrected is not None else cev.winner
+    bar = cand.switch_over_bar(
+        ev.winner.predictions, shipped.final_call.predictions, cev.final
+    )
+    return cev, tried, corrected, shipped, bar
+
+
+def _candidate_report(con, ev, lines_by_game, progress) -> tuple[str, bool]:
+    """The candidate section of evaluate-model, and whether it failed (an
+    expected, plain-English failure: the current model's sections still
+    print first)."""
+    import duckdb
+
+    from predictor.model import candidate as cand
+    from predictor.model import evaluate as evaluate_mod
+    from predictor.model import fit as fit_mod
+
+    if _player_rows(con) == 0:
+        return cand.NO_PLAYER_LOGS, False
+    try:
+        cev, tried, corrected, shipped, bar = _candidate_decision(con, ev, progress)
+    except fit_mod.FitError as exc:
+        return f"{cand.REPORT_TITLE}\n  Cannot fit the player model candidate: {exc}.", True
+    except duckdb.Error as exc:
+        return (
+            f"{cand.REPORT_TITLE}\n  The database is missing tables the player model "
+            f"needs ({exc}). Run 'predictor ingest-player-logs' first.",
+            True,
+        )
+    text = cand.format_candidate(
+        cev,
+        bar,
+        corrected,
+        evaluate_mod.match_market(shipped.final_call, lines_by_game),
+        evaluate_mod.match_market(ev.winner, lines_by_game),
+        tried=tried if corrected is None else None,
+    )
+    return text, False
+
+
+BAR_NOT_MET = "Switch-over bar not met -- nothing was saved; the current model stays live."
+
+
+@app.command("fit-player-model")
+def fit_player_model_cmd() -> None:
+    """Fit the player-model candidate and save player_settings.json, but
+    only if it passes the switch-over bar. Never touches the current
+    model's settings, and does not make the candidate live."""
+    import duckdb
+
+    from predictor.model import candidate as cand
+    from predictor.model import evaluate as evaluate_mod
+    from predictor.model import fit as fit_mod
+    from predictor.model import player_settings
+    from predictor.model import player_stage1
+
+    def progress(message: str) -> None:
+        typer.echo(message, err=True)
+
+    con = _open_for_fitting()
+    try:
+        ev = _run_evaluation(fit_mod, evaluate_mod, con, progress=progress)
+        if _player_rows(con) == 0:
+            typer.echo(cand.NO_PLAYER_LOGS.strip())
+            raise typer.Exit(code=1)
+        try:
+            cev, _tried, corrected, _shipped, bar = _candidate_decision(con, ev, progress)
+            settings = None
+            if bar.met:
+                progress("writing the candidate's settings...")
+                settings = player_stage1.settings_from_candidate(con, cev, corrected)
+        except fit_mod.FitError as exc:
+            typer.echo(f"Cannot fit the player model candidate: {exc}.")
+            raise typer.Exit(code=1) from None
+        except duckdb.Error as exc:
+            typer.echo(
+                f"The database is missing tables the player model needs ({exc}). "
+                "Run 'predictor ingest-player-logs' first."
+            )
+            raise typer.Exit(code=1) from None
+    finally:
+        con.close()
+
+    if not bar.met:
+        typer.echo(BAR_NOT_MET)
+        for reason in bar.reasons():
+            typer.echo(f"  - {reason}")
+        return
+    path = player_settings.SETTINGS_PATH
+    try:
+        player_settings.save(settings, path)
+    except OSError as exc:
+        typer.echo(f"Could not save the player-model settings to {path} ({exc}).")
+        raise typer.Exit(code=1) from None
+    typer.echo("Switch-over bar met.")
+    typer.echo(
+        "Correction model: included." if settings.correction is not None
+        else "Correction model: not included."
+    )
+    typer.echo(f"Saved to {path}.")
+    typer.echo("The current model stays live until plan 3 switches it over.")
 
 if __name__ == "__main__":
     app()

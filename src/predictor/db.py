@@ -37,6 +37,7 @@ POINT_IN_TIME_TABLES: Mapping[str, str] = MappingProxyType(
         "odds_snapshots": "odds_snapshots_raw",
         "news_items": "news_items_raw",
         "schedule": "schedule_raw",
+        "player_games": "player_games_raw",
     }
 )
 
@@ -176,6 +177,43 @@ CREATE TABLE IF NOT EXISTS schedule_raw (
     is_neutral          BOOLEAN NOT NULL,
     observed_at         TIMESTAMP WITH TIME ZONE NOT NULL,
     PRIMARY KEY (game_id, observed_at)
+);
+
+-- One row per player per game (nba_api LeagueGameLog, player mode), from
+-- the game's own box score -- never a season-total endpoint, which would
+-- carry the whole season into every earlier date. observed_at is derived
+-- like a FINAL games row (game date + 1 day, 12:00 UTC), so reconstructed
+-- is TRUE. season_type is 'preseason', 'regular', 'playin' or 'playoffs';
+-- preseason rows are kept only for roster membership, never for ratings or
+-- minutes. source is 'nba_stats' (a later ESPN source adds 'espn').
+CREATE TABLE IF NOT EXISTS player_games_raw (
+    game_id       VARCHAR NOT NULL,
+    season        VARCHAR NOT NULL,
+    game_date     DATE NOT NULL,
+    season_type   VARCHAR NOT NULL,
+    player_id     BIGINT NOT NULL,
+    player_name   VARCHAR NOT NULL,
+    team          VARCHAR NOT NULL,
+    minutes       DOUBLE,
+    pts           INTEGER,
+    fgm           INTEGER,
+    fga           INTEGER,
+    fg3m          INTEGER,
+    fg3a          INTEGER,
+    ftm           INTEGER,
+    fta           INTEGER,
+    oreb          INTEGER,
+    dreb          INTEGER,
+    ast           INTEGER,
+    stl           INTEGER,
+    blk           INTEGER,
+    tov           INTEGER,
+    pf            INTEGER,
+    plus_minus    DOUBLE,
+    source        VARCHAR NOT NULL,
+    reconstructed BOOLEAN NOT NULL DEFAULT FALSE,
+    observed_at   TIMESTAMP WITH TIME ZONE NOT NULL,
+    PRIMARY KEY (game_id, player_id, observed_at)
 );
 
 CREATE TABLE IF NOT EXISTS ingest_runs (

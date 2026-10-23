@@ -110,6 +110,13 @@ def test_status_exits_zero_when_every_source_is_fresh(tmp_path, monkeypatch):
         " VALUES (?,?,?,?,?,?,?,?,?)",
         ["0022400561", "2024-25", now.date(), None, "PHI", "NYK", False, False, now],
     )
+    con.execute(
+        "INSERT INTO player_games_raw (game_id, season, game_date, season_type,"
+        " player_id, player_name, team, source, reconstructed, observed_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        ["0022400561", "2024-25", now.date(), "regular", 1, "someone", "PHI",
+         "nba_stats", True, now],
+    )
     con.close()
 
     result = runner.invoke(cli.app, ["status"])
