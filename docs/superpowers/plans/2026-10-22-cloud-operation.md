@@ -586,7 +586,7 @@ def test_asset_name(): assert asset_name(dt("2026-10-22T13:07Z"), 1) == "run-202
 def test_upload_never_clobbers(): ...            # no recorded argv contains "--clobber"
 def test_release_created_once_when_missing(): ... # view fails -> create then upload (3 calls)
 def test_secret_in_raw_blob_refuses_upload(tmp_path): ...
-    # planted "0123456789abcdef0123456789abcdef" -> SecretLeak; runner never called
+    # planted <a fake 32-hex key built at runtime, e.g. "0123456789abcdef" * 2> -> SecretLeak; runner never called
 def test_bundle_contains_manifest_and_blobs(tmp_path): ...
 ```
 - [ ] Write the tests and confirm they fail. Implement. PASS. Commit: `feat: archive each cloud run's raw responses as a weekly release asset`
@@ -647,7 +647,7 @@ def test_unreachable_espn_is_recorded_and_the_run_continues(tmp_path): ...
 def test_unexpected_error_fails_the_run_after_other_steps(tmp_path): ...  # exit 1, push still attempted
 def test_summary_lists_every_step(tmp_path): ...   # names == the list above
 def test_odds_key_never_written_anywhere(tmp_path, monkeypatch, capsys): ...
-    # ODDS_API_KEY="0123456789abcdef0123456789abcdef"; key absent from state files, summary,
+    # ODDS_API_KEY=<a fake 32-hex key built at runtime, e.g. "0123456789abcdef" * 2>; key absent from state files, summary,
     # outputs, stdout/stderr, raw tarball members, and every commit's content
 def test_site_changed_only_for_main_pushes(tmp_path): ...
 ```
