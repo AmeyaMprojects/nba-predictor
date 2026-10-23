@@ -561,6 +561,7 @@ dependencies = [
     { name = "pytz" },
     { name = "requests" },
     { name = "scikit-learn" },
+    { name = "scipy" },
     { name = "tenacity" },
     { name = "typer" },
 ]
@@ -582,6 +583,7 @@ requires-dist = [
     { name = "pytz", specifier = ">=2024.1" },
     { name = "requests", specifier = ">=2.34" },
     { name = "scikit-learn", specifier = ">=1.7" },
+    { name = "scipy", specifier = ">=1.18.1" },
     { name = "tenacity", specifier = ">=9.1" },
     { name = "typer", specifier = ">=0.27" },
 ]

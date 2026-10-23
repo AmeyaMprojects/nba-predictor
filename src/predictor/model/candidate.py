@@ -877,7 +877,7 @@ def format_candidate(
     lines += _correction_line(cev.winner, corrected, tried)
     lines.append("")
     lines += _wrap(
-        "The early call -- 08:30 ET (12:30 UTC) on game day, with the injury report "
+        "The early call -- 12:30 UTC on game day (08:30 EDT, 07:30 EST), with the injury report "
         "known by then. Same candidate settings as above. It is compared with the same "
         "current-model numbers as the final call: the current model has no injury "
         "input, so its call does not depend on the call time."

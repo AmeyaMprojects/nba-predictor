@@ -204,7 +204,7 @@ def test_format_candidate_has_early_and_market_blocks():
         cev, bar, None, _market(cev.winner.final_call), _market(cev.current.winner)
     )
     assert "early call" in text
-    assert "08:30 ET (12:30 UTC)" in text
+    assert "12:30 UTC on game day (08:30 EDT, 07:30 EST)" in text
     assert "same current-model numbers" in _flat(text)
     assert "does not depend on the call time" in _flat(text)
     assert "closing" in text
