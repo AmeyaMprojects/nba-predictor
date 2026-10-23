@@ -38,6 +38,8 @@ POINT_IN_TIME_TABLES: Mapping[str, str] = MappingProxyType(
         "news_items": "news_items_raw",
         "schedule": "schedule_raw",
         "player_games": "player_games_raw",
+        "injury_reports": "injury_reports_raw",
+        "player_boxscores": "player_boxscores_raw",
     }
 )
 
@@ -214,6 +216,44 @@ CREATE TABLE IF NOT EXISTS player_games_raw (
     reconstructed BOOLEAN NOT NULL DEFAULT FALSE,
     observed_at   TIMESTAMP WITH TIME ZONE NOT NULL,
     PRIMARY KEY (game_id, player_id, observed_at)
+);
+
+-- One row per official NBA injury-report PDF seen, keyed by the report time
+-- printed in the PDF header (observed_at), so a report fetched late is still
+-- dated when the league published it. fetched_at is when we downloaded it;
+-- source_key names the raw_store archive entry; content_sha is the full
+-- 64-hex sha256 of the PDF bytes. Complements injury_status_raw (the per-
+-- player rows): this table answers "which report times were seen".
+CREATE TABLE IF NOT EXISTS injury_reports_raw (
+    observed_at TIMESTAMP WITH TIME ZONE NOT NULL PRIMARY KEY,
+    fetched_at  TIMESTAMP WITH TIME ZONE NOT NULL,
+    source_key  VARCHAR NOT NULL,
+    row_count   INTEGER NOT NULL,
+    content_sha VARCHAR NOT NULL
+);
+
+-- ESPN box-score rows only (NBA game logs live in player_games_raw, whose
+-- player_id is numeric). player_id is the NBA id as text when linked, else
+-- 'espn:<athlete id>'; game_id may be a provisional 'espn:<event id>'.
+-- observed_at is when the box score was fetched.
+CREATE TABLE IF NOT EXISTS player_boxscores_raw (
+    game_id        VARCHAR NOT NULL,
+    season         VARCHAR NOT NULL,
+    game_date      DATE NOT NULL,
+    team           VARCHAR NOT NULL,
+    player_id      VARCHAR NOT NULL,
+    espn_player_id VARCHAR,
+    player_name    VARCHAR,
+    starter        BOOLEAN,
+    did_not_play   BOOLEAN NOT NULL,
+    minutes        DOUBLE,
+    points         INTEGER,
+    rebounds       INTEGER,
+    assists        INTEGER,
+    plus_minus     INTEGER,
+    source         VARCHAR NOT NULL,
+    observed_at    TIMESTAMP WITH TIME ZONE NOT NULL,
+    PRIMARY KEY (game_id, player_id, source, observed_at)
 );
 
 CREATE TABLE IF NOT EXISTS ingest_runs (

@@ -37,7 +37,7 @@ import pdfplumber
 
 from predictor import db, raw_store
 from predictor.backtest import tipoff as tipoff_mod
-from predictor.model.venues import COMPETITIVE_PREFIXES
+from predictor.model.venues import competitive_sql
 from predictor.sources import injury_report
 from predictor.sources.injury_report import ArchiveOutcome, TransientFetchError
 
@@ -135,11 +135,10 @@ def replay_targets(con, start: date, end: date) -> list[SlotTarget]:
     (game_date, game_id) order, keeps the target). Sorted by `at`.
     """
     games = db.POINT_IN_TIME_TABLES["games"]
-    prefixes = ", ".join(f"'{p}'" for p in COMPETITIVE_PREFIXES)
     rows = con.execute(
         f"SELECT game_id, MIN(game_date) AS game_date, MIN(home_team), "
         f"MIN(away_team) FROM {games} "
-        f"WHERE substr(game_id, 1, 3) IN ({prefixes}) "
+        f"WHERE {competitive_sql()} "
         f"GROUP BY game_id HAVING MIN(game_date) BETWEEN ? AND ? "
         f"ORDER BY game_date, game_id",
         [start, end],

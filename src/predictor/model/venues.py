@@ -19,6 +19,23 @@ from predictor import db
 from predictor.model.cities import city_key
 
 COMPETITIVE_PREFIXES = ("002", "004", "005", "006")
+# Provisional game ids minted from ESPN before the NBA id is known. They are
+# only ever minted for competitive games, so they always count.
+PROVISIONAL_PREFIX = "espn:"
+
+
+def is_competitive(game_id: str) -> bool:
+    """Regular season, playoffs, play-in, NBA Cup final, or a provisional ESPN game."""
+    return game_id[:3] in COMPETITIVE_PREFIXES or game_id.startswith(PROVISIONAL_PREFIX)
+
+
+def competitive_sql(column: str = "game_id") -> str:
+    """SQL predicate matching exactly the ids `is_competitive` accepts."""
+    prefixes = ",".join(f"'{p}'" for p in COMPETITIVE_PREFIXES)
+    return (
+        f"(substr({column}, 1, 3) IN ({prefixes}) "
+        f"OR {column} LIKE '{PROVISIONAL_PREFIX}%')"
+    )
 
 
 @dataclass(frozen=True)
@@ -37,7 +54,7 @@ class VenueIndex:
         self._by_team: dict[str, list[Venue]] = {}
         ordered = sorted(self._by_id.values(), key=lambda v: (v.game_date, v.game_id))
         for v in ordered:
-            if v.game_id[:3] not in COMPETITIVE_PREFIXES:
+            if not is_competitive(v.game_id):
                 continue
             self._by_team.setdefault(v.home_team, []).append(v)
             self._by_team.setdefault(v.away_team, []).append(v)

@@ -33,7 +33,7 @@ from predictor.backtest.baselines import GameToPredict
 from predictor.model import market, publish
 from predictor.model.settings import ModelSettings
 from predictor.model.stage1 import Stage1Predictor
-from predictor.model.venues import COMPETITIVE_PREFIXES
+from predictor.model.venues import competitive_sql
 
 EASTERN = ZoneInfo("America/New_York")
 IST = ZoneInfo("Asia/Kolkata")
@@ -96,8 +96,6 @@ _NO_MARKET = {
     "market_label": None,
 }
 
-_COMPETITIVE_SQL = ", ".join(f"'{p}'" for p in COMPETITIVE_PREFIXES)
-
 
 class LogError(Exception):
     """A prediction/grades log file is corrupt or otherwise unusable."""
@@ -151,7 +149,7 @@ def _competitive_games(con, first: date, last: date) -> list[SlateGame]:
         FROM latest
         WHERE rn = 1
           AND game_date BETWEEN ? AND ?
-          AND substr(game_id, 1, 3) IN ({_COMPETITIVE_SQL})
+          AND {competitive_sql()}
         ORDER BY game_date, tip_off_utc NULLS LAST, game_id
         """,
         [first, last],
@@ -184,7 +182,7 @@ def slate_for(con, now: datetime) -> list[SlateGame]:
         FROM latest
         WHERE rn = 1
           AND game_date = ?
-          AND substr(game_id, 1, 3) IN ({_COMPETITIVE_SQL})
+          AND {competitive_sql()}
           AND tip_off_utc IS NOT NULL
         ORDER BY tip_off_utc, game_id
         """,
@@ -225,7 +223,7 @@ def in_season(con, now: datetime) -> bool:
         )
         SELECT 1 FROM latest
         WHERE rn = 1
-          AND substr(game_id, 1, 3) IN ({_COMPETITIVE_SQL})
+          AND {competitive_sql()}
           AND tip_off_utc BETWEEN ? AND ?
         LIMIT 1
         """,
@@ -257,7 +255,7 @@ def results_missing(con, now: datetime) -> list[str]:
         SELECT l.game_id
         FROM latest l
         WHERE l.rn = 1
-          AND substr(l.game_id, 1, 3) IN ({_COMPETITIVE_SQL})
+          AND {competitive_sql("l.game_id")}
           AND l.tip_off_utc IS NOT NULL
           AND l.tip_off_utc BETWEEN ? AND ?
           AND NOT EXISTS (

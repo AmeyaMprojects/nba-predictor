@@ -23,15 +23,13 @@ from zoneinfo import ZoneInfo
 import requests
 
 from predictor import config, db, raw_store
-from predictor.model.venues import COMPETITIVE_PREFIXES
+from predictor.model.venues import competitive_sql
 from predictor.teams import team_abbr
 
 API_URL = "https://api.the-odds-api.com/v4/sports/basketball_nba/odds"
 SOURCE = "theoddsapi"
 RAW_SOURCE = "odds"
 EASTERN = ZoneInfo("America/New_York")
-
-_COMPETITIVE_SQL = ", ".join(f"'{p}'" for p in COMPETITIVE_PREFIXES)
 
 
 class OddsQuotaExceeded(Exception):
@@ -252,7 +250,7 @@ def latest_schedule_games(
         WHERE rn = 1
           AND game_date BETWEEN coalesce(?, DATE '0001-01-01')
                             AND coalesce(?, DATE '9999-12-31')
-          AND substr(game_id, 1, 3) IN ({_COMPETITIVE_SQL})
+          AND {competitive_sql()}
         ORDER BY game_date, game_id
         """,
         [start, end],

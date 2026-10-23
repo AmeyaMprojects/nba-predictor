@@ -65,6 +65,7 @@ def test_all_four_logical_sources_are_reported(con):
     names = {h.name for h in health}
     assert names == {
         "games", "injury_status", "odds_snapshots", "news_items", "schedule", "player_games",
+        "injury_reports", "player_boxscores",
     }
 
 
@@ -72,7 +73,7 @@ def test_report_names_every_source(con):
     _add_injury(con, NOW - timedelta(hours=1))
     text = status.format_report(status.check_sources(con, NOW))
     for name in ("games", "injury_status", "odds_snapshots", "news_items", "schedule",
-                 "player_games"):
+                 "player_games", "injury_reports", "player_boxscores"):
         assert name in text
 
 
@@ -532,3 +533,20 @@ def test_live_results_detail_before_any_capture(con, tmp_path):
     repo = _repo_with_remote(tmp_path / "repo")
     text = status.format_report(status.check_live(con, repo, NOW))
     assert "live_results: no live results captured yet" in text
+
+
+def test_new_sources_have_staleness_thresholds():
+    assert status.STALENESS_HOURS["injury_reports"] == 36
+    assert status.STALENESS_HOURS["player_boxscores"] == 24 * 150
+
+
+def test_injury_reports_fresh_within_36_hours_is_not_stale(con):
+    seen = NOW - timedelta(hours=30)
+    con.execute(
+        f"INSERT INTO {db.POINT_IN_TIME_TABLES['injury_reports']} (observed_at, fetched_at,"
+        " source_key, row_count, content_sha) VALUES (?,?,?,?,?)",
+        [seen, seen, "k", 1, "b" * 64],
+    )
+    health = {h.name: h for h in status.check_sources(con, NOW)}
+    assert health["injury_reports"].stale is False
+    assert health["player_boxscores"].stale is True

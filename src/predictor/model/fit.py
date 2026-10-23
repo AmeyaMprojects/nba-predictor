@@ -33,7 +33,7 @@ from predictor.model.settings import (
     WARMUP_SEASONS,
     ModelSettings,
 )
-from predictor.model.venues import COMPETITIVE_PREFIXES, VenueIndex
+from predictor.model.venues import VenueIndex, competitive_sql
 
 # Re-exported for compatibility (callers and tests import the grids from
 # here). Lazy via module __getattr__, not a top-level import, because
@@ -62,12 +62,11 @@ class _Game:
 def _load(con, venues: VenueIndex) -> list[_Game]:
     seasons = WARMUP_SEASONS + TUNING_SEASONS
     table = db.POINT_IN_TIME_TABLES["games"]
-    prefixes = ", ".join(f"'{p}'" for p in COMPETITIVE_PREFIXES)
     placeholders = ", ".join("?" for _ in seasons)
     rows = con.execute(
         f"SELECT game_id, season, game_date, home_team, away_team, home_points, away_points "
         f"FROM {table} WHERE status = 'FINAL' AND home_points IS NOT NULL "
-        f"AND away_points IS NOT NULL AND substr(game_id, 1, 3) IN ({prefixes}) "
+        f"AND away_points IS NOT NULL AND {competitive_sql()} "
         f"AND season IN ({placeholders}) "
         "QUALIFY row_number() OVER (PARTITION BY game_id ORDER BY observed_at DESC) = 1 "
         "ORDER BY game_date, game_id",

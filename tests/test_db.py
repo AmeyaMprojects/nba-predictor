@@ -408,3 +408,39 @@ def test_player_games_table_is_registered_with_its_key_columns(con):
     assert {name for name, row in cols.items() if row[3] == "PRI"} == {
         "game_id", "player_id", "observed_at",
     }
+
+
+def test_new_tables_exist_and_migrate_is_idempotent(tmp_path):
+    c = db.connect(tmp_path / "new.duckdb")
+    db.migrate(c)
+    assert db.POINT_IN_TIME_TABLES["injury_reports"] == "injury_reports_raw"
+    assert db.POINT_IN_TIME_TABLES["player_boxscores"] == "player_boxscores_raw"
+    moment = datetime(2026, 10, 22, 21, 30, tzinfo=UTC)
+    c.execute(
+        "INSERT INTO injury_reports_raw (observed_at, fetched_at, source_key, row_count,"
+        " content_sha) VALUES (?,?,?,?,?)",
+        [moment, moment + timedelta(minutes=3), "k", 12, "a" * 64],
+    )
+    c.execute(
+        "INSERT INTO player_boxscores_raw (game_id, season, game_date, team, player_id,"
+        " espn_player_id, player_name, starter, did_not_play, minutes, points, rebounds,"
+        " assists, plus_minus, source, observed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        ["espn:401705555", "2026-27", moment.date(), "LAL", "espn:3112335", "3112335",
+         "Someone", True, False, 33.5, 21, 7, 4, -3, "espn", moment],
+    )
+    db.migrate(c)
+    db.migrate(c)
+    names = {r[0] for r in c.execute("SHOW TABLES").fetchall()}
+    assert {"injury_reports_raw", "player_boxscores_raw"} <= names
+    assert c.execute("SELECT count(*) FROM injury_reports_raw").fetchone()[0] == 1
+    assert c.execute("SELECT count(*) FROM player_boxscores_raw").fetchone()[0] == 1
+    pk = c.execute(
+        "SELECT constraint_column_names FROM duckdb_constraints()"
+        " WHERE table_name = 'player_boxscores_raw' AND constraint_type = 'PRIMARY KEY'"
+    ).fetchone()[0]
+    assert list(pk) == ["game_id", "player_id", "source", "observed_at"]
+    pk = c.execute(
+        "SELECT constraint_column_names FROM duckdb_constraints()"
+        " WHERE table_name = 'injury_reports_raw' AND constraint_type = 'PRIMARY KEY'"
+    ).fetchone()[0]
+    assert list(pk) == ["observed_at"]

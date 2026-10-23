@@ -150,6 +150,14 @@ def test_non_competitive_prefix_and_tbd_tipoff_are_excluded(tmp_path):
 
 # --- 1b. the slate date, back-fill of missed days, TBD tip-offs ---------
 
+def test_slate_includes_a_provisional_espn_game(tmp_path):
+    con = fixture_con(tmp_path)
+    insert_schedule_row(con, "espn:401705555", date(2026, 10, 22), "LAL", "BOS",
+                         datetime(2026, 10, 22, 23, 0, tzinfo=UTC), season=SEASON)
+    now = datetime(2026, 10, 22, 13, 0, tzinfo=UTC)
+    assert [g.game_id for g in slate_for(con, now)] == ["espn:401705555"]
+
+
 def test_slate_date_is_the_et_date_a_few_hours_ago():
     # The 18:00 IST run (08:30 EDT) handles today.
     assert slate_date(datetime(2026, 10, 21, 12, 30, tzinfo=UTC)) == date(2026, 10, 21)

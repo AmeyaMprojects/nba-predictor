@@ -41,6 +41,10 @@ the REAL refresh cadence of each source, not a single generic number:
   injury_status.
 - player_games: like games, loaded in bulk (`ingest-player-logs`) with no
   scheduled job, so it shares the games threshold and offseason reasoning.
+- injury_reports: one row per injury-report PDF (by header time); same
+  one-missed-day threshold as injury_status.
+- player_boxscores: ESPN box scores, written only on game days, so the
+  games threshold and offseason reasoning apply.
 """
 
 from __future__ import annotations
@@ -78,6 +82,12 @@ STALENESS_HOURS: dict[str, float] = {
     # Ingested in bulk by `ingest-player-logs`, like games: no scheduled
     # job, and the same ~120-day offseason gap, so the same threshold.
     "player_games": 24 * 150,
+    # One row per official injury-report PDF, several a day in season.
+    # Same one-missed-day slack as injury_status.
+    "injury_reports": 36,
+    # ESPN box scores arrive only on game days; like games and
+    # player_games, a normal offseason must not alarm.
+    "player_boxscores": 24 * 150,
 }
 
 

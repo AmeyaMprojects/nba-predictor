@@ -117,6 +117,16 @@ def test_status_exits_zero_when_every_source_is_fresh(tmp_path, monkeypatch):
         ["0022400561", "2024-25", now.date(), "regular", 1, "someone", "PHI",
          "nba_stats", True, now],
     )
+    con.execute(
+        "INSERT INTO injury_reports_raw (observed_at, fetched_at, source_key,"
+        " row_count, content_sha) VALUES (?,?,?,?,?)",
+        [now, now, "k", 1, "c" * 64],
+    )
+    con.execute(
+        "INSERT INTO player_boxscores_raw (game_id, season, game_date, team, player_id,"
+        " did_not_play, source, observed_at) VALUES (?,?,?,?,?,?,?,?)",
+        ["0022400561", "2024-25", now.date(), "PHI", "1", False, "espn", now],
+    )
     con.close()
 
     result = runner.invoke(cli.app, ["status"])

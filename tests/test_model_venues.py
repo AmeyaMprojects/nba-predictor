@@ -2,7 +2,7 @@ from datetime import date
 
 from model_fixtures import add_game, fixture_con
 from predictor.model import cities
-from predictor.model.venues import Venue, VenueIndex
+from predictor.model.venues import Venue, VenueIndex, competitive_sql, is_competitive
 from real_archive import open_real_archive_or_skip
 
 
@@ -72,3 +72,37 @@ def test_every_competitive_arena_city_in_the_archive_is_in_the_city_table():
         assert missing == [], f"add these arena cities to cities.CITIES: {missing}"
     finally:
         con.close()
+
+
+def test_is_competitive():
+    assert is_competitive("0022600001") and is_competitive("espn:401705555")
+    assert not is_competitive("0012600001")
+    for prefix in ("004", "005", "006"):
+        assert is_competitive(prefix + "2600001")
+    assert not is_competitive("0032600001")
+
+
+def test_competitive_sql_text_and_column():
+    assert competitive_sql() == (
+        "(substr(game_id, 1, 3) IN ('002','004','005','006') OR game_id LIKE 'espn:%')"
+    )
+    assert competitive_sql("l.game_id") == (
+        "(substr(l.game_id, 1, 3) IN ('002','004','005','006') OR l.game_id LIKE 'espn:%')"
+    )
+
+
+def test_competitive_sql_agrees_with_is_competitive():
+    import duckdb
+    ids = ["0022600001", "espn:401705555", "0012600001", "0042600001", "0032600001", "espn"]
+    con = duckdb.connect()
+    for gid in ids:
+        got = con.execute(
+            f"SELECT {competitive_sql()} FROM (SELECT ? AS game_id)", [gid]
+        ).fetchone()[0]
+        assert got is is_competitive(gid), gid
+
+
+def test_provisional_espn_game_counts_toward_recent_games():
+    v = Venue("espn:401705555", date(2026, 10, 22), "LAL", "BOS", None, False)
+    idx = VenueIndex([v])
+    assert idx.recent_games("LAL", date(2026, 10, 23), 5) == [v]

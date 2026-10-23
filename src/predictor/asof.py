@@ -19,6 +19,9 @@ _DEFAULT_LATEST_KEY: dict[str, tuple[str, ...]] = {
     "news_items": ("item_key",),
     "schedule": ("game_id",),
     "player_games": ("game_id", "player_id"),
+    # One row per report header time; each report is its own entity.
+    "injury_reports": ("observed_at",),
+    "player_boxscores": ("game_id", "player_id", "source"),
 }
 
 

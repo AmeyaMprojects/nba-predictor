@@ -22,9 +22,7 @@ from predictor.backtest.baselines import GameToPredict
 from predictor.model import adjustments as adj
 from predictor.model.ratings import Ratings, Result, win_probability
 from predictor.model.settings import ModelSettings
-from predictor.model.venues import COMPETITIVE_PREFIXES, VenueIndex
-
-_COMPETITIVE_SQL = ", ".join(f"'{p}'" for p in COMPETITIVE_PREFIXES)
+from predictor.model.venues import VenueIndex, competitive_sql
 
 
 @dataclass(frozen=True)
@@ -154,7 +152,7 @@ class Stage1Predictor:
         """
         rel = view.table("games").filter(
             "status = 'FINAL' AND home_points IS NOT NULL AND away_points IS NOT NULL "
-            f"AND substr(game_id, 1, 3) IN ({_COMPETITIVE_SQL})"
+            f"AND {competitive_sql()}"
         )
         if since is not None:
             rel = rel.filter(f"observed_at > TIMESTAMPTZ '{since.isoformat()}'")
