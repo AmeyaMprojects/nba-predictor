@@ -11,12 +11,16 @@ than guessed. Every lookup is counted, and unlinked names are kept per
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from collections import Counter, defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 _SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
+# A suffix glued to a surname: a lowercase letter, then Jr./Sr. or a capital
+# Roman numeral at the very end ("WilliamsIII", "PorterJr.").
+_GLUED_SUFFIX = re.compile(r"([a-z])(Jr\.?|Sr\.?|III|II|IV)$")
 
 # Name key -> player_id for known spelling differences between the injury
 # report and the game logs. Filled in from the unlinked report (Task 11).
@@ -45,6 +49,13 @@ def name_key(name: str) -> str:
     (game logs). Accents are stripped, case is folded, and a trailing
     Jr./Sr./II/III/IV on the last-name part is dropped.
     """
+    if "," in name:
+        # The injury-report PDF often glues the suffix to the surname
+        # ("WilliamsIII,Robert", "PorterJr.,Michael"). Split it off while the
+        # original capitalisation still tells a suffix from a surname ending.
+        raw_last, raw_first = name.split(",", 1)
+        raw_last = _GLUED_SUFFIX.sub(r"\1 \2", raw_last.strip())
+        name = f"{raw_last},{raw_first}"
     folded = _fold(name)
     if "," in folded:
         last, first = folded.split(",", 1)

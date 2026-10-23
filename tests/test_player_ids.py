@@ -83,3 +83,14 @@ def test_ambiguous_across_teams_without_team_match_is_unlinked():
         ]
     )
     assert index.link("Morris, Marcus", "BOS", "2022-23") is None
+
+
+def test_suffix_glued_to_the_surname_in_the_injury_report():
+    from predictor.model.player_ids import name_key
+
+    assert name_key("WilliamsIII,Robert") == name_key("Robert Williams III")
+    assert name_key("PorterJr.,Michael") == name_key("Michael Porter Jr.")
+    assert name_key("LivelyII,Dereck") == name_key("Dereck Lively II")
+    assert name_key("HolmesII,DaRon") == name_key("DaRon Holmes II")
+    # A surname that merely ends in "ii" letters is not a suffix.
+    assert name_key("Kalaii,Test") == "testkalaii"
