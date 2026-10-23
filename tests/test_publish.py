@@ -476,26 +476,36 @@ def test_push_refused_when_unpushed_commits_cannot_be_listed(tmp_path, monkeypat
     assert pushes == []
 
 
-def test_rejected_push_says_github_has_commits_this_checkout_lacks(tmp_path):
+def test_rejected_push_says_github_has_commits_this_checkout_lacks(tmp_path, monkeypatch):
+    # Cloud operation task 1: a remote that is merely ahead is now rebased
+    # over (see test_pull_rebase_when_remote_is_ahead_and_all_local_commits_are_safe).
+    # This message is what is left when the push is STILL rejected after
+    # the one fetch+rebase+push retry.
     repo = _init_repo(tmp_path / "repo")
     _seed_commit(repo)
     remote = _init_bare_remote(tmp_path / "remote.git")
     _establish_remote(repo, remote)
 
-    # Someone pushes to GitHub from elsewhere.
-    other = tmp_path / "other"
-    assert _git(tmp_path, "clone", str(remote), str(other)).returncode == 0
-    (other / "NOTES.md").write_text("from elsewhere\n", encoding="utf-8")
-    assert _git(other, "add", "NOTES.md").returncode == 0
-    assert _git(other, "commit", "-m", "notes").returncode == 0
-    assert _git(other, "push", "origin", "main").returncode == 0
+    real_git = publish._git
+    pushes = []
 
+    def always_rejected(repo_dir, args, timeout=publish._GIT_TIMEOUT):
+        if args[:1] == ["push"]:
+            pushes.append(args)
+            return subprocess.CompletedProcess(
+                ["git", *args], 1, "",
+                " ! [rejected]        main -> main (fetch first)\n",
+            )
+        return real_git(repo_dir, args, timeout)
+
+    monkeypatch.setattr(publish, "_git", always_rejected)
     log_path = _write_log(repo)
     result = commit_and_push(repo, [log_path], "predictions: 2026-10-21 slate")
 
     assert result.committed is True
     assert result.pushed is False
     assert result.error is False
+    assert len(pushes) == 2  # the first push plus exactly one retry
     assert result.message == (
         "GitHub has commits this checkout doesn't — the push was rejected and "
         "will keep failing until they are pulled by hand (git pull --ff-only "
@@ -676,3 +686,221 @@ def test_push_pending_refuses_during_a_merge(tmp_path):
     assert result.pushed is False
     assert "MERGE_HEAD" in result.message
     assert unpushed_commits(repo) == 1
+
+
+# --- cloud operation, task 1: state commits, a chosen branch, narrow rebase --
+
+
+def _write_state(repo_dir: Path, text: str = '{"s": 1}\n', name: str = "runs.jsonl") -> Path:
+    path = repo_dir / "state" / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _push_from_elsewhere(tmp_path: Path, remote: Path, rel: str, text: str, subject: str,
+                         branch: str = "main") -> None:
+    other = tmp_path / "other"
+    if not other.exists():
+        assert _git(tmp_path, "clone", str(remote), str(other)).returncode == 0
+    assert _git(other, "checkout", branch).returncode == 0
+    assert _git(other, "pull", "--ff-only", "origin", branch).returncode == 0
+    target = other / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    assert _git(other, "add", rel).returncode == 0
+    assert _git(other, "commit", "-m", subject).returncode == 0
+    assert _git(other, "push", "origin", branch).returncode == 0
+
+
+def _subjects(repo_dir: Path, ref: str) -> list[str]:
+    return _git(repo_dir, "log", "--format=%s", ref).stdout.splitlines()
+
+
+def test_state_commit_touching_only_state_is_committed_and_pushed(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+
+    result = commit_and_push(
+        repo, [_write_state(repo)], "state: cloud run 2026-10-22T12:37Z", kind="state"
+    )
+
+    assert result.committed is True and result.pushed is True and result.error is False
+    assert _subjects(remote, "main")[0] == "state: cloud run 2026-10-22T12:37Z"
+
+
+def test_state_kind_with_a_predictions_path_is_refused(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    before = _git(repo, "log", "--format=%H").stdout
+
+    result = commit_and_push(repo, [_write_log(repo)], "state: x", kind="state")
+
+    assert result.error is True and result.committed is False
+    assert "outside" in result.message
+    assert _git(repo, "log", "--format=%H").stdout == before
+
+
+def test_message_without_the_kind_prefix_is_refused(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    before = _git(repo, "log", "--format=%H").stdout
+
+    result = commit_and_push(repo, [_write_state(repo)], "predictions: x", kind="state")
+
+    assert result.error is True and result.committed is False
+    assert _git(repo, "log", "--format=%H").stdout == before
+    assert _git(repo, "diff", "--cached", "--name-only").stdout == ""
+
+
+def test_push_refused_when_a_state_commit_touches_predictions(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    _write_log(repo, name="a.jsonl")
+    assert _git(repo, "add", "predictions/a.jsonl").returncode == 0
+    assert _git(repo, "commit", "-m", "state: x").returncode == 0
+
+    result = commit_and_push(repo, [_write_state(repo)], "state: y", kind="state")
+
+    assert result.committed is True
+    assert result.pushed is False
+    assert "state: x" in result.message
+    assert "state: x" not in _subjects(remote, "main")
+    assert publish.unpushed_non_prediction_commits(repo) == 1
+
+
+def test_pull_rebase_when_remote_is_ahead_and_all_local_commits_are_safe(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    _push_from_elsewhere(tmp_path, remote, "README.md", "readme from elsewhere\n", "docs: readme")
+
+    result = commit_and_push(repo, [_write_log(repo)], "predictions: 2026-10-22 slate")
+
+    assert result.committed is True and result.pushed is True and result.error is False
+    assert _subjects(remote, "main")[:2] == ["predictions: 2026-10-22 slate", "docs: readme"]
+    assert _git(repo, "rev-list", "--merges", "origin/main").stdout.strip() == ""
+    assert publish._operation_in_progress(repo) is None
+
+
+def test_no_pull_when_any_local_commit_is_unsafe(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    _push_from_elsewhere(tmp_path, remote, "README.md", "readme from elsewhere\n", "docs: readme")
+    (repo / "feature.py").write_text("x = 1\n", encoding="utf-8")
+    assert _git(repo, "add", "feature.py").returncode == 0
+    assert _git(repo, "commit", "-m", "feat: x").returncode == 0
+    commit_and_push(repo, [_write_log(repo)], "predictions: 2026-10-22 slate", push=False)
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    result = publish.push_pending(repo)
+
+    assert result.pushed is False
+    assert "feat: x" in result.message
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head
+    assert not (repo / ".git" / "rebase-merge").exists()
+    assert not (repo / ".git" / "rebase-apply").exists()
+    assert "docs: readme" not in _subjects(repo, "main")
+
+
+def test_rebase_conflict_is_aborted_and_commit_kept(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    first = commit_and_push(repo, [_write_log(repo, '{"a": 1}\n')], "predictions: 2026-10-21 slate")
+    assert first.pushed is True
+    _push_from_elsewhere(
+        tmp_path, remote, "predictions/2026-27.jsonl", '{"a": 9}\n', "predictions: edited elsewhere"
+    )
+
+    result = commit_and_push(repo, [_write_log(repo, '{"a": 2}\n')], "predictions: 2026-10-22 slate")
+
+    assert result.committed is True
+    assert result.pushed is False
+    assert result.error is False
+    assert "nothing pushed" in result.message
+    assert publish._operation_in_progress(repo) is None
+    assert _subjects(repo, "HEAD")[0] == "predictions: 2026-10-22 slate"
+    assert _subjects(remote, "main")[0] == "predictions: edited elsewhere"
+
+
+def test_rejected_push_is_retried_once_after_a_fresh_rebase(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+
+    real_git = publish._git
+    pushes = []
+
+    def racing_git(repo_dir, args, timeout=publish._GIT_TIMEOUT):
+        if args[:1] == ["push"]:
+            pushes.append(args)
+            if len(pushes) == 1:
+                # Someone pushes between our fetch and our push.
+                _push_from_elsewhere(tmp_path, remote, "NOTES.md", "race\n", "docs: race")
+        return real_git(repo_dir, args, timeout)
+
+    monkeypatch.setattr(publish, "_git", racing_git)
+    result = commit_and_push(repo, [_write_log(repo)], "predictions: 2026-10-22 slate")
+
+    assert result.pushed is True
+    assert len(pushes) == 2
+    assert _subjects(remote, "main")[:2] == ["predictions: 2026-10-22 slate", "docs: race"]
+
+
+def test_commit_on_cloud_shadow_pushes_only_that_branch(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    assert _git(repo, "checkout", "-b", "cloud-shadow").returncode == 0
+    assert _git(repo, "push", "origin", "cloud-shadow").returncode == 0  # first push by hand
+    main_sha = _git(remote, "rev-parse", "main").stdout.strip()
+    shadow_before = _git(remote, "rev-parse", "cloud-shadow").stdout.strip()
+
+    result = commit_and_push(
+        repo, [_write_state(repo)], "state: cloud run 2026-10-22T12:37Z",
+        kind="state", branch="cloud-shadow",
+    )
+
+    assert result.pushed is True
+    assert _git(remote, "rev-parse", "cloud-shadow").stdout.strip() != shadow_before
+    assert _subjects(remote, "cloud-shadow")[0] == "state: cloud run 2026-10-22T12:37Z"
+    assert _git(remote, "rev-parse", "main").stdout.strip() == main_sha
+    assert publish.unpushed_commits(repo, branch="cloud-shadow") == 0
+
+
+def test_branch_mismatch_commits_nothing(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+
+    result = commit_and_push(
+        repo, [_write_state(repo)], "state: x", kind="state", branch="cloud-shadow"
+    )
+
+    assert result.committed is False and result.pushed is False
+    assert "cloud-shadow" in result.message
+    assert _git(repo, "rev-list", "--count", "HEAD").stdout.strip() == "1"
+
+
+def test_code_version_ignores_changes_under_state(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    _write_state(repo)
+    assert publish.code_version(repo)[1] is False
+
+
+def test_head_sha_is_the_short_sha(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    assert publish.head_sha(repo) == _git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
+    assert publish.head_sha(tmp_path / "nowhere") is None

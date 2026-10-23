@@ -33,6 +33,20 @@ def _default_data_dir() -> Path:
 settings = Settings(data_dir=_default_data_dir())
 
 
+_PUBLISH_BRANCHES = ("main", "cloud-shadow")
+
+
+def publish_branch() -> str:
+    """The branch the cloud run commits to and pushes: env
+    ``PREDICTOR_PUBLISH_BRANCH`` (stripped), default ``"main"``. Only
+    ``main`` and ``cloud-shadow`` are allowed -- anything else raises, so a
+    typo can never publish to an unexpected branch."""
+    value = os.environ.get("PREDICTOR_PUBLISH_BRANCH", "").strip() or "main"
+    if value not in _PUBLISH_BRANCHES:
+        raise ValueError(f"PREDICTOR_PUBLISH_BRANCH must be main or cloud-shadow, not '{value}'")
+    return value
+
+
 def season_label(now: datetime) -> str:
     """Season string (e.g. "2026-27") that `now` belongs to, for defaults.
 

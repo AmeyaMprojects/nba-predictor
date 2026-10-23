@@ -33,3 +33,27 @@ def test_season_label_across_a_century_boundary():
 def test_previous_season_label():
     assert previous_season_label("2026-27") == "2025-26"
     assert previous_season_label("2000-01") == "1999-00"
+
+
+def test_publish_branch_defaults_to_main(monkeypatch):
+    from predictor.config import publish_branch
+
+    monkeypatch.delenv("PREDICTOR_PUBLISH_BRANCH", raising=False)
+    assert publish_branch() == "main"
+
+
+def test_publish_branch_reads_cloud_shadow(monkeypatch):
+    from predictor.config import publish_branch
+
+    monkeypatch.setenv("PREDICTOR_PUBLISH_BRANCH", " cloud-shadow\n")
+    assert publish_branch() == "cloud-shadow"
+
+
+def test_publish_branch_rejects_other_values(monkeypatch):
+    import pytest
+
+    from predictor.config import publish_branch
+
+    monkeypatch.setenv("PREDICTOR_PUBLISH_BRANCH", "dev")
+    with pytest.raises(ValueError, match="PREDICTOR_PUBLISH_BRANCH must be main or cloud-shadow, not 'dev'"):
+        publish_branch()
