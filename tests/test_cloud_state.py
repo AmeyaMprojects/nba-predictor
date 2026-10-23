@@ -107,9 +107,19 @@ def _make_source_db(path: Path):
     i = _table(con, "injury_status")
     r1, r2, r3 = dt("2026-10-20T21:30Z"), dt("2026-10-21T21:30Z"), dt("2026-10-22T21:30Z")
     r_old = dt("2025-10-21T17:00Z")
+    r_old2 = dt("2025-10-21T18:00Z")
     gd = date(2026, 10, 22)
     rows = [
         _injury(r_old, date(2025, 10, 21), "BOS", "Tatum,Jayson", "Out"),
+        # one player listed for two game dates in one report
+        _injury(r_old, date(2025, 10, 22), "BOS", "Tatum,Jayson", "Doubtful"),
+        # a row whose `reconstructed` differs from the rest of its report
+        _injury(r_old, date(2025, 10, 21), "BOS", "White,Derrick", "Probable")[:10]
+        + (True, r_old),
+        # next report: same rows, but White's `reconstructed` flips back
+        _injury(r_old2, date(2025, 10, 21), "BOS", "Tatum,Jayson", "Out"),
+        _injury(r_old2, date(2025, 10, 22), "BOS", "Tatum,Jayson", "Doubtful"),
+        _injury(r_old2, date(2025, 10, 21), "BOS", "White,Derrick", "Probable"),
         _injury(r1, gd, "LAL", "James,LeBron", "Questionable"),
         _injury(r1, gd, "LAL", "Hayes,Jaxson", "Out"),
         _injury(r1, gd, "GSW", "Curry,Stephen", "Probable"),
@@ -164,8 +174,9 @@ def test_append_rows_partitions_schedule_by_season_and_month(tmp_path):
     state_dir = tmp_path / "state"
     touched = state.append_rows(state_dir, "schedule", [_sched_row()])
     assert touched == [state_dir / "schedule" / "2026-27" / "2026-11.jsonl"]
-    line = touched[0].read_text()
-    assert line.endswith("\n") and line.count("\n") == 1
+    header, line = touched[0].read_text().splitlines(keepends=True)
+    assert header == '{"format":"lines","v":1}\n'
+    assert line.endswith("\n")
     obj = json.loads(line)
     assert line == json.dumps(obj, sort_keys=True, separators=(",", ":")) + "\n"
     assert obj["tip_off_utc"] == "2026-11-04T00:00:00+00:00"
@@ -197,7 +208,39 @@ def test_write_snapshot_refuses_outside_nba(tmp_path):
     with pytest.raises(ValueError):
         state.write_snapshot(tmp_path / "state", "nba/../results/x.jsonl", [{"a": 1}])
     path = state.write_snapshot(tmp_path / "state", "nba/players-2026-27.jsonl", [{"b": 2, "a": 1}])
-    assert path.read_text() == '{"a":1,"b":2}\n'
+    assert path.read_text() == '{"format":"lines","v":1}\n{"a":1,"b":2}\n'
+
+
+def test_append_writes_the_header_once(tmp_path):
+    state_dir = tmp_path / "state"
+    (path,) = state.append_rows(state_dir, "schedule", [_sched_row()])
+    state.append_rows(state_dir, "schedule", [_sched_row(observed="2026-10-26T13:00Z")])
+    lines = path.read_text().splitlines()
+    assert len(lines) == 3 and lines.count('{"format":"lines","v":1}') == 1
+    assert len(list(state.read_rows(state_dir, "schedule"))) == 2
+
+
+@pytest.mark.parametrize(
+    "header",
+    ['{"format":"lines","v":2}', '{"columns":["a"],"format":"table","v":9}',
+     '{"format":"lines"}', '{"a":1}'],
+)
+def test_reader_rejects_unknown_or_missing_versions(tmp_path, header):
+    path = tmp_path / "state" / "results" / "2026-27.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_text(header + "\n" + '{"a":1}\n')
+    with pytest.raises(state.StateVersionError, match="2026-27.jsonl"):
+        list(state.read_rows(tmp_path / "state", "results"))
+
+
+def test_injury_report_line_with_unknown_version_is_rejected(tmp_path):
+    path = state.write_snapshot(tmp_path / "state", "nba/injuries/2026-27/2026-10.jsonl", [
+        {"kind": "report", "observed_at": "2026-10-20T21:30:00+00:00",
+         "report_date": "2026-10-20", "reconstructed": False, "v": 2},
+    ])
+    assert path.exists()
+    with pytest.raises(state.StateVersionError, match="version 2"):
+        state.rebuild_db(tmp_path / "state", tmp_path / "work.duckdb")
 
 
 def test_snapshot_table_form_reads_back_as_dicts(tmp_path):
@@ -208,7 +251,7 @@ def test_snapshot_table_form_reads_back_as_dicts(tmp_path):
         columns=("game_id", "observed_at", "season"),
     )
     assert path.read_text() == (
-        '{"columns":["game_id","observed_at","season"],"format":"table"}\n'
+        '{"columns":["game_id","observed_at","season"],"format":"table","v":1}\n'
         '["0022600001","2026-10-22T12:00:00+00:00","2026-27"]\n'
     )
     assert list(state.read_rows(state_dir, "nba_games")) == [
@@ -263,17 +306,58 @@ def test_roundtrip_injury_status_is_exact(tmp_path):
     report = state.rebuild_db(state_dir, tmp_path / "work.duckdb")
     out = db.connect(tmp_path / "work.duckdb", read_only=True)
     assert _injury_rows(out) == _injury_rows(src)
-    assert report.rows["injury_status"] == 9
+    assert report.rows["injury_status"] == 14
+    flags = out.execute(
+        f"SELECT observed_at, reconstructed FROM {_table(out, 'injury_status')}"
+        " WHERE player = 'White,Derrick' ORDER BY observed_at"
+    ).fetchall()
+    assert [f[1] for f in flags] == [True, False]
+    tatum = out.execute(
+        f"SELECT count(DISTINCT game_date) FROM {_table(out, 'injury_status')}"
+        " WHERE player = 'Tatum,Jayson' AND observed_at = ?", [dt("2025-10-21T17:00Z")]
+    ).fetchone()[0]
+    assert tatum == 2
+
+
+def test_injury_reconstructed_change_alone_is_a_set_line(tmp_path):
+    src = _make_source_db(tmp_path / "src.duckdb")
+    state_dir = tmp_path / "state"
+    state.export_from_db(src, state_dir, ["2025-26"])
+    lines = list(state._read_lines([state_dir / "nba" / "injuries" / "2025-26" / "2025-10.jsonl"]))
+    second = lines[[i for i, x in enumerate(lines) if x["kind"] == "report"][1]:]
+    assert [x["kind"] for x in second] == ["report", "set"]
+    assert second[1]["player"] == "White,Derrick"
+
+
+def test_export_removes_stale_partitions_of_exported_seasons(tmp_path):
+    src = _make_source_db(tmp_path / "src.duckdb")
+    state_dir = tmp_path / "state"
+    stale = [
+        state_dir / "nba" / "player_games" / "2026-27" / "2026-05.jsonl",
+        state_dir / "nba" / "injuries" / "2026-27" / "2027-01.jsonl",
+        state_dir / "nba" / "odds-2026-27.jsonl",
+    ]
+    other_season = state_dir / "nba" / "games-2019-20.jsonl"
+    kept = [other_season, state_dir / "nba" / "players-2026-27.jsonl",
+            state_dir / "schedule" / "2026-27" / "2026-11.jsonl"]
+    for path in stale + kept:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('{"format":"lines","v":1}\n')
+    src.execute(f"DELETE FROM {_table(src, 'odds_snapshots')} WHERE source = 'theoddsapi'")
+    written = state.export_from_db(src, state_dir, ["2026-27"])
+    for path in stale:
+        assert not path.exists(), path
+    for path in kept:
+        assert path.exists(), path
+    assert all(p.exists() for p in written)
 
 
 def test_injury_history_is_stored_as_deltas(tmp_path):
     src = _make_source_db(tmp_path / "src.duckdb")
     state_dir = tmp_path / "state"
     state.export_from_db(src, state_dir, ["2026-27"])
-    lines = [
-        json.loads(x)
-        for x in (state_dir / "nba" / "injuries" / "2026-27" / "2026-10.jsonl").read_text().splitlines()
-    ]
+    lines = list(state._read_lines([state_dir / "nba" / "injuries" / "2026-27" / "2026-10.jsonl"]))
+    assert lines[0]["v"] == 1
     kinds = [x["kind"] for x in lines]
     # r1: report + 3 sets; r2: report + set James + drop Hayes; r3: report + set Brown
     assert kinds == [
@@ -299,8 +383,8 @@ def test_injury_month_files_are_self_contained(tmp_path):
     )
     state_dir = tmp_path / "state"
     state.export_from_db(con, state_dir, ["2026-27"])
-    nov = (state_dir / "nba" / "injuries" / "2026-27" / "2026-11.jsonl").read_text().splitlines()
-    assert [json.loads(x)["kind"] for x in nov] == ["report", "set"]
+    nov = list(state._read_lines([state_dir / "nba" / "injuries" / "2026-27" / "2026-11.jsonl"]))
+    assert [x["kind"] for x in nov] == ["report", "set"]
     state.rebuild_db(state_dir, tmp_path / "work.duckdb")
     out = db.connect(tmp_path / "work.duckdb", read_only=True)
     assert _injury_rows(out) == _injury_rows(con)
@@ -356,11 +440,10 @@ def test_rebuild_maps_provisional_ids(tmp_path):
         "source": "espn",
     }])
     links = state_dir / "schedule" / "id_links.jsonl"
-    links.parent.mkdir(parents=True, exist_ok=True)
-    links.write_text(json.dumps({
+    state.append_records(links, [{
         "provisional_id": "espn:401705555", "game_id": "0042600101",
         "linked_at": "2027-04-19T03:00:00+00:00",
-    }) + "\n")
+    }])
     assert state.read_id_links(state_dir) == {"espn:401705555": "0042600101"}
     state.rebuild_db(state_dir, tmp_path / "work.duckdb")
     out = db.connect(tmp_path / "work.duckdb", read_only=True)

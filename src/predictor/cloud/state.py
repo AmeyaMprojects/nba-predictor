@@ -29,6 +29,7 @@ replaces a whole file.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from collections.abc import Callable, Iterable, Iterator
@@ -39,6 +40,8 @@ from zoneinfo import ZoneInfo
 
 from predictor import db
 from predictor.config import season_label
+
+log = logging.getLogger(__name__)
 
 STATE_DIRNAME = "state"
 EASTERN = ZoneInfo("America/New_York")
@@ -82,6 +85,15 @@ _INJURY_REPORT_FIELDS = ("report_date", "reconstructed")
 
 INJURY_HISTORY_DIR = "nba/injuries"
 _TABLE_FORMAT = "table"
+_LINES_FORMAT = "lines"
+# The one state file version this code reads and writes. Every file starts
+# with a header line {"format":..., "v":1}; injury report lines carry "v" too.
+STATE_VERSION = 1
+
+
+class StateVersionError(ValueError):
+    """A state file or line is missing its version, or has one this code
+    does not read."""
 ID_LINKS_PATH = "schedule/id_links.jsonl"
 SETTINGS_OVERRIDE = "settings/stage1_settings.json"
 
@@ -214,15 +226,31 @@ def append_rows(state_dir: Path, family: str, rows: list[dict]) -> list[Path]:
 
     Returns the touched files in first-touched order."""
     fam = _family(family)
-    by_path: dict[Path, list[str]] = {}
+    by_path: dict[Path, list[dict]] = {}
     for row in rows:
-        line = encode_line({c: row.get(c) for c in fam.columns if c in row})
-        by_path.setdefault(state_dir / fam.path_for(row), []).append(line)
-    for path, lines in by_path.items():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8", newline="\n") as fh:
-            fh.write("".join(lines))
+        record = {c: row.get(c) for c in fam.columns if c in row}
+        encode_line(record)  # validate every row before touching any file
+        by_path.setdefault(state_dir / fam.path_for(row), []).append(record)
+    for path, records in by_path.items():
+        append_records(path, records)
     return list(by_path)
+
+
+def _header(**fields) -> str:
+    return encode_line({**fields, "v": STATE_VERSION})
+
+
+def append_records(path: Path, records: list[dict]) -> Path:
+    """Append keyed lines to one state file. A new (or empty) file first
+    gets the version header ``{"format":"lines","v":1}``; existing lines are
+    never rewritten."""
+    lines = "".join(encode_line(r) for r in records)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8", newline="\n") as fh:
+        if fh.tell() == 0:
+            fh.write(_header(format=_LINES_FORMAT))
+        fh.write(lines)
+    return path
 
 
 def write_snapshot(
@@ -231,7 +259,7 @@ def write_snapshot(
     """Replace one whole ``nba/`` snapshot file (Mac only).
 
     With ``columns``, the file is in table form: a header line
-    ``{"columns":[...],"format":"table"}`` then one JSON array per row, in
+    ``{"columns":[...],"format":"table","v":1}`` then one JSON array per row, in
     column order. That keeps the large history tables about a third of the
     size of keyed lines; ``read_rows`` turns them back into dicts."""
     parts = Path(rel_path).parts
@@ -242,10 +270,11 @@ def write_snapshot(
     tmp = path.with_name(path.name + ".tmp")
     with tmp.open("w", encoding="utf-8", newline="\n") as fh:
         if columns is None:
+            fh.write(_header(format=_LINES_FORMAT))
             for row in rows:
                 fh.write(encode_line(row))
         else:
-            fh.write(encode_line({"columns": list(columns), "format": _TABLE_FORMAT}))
+            fh.write(_header(columns=list(columns), format=_TABLE_FORMAT))
             for row in rows:
                 values = [_encode_value(row.get(c), c) for c in columns]
                 fh.write(json.dumps(values, separators=(",", ":")) + "\n")
@@ -257,7 +286,8 @@ def write_snapshot(
 
 
 def _read_lines(paths: Iterable[Path]) -> Iterator[dict]:
-    """Every line of each file as a dict (table-form files are zipped back)."""
+    """Every data line of each file as a dict (table-form files are zipped
+    back). The first line must be a version header this code reads."""
     for path in paths:
         columns: list[str] | None = None
         with path.open(encoding="utf-8") as fh:
@@ -265,13 +295,27 @@ def _read_lines(paths: Iterable[Path]) -> Iterator[dict]:
                 if not line.strip():
                     continue
                 obj = json.loads(line)
-                if n == 0 and isinstance(obj, dict) and obj.get("format") == _TABLE_FORMAT:
-                    columns = obj["columns"]
+                if n == 0:
+                    columns = _check_header(path, obj)
                     continue
                 if columns is not None:
                     yield dict(zip(columns, obj, strict=True))
                 else:
                     yield obj
+
+
+def _check_header(path: Path, obj) -> list[str] | None:
+    """Validate a file's header line; returns the columns for table form."""
+    fmt = obj.get("format") if isinstance(obj, dict) else None
+    if fmt not in (_LINES_FORMAT, _TABLE_FORMAT):
+        raise StateVersionError(f"{path}: the first line is not a state file header")
+    version = obj.get("v")
+    if version != STATE_VERSION:
+        raise StateVersionError(
+            f"{path}: state file version {version} is not supported "
+            f"(this code reads version {STATE_VERSION})"
+        )
+    return list(obj["columns"]) if fmt == _TABLE_FORMAT else None
 
 
 def read_rows(state_dir: Path, family: str) -> Iterator[dict]:
@@ -394,7 +438,7 @@ def encode_injury_history(rows: list[dict]) -> list[dict]:
     for observed_at in sorted(reports):
         members = sorted(reports[observed_at], key=lambda r: tuple(str(r[k]) for k in _INJURY_KEY))
         head = {f: members[0][f] for f in _INJURY_REPORT_FIELDS}
-        lines.append({"kind": "report", "observed_at": observed_at, **head})
+        lines.append({"kind": "report", "observed_at": observed_at, "v": STATE_VERSION, **head})
         cur = {
             tuple(_encode_value(r[k], k) for k in _INJURY_KEY): {
                 k: _encode_value(v, k) for k, v in _injury_payload(r, head).items()
@@ -428,6 +472,11 @@ def expand_injury_history(lines: Iterable[dict]) -> list[dict]:
     for line in lines:
         kind = line["kind"]
         if kind == "report":
+            if line.get("v") != STATE_VERSION:
+                raise StateVersionError(
+                    f"injury report line at {line.get('observed_at')}: version "
+                    f"{line.get('v')} is not supported (this code reads version {STATE_VERSION})"
+                )
             flush()
             report = line
             continue
@@ -556,7 +605,28 @@ def export_from_db(con, state_dir: Path, seasons: list[str]) -> list[Path]:
     ]
     for rel, part in sorted(_group(injuries, _injury_history_path).items()):
         written.append(write_snapshot(state_dir, rel, encode_injury_history(part)))
+    _remove_stale_snapshots(state_dir, wanted, written)
     return written
+
+
+def _season_snapshot_files(state_dir: Path, season: str) -> list[Path]:
+    """Every nba/ file this export owns for one season (not players-*)."""
+    nba = state_dir / "nba"
+    files = [nba / f"{kind}-{season}.jsonl" for kind in ("games", "schedule", "odds")]
+    files += sorted((nba / "player_games" / season).glob("*.jsonl"))
+    files += sorted((nba / "injuries" / season).glob("*.jsonl"))
+    return [p for p in files if p.exists()]
+
+
+def _remove_stale_snapshots(state_dir: Path, seasons: set[str], written: list[Path]) -> None:
+    """Delete nba/ files of the exported seasons that this export did not
+    write, so a partition whose rows are gone can never be reloaded."""
+    keep = {p.resolve() for p in written}
+    for season in sorted(seasons):
+        for path in _season_snapshot_files(state_dir, season):
+            if path.resolve() not in keep:
+                log.warning("removing stale state snapshot %s", path)
+                path.unlink()
 
 
 def _injury_history_path(row: dict) -> str:
