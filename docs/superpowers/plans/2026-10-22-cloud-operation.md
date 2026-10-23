@@ -56,6 +56,12 @@
 
 ## Controller rulings (2026-10-22, before execution)
 
+- **Ruling 2026-10-23, after plan 1 merged (supersedes the "no second player table" clause below):**
+  - **Two tables, not one.** Plan 1's `player_games` (`player_games_raw`) holds NBA game logs with a numeric `player_id` (BIGINT). ESPN box scores identify unlinked players as `'espn:<athlete id>'` text, which cannot share that key. So Task 2 keeps `player_boxscores_raw` as specified, for ESPN rows only.
+  - **Plan 3 merges the read.** NBA rows are used when present, otherwise ESPN rows, and only rows seen before the call. That is spec call 6.
+  - **Task 5** links ESPN players to NBA ids with plan 1's `predictor.model.player_ids` (`name_key`, `PlayerIndex`), not a new linker.
+  - **Task 6** reuses plan 1's injury helpers: `injury_report.new_session()` for the browser User-Agent session, and the slot labels and header-time parsing in `predictor.sources.injury_slots` / `injury_report`. It must not duplicate them.
+  - **`injury_reports_raw`** (header-time index) is new and complements the existing `injury_status` rows.
 - **Order:** this plan runs **after** plan 1 (`2026-10-22-player-model.md`) is merged. Plan 1's table and helper names win: `player_games` for NBA player logs, and its injury-report session and slot helpers. This plan's ESPN box scores join them through a `source` column, so no second player table holds the same thing.
 - **News archiver:** the owner said GitHub runs everything, so the RSS news archiver (`poll-news`, now launchd `com.predictor.daily`) moves into the cloud run once an hour, provided its feeds answer from GitHub's servers. Task 9 checks the feeds once. If a feed is blocked, that feed stays on the Mac and the run summary says so. Cost if wrong: news history keeps a Mac dependency.
 - **Site trigger:** pushes made with `GITHUB_TOKEN` do not start other workflows, but `workflow_dispatch` called through the API does. Use `gh workflow run site.yml`, as the plan says.
