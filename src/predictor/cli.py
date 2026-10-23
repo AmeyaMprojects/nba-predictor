@@ -1784,5 +1784,40 @@ def fit_player_model_cmd() -> None:
     typer.echo(f"Saved to {path}.")
     typer.echo("The current model stays live until plan 3 switches it over.")
 
+
+@app.command("export-state")
+def export_state_cmd(
+    to: str = typer.Option(..., "--to", help="The state/ directory to write nba/ snapshots into."),
+    seasons: str = typer.Option(
+        "current", "--seasons", help="'current' (this season and the previous one) or 'all'."
+    ),
+) -> None:
+    """Export the Mac DB's history as state/nba/ snapshot files."""
+    from pathlib import Path
+
+    from predictor import db
+    from predictor.cloud import state
+    from predictor.config import previous_season_label, season_label
+
+    if seasons not in ("current", "all"):
+        typer.echo(f"--seasons must be 'current' or 'all', not '{seasons}'.")
+        raise typer.Exit(code=2)
+    con = db.connect_with_retry(read_only=True)
+    try:
+        if seasons == "all":
+            chosen = state.seasons_in_db(con)
+        else:
+            current = season_label(_now())
+            chosen = [previous_season_label(current), current]
+        paths = state.export_from_db(con, Path(to).expanduser(), chosen)
+    finally:
+        con.close()
+    rows = 0
+    for path in paths:
+        with path.open(encoding="utf-8") as fh:
+            rows += sum(1 for _ in fh)
+    typer.echo(f"wrote {rows} rows to {len(paths)} file(s)")
+
+
 if __name__ == "__main__":
     app()
