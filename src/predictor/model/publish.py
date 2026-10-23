@@ -41,17 +41,24 @@ Rules enforced here:
     non-committing/non-pushing result instead.
   - Never force-pushes. The ONE rebase allowed is narrow: only after the
     "every unpushed commit is safe" check has passed, ``git fetch origin
-    <branch>``; if the remote is ahead, ``git pull --rebase --no-autostash
-    origin <branch>`` (so our own safe commits replay on top, never a merge
-    commit). A failed rebase is aborted at once (``git rebase --abort``),
-    the local commits are kept and nothing is pushed. A push rejected as
-    non-fast-forward gets one more fetch+rebase+push. When any unpushed
-    commit is unsafe, no fetch or rebase ever runs.
+    <branch>``; if the remote is ahead, and the unpushed commits listed
+    again after the fetch are still all safe, ``git rebase --no-autostash
+    --no-fork-point origin/<branch>`` (our own safe commits replay on top,
+    never a merge commit, and a commit someone force-pushed away is replayed
+    rather than dropped). A failed rebase is aborted at once (``git rebase
+    --abort``), the local commits are kept and nothing is pushed; if the
+    abort itself fails, that is an error. A rebase that leaves FEWER
+    unpushed commits than before is undone (``git reset --keep``) and is an
+    error. A push rejected as non-fast-forward gets one more
+    fetch+rebase+push. When any unpushed commit is unsafe, no fetch or
+    rebase ever runs. Credentials are redacted from all git output before
+    it reaches a message.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -99,15 +106,35 @@ _IN_PROGRESS_MARKERS = (
 )
 
 # `git push` stderr fragments meaning the remote has commits this checkout
-# lacks -- retrying will never help until a human pulls them.
+# lacks.
 _REJECTED_MARKERS = ("rejected", "non-fast-forward", "fetch first")
+
+# Credentials git may echo back in an error (a remote URL with a token in
+# it, e.g. GitHub Actions' `https://x-access-token:<token>@github.com/...`).
+# Stripped from every piece of git output before it can reach a message,
+# a log or the run summary.
+_URL_USERINFO = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^/@\s'\"]+@")
+_ACCESS_TOKEN = re.compile(r"(?i)(x-access-token:)[^@\s'\"]+@")
+
+
+def _redact(text: str) -> str:
+    """``text`` with any ``scheme://user:secret@`` userinfo and any
+    ``x-access-token:<token>@`` replaced by ``***``."""
+    text = _URL_USERINFO.sub(r"\1***@", text)
+    return _ACCESS_TOKEN.sub(r"\1***@", text)
+
+
+def _err(result) -> str:
+    """A git result's error text, stripped and redacted -- the only way git
+    output is ever put into a ``PublishResult`` message."""
+    return _redact((result.stderr or "").strip() or (result.stdout or "").strip())
 
 
 def _rejected_message(branch: str) -> str:
     return (
-        "GitHub has commits this checkout doesn't — the push was rejected and "
-        "will keep failing until they are pulled by hand (git pull --ff-only "
-        f"origin {branch}), then the next run publishes"
+        f"GitHub has commits this checkout doesn't — the push to {branch} was "
+        "rejected twice; the commit is kept and the next run will try to "
+        "rebase onto them automatically"
     )
 
 
@@ -135,7 +162,7 @@ class PublishResult:
 def _git(repo_dir: Path, args: list[str], timeout: float = _GIT_TIMEOUT):
     env = {**os.environ, **_GIT_ENV_OVERRIDES}
     try:
-        return subprocess.run(
+        result = subprocess.run(
             ["git", *args],
             cwd=repo_dir,
             capture_output=True,
@@ -148,8 +175,12 @@ def _git(repo_dir: Path, args: list[str], timeout: float = _GIT_TIMEOUT):
         # Never raise out of here -- the caller always gets something with
         # a `.returncode`/`.stdout`/`.stderr` it can report in plain English.
         return subprocess.CompletedProcess(
-            args=["git", *args], returncode=1, stdout="", stderr=str(exc)
+            args=["git", *args], returncode=1, stdout="", stderr=_redact(str(exc))
         )
+    # stdout is data (shas, file names) and left alone; stderr is only ever
+    # reported, so credentials are stripped from it right here.
+    result.stderr = _redact(result.stderr or "")
+    return result
 
 
 def current_branch(repo_dir: Path) -> str | None:
@@ -316,7 +347,7 @@ def commit_and_push(
         return PublishResult(
             committed=False,
             pushed=False,
-            message=f"git add failed: {add_result.stderr.strip()}",
+            message=f"git add failed: {_err(add_result)}",
             error=True,
         )
 
@@ -338,7 +369,7 @@ def commit_and_push(
         return PublishResult(
             committed=False,
             pushed=False,
-            message=f"git commit failed: {commit_result.stderr.strip()}",
+            message=f"git commit failed: {_err(commit_result)}",
             error=True,
         )
 
@@ -357,9 +388,18 @@ def _is_rejected(push_result) -> bool:
 
 def _fetch_and_rebase(repo_dir: Path, branch: str, lead: str, committed: bool) -> PublishResult | None:
     """The narrow rebase: fetch ``origin/<branch>`` and, if it is ahead,
-    replay our own (already proven safe) unpushed commits on top of it.
-    None when the push may go ahead; otherwise the result to return (with
-    any failed rebase already aborted, and the local commits kept)."""
+    replay our own unpushed commits on top of it.
+
+    Runs only after the caller proved every unpushed commit safe; the
+    commits are listed again after the fetch (a moved or force-pushed
+    ``origin/<branch>`` can change what is unpushed) and must all still be
+    safe before anything is rewritten. ``--no-fork-point`` means a commit
+    we already pushed and someone then force-pushed away is replayed, never
+    silently dropped; if the rebase still ends with FEWER unpushed commits
+    than it started with (one was dropped as "already applied"), the branch
+    is put back and nothing is pushed.
+
+    None when the push may go ahead; otherwise the result to return."""
     fetch = _git(repo_dir, ["fetch", "origin", branch], timeout=_PUSH_TIMEOUT)
     if fetch.returncode != 0:
         return PublishResult(
@@ -367,7 +407,7 @@ def _fetch_and_rebase(repo_dir: Path, branch: str, lead: str, committed: bool) -
             pushed=False,
             message=(
                 f"{lead} fetching origin/{branch} failed "
-                f"({fetch.stderr.strip()}); the commit is kept and the "
+                f"({_err(fetch)}); the commit is kept and the "
                 "next run will push it"
             ),
         )
@@ -378,22 +418,44 @@ def _fetch_and_rebase(repo_dir: Path, branch: str, lead: str, committed: bool) -
             pushed=False,
             message=(
                 f"{lead} the push was refused because git could not compare "
-                f"{branch} with origin/{branch} ({behind.stderr.strip()})"
+                f"{branch} with origin/{branch} ({_err(behind)})"
             ),
         )
     if behind.stdout.strip() in ("", "0"):
         return None
-    pull = _git(
+
+    before = _unpushed_shas(repo_dir, branch)
+    if isinstance(before, str):
+        return _cannot_list(lead, before, committed)
+    offending = _unsafe_subjects(repo_dir, before)
+    if offending:
+        return _refused_unsafe(lead, branch, offending, committed)
+    old_head = _git(repo_dir, ["rev-parse", "HEAD"]).stdout.strip()
+
+    rebase = _git(
         repo_dir,
-        ["pull", "--rebase", "--no-autostash", "origin", branch],
+        ["rebase", "--no-autostash", "--no-fork-point", f"origin/{branch}"],
         timeout=_PUSH_TIMEOUT,
     )
-    if pull.returncode != 0:
-        # Only our own pull can have started a rebase here: the callers
-        # refuse to run at all while any operation is in progress.
+    if rebase.returncode != 0:
+        # Only our own rebase can be in progress here: the callers refuse
+        # to run at all while any operation is in progress.
         if _operation_in_progress(repo_dir) is not None:
             _git(repo_dir, ["rebase", "--abort"])
-        detail = (pull.stderr.strip() or pull.stdout.strip()).splitlines()
+            still = _operation_in_progress(repo_dir)
+            if still is not None:
+                return PublishResult(
+                    committed=committed,
+                    pushed=False,
+                    message=(
+                        f"{lead} replaying our commit(s) onto origin/{branch} "
+                        f"failed and the rebase is stuck ({still} is still "
+                        f"there after git rebase --abort failed) in {repo_dir}; "
+                        "abort it by hand (git rebase --abort) -- nothing pushed"
+                    ),
+                    error=True,
+                )
+        detail = _err(rebase).splitlines()
         return PublishResult(
             committed=committed,
             pushed=False,
@@ -403,7 +465,34 @@ def _fetch_and_rebase(repo_dir: Path, branch: str, lead: str, committed: bool) -
                 "the rebase was aborted -- kept the local commit(s); nothing pushed"
             ),
         )
+
+    after = _unpushed_shas(repo_dir, branch)
+    if isinstance(after, str) or len(after) < len(before):
+        restored = old_head and _git(repo_dir, ["reset", "--keep", old_head]).returncode == 0
+        where = (
+            "the branch was put back as it was"
+            if restored
+            else f"put it back by hand with git reset --keep {old_head}"
+        )
+        return PublishResult(
+            committed=committed,
+            pushed=False,
+            message=(
+                f"{lead} replaying our {len(before)} unpushed commit(s) onto "
+                f"origin/{branch} dropped some of them (already applied "
+                f"upstream?); {where} -- nothing pushed, check by hand"
+            ),
+            error=True,
+        )
     return None
+
+
+def _cannot_list(lead: str, detail: str, committed: bool) -> PublishResult:
+    return PublishResult(
+        committed=committed,
+        pushed=False,
+        message=f"{lead} the push was refused because git could not list the unpushed commits ({detail})",
+    )
 
 
 def _push_if_safe(repo_dir: Path, *, committed: bool, branch: str = "main") -> PublishResult:
@@ -449,7 +538,7 @@ def _push_if_safe(repo_dir: Path, *, committed: bool, branch: str = "main") -> P
         return _refused_unsafe(lead, branch, offending, committed)
 
     # Every unpushed commit is our own safe commit -- only now may the
-    # narrow fetch + pull --rebase run. One retry after a non-fast-forward
+    # narrow fetch + rebase run. One retry after a non-fast-forward
     # rejection (someone pushed between our fetch and our push).
     for attempt in range(2):
         problem = _fetch_and_rebase(repo_dir, branch, lead, committed)
@@ -458,11 +547,7 @@ def _push_if_safe(repo_dir: Path, *, committed: bool, branch: str = "main") -> P
         # Belt and braces: the rebased commits must still all be safe.
         shas = _unpushed_shas(repo_dir, branch)
         if isinstance(shas, str):
-            return PublishResult(
-                committed=committed,
-                pushed=False,
-                message=f"{lead} the push was refused because git could not list the unpushed commits ({shas})",
-            )
+            return _cannot_list(lead, shas, committed)
         offending = _unsafe_subjects(repo_dir, shas)
         if offending:
             return _refused_unsafe(lead, branch, offending, committed)
@@ -479,7 +564,7 @@ def _push_if_safe(repo_dir: Path, *, committed: bool, branch: str = "main") -> P
             pushed=False,
             message=(
                 f"{lead} the push failed "
-                f"({push_result.stderr.strip()}); the commit is kept and the "
+                f"({_err(push_result)}); the commit is kept and the "
                 "next run will push it"
             ),
         )
@@ -497,7 +582,7 @@ def _unpushed_shas(repo_dir: Path, branch: str) -> list[str] | str:
     text if they cannot be listed."""
     result = _git(repo_dir, ["rev-list", f"origin/{branch}..{branch}"])
     if result.returncode != 0:
-        return result.stderr.strip()
+        return _err(result)
     return [s.strip() for s in result.stdout.splitlines() if s.strip()]
 
 
@@ -636,7 +721,7 @@ def prediction_files_problem(repo_dir: Path, branch: str = "main") -> str | None
         )
     status = _git(repo_dir, ["status", "--porcelain", "--", f"{_PREDICTIONS_DIRNAME}/"])
     if status.returncode != 0:
-        return f"git could not read the prediction files' state ({status.stderr.strip()})"
+        return f"git could not read the prediction files' state ({_err(status)})"
     if status.stdout.strip():
         return (
             "prediction files have uncommitted changes — the last publish "

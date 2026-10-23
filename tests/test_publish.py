@@ -507,9 +507,9 @@ def test_rejected_push_says_github_has_commits_this_checkout_lacks(tmp_path, mon
     assert result.error is False
     assert len(pushes) == 2  # the first push plus exactly one retry
     assert result.message == (
-        "GitHub has commits this checkout doesn't — the push was rejected and "
-        "will keep failing until they are pulled by hand (git pull --ff-only "
-        "origin main), then the next run publishes"
+        "GitHub has commits this checkout doesn't — the push to main was "
+        "rejected twice; the commit is kept and the next run will try to "
+        "rebase onto them automatically"
     )
 
 
@@ -904,3 +904,156 @@ def test_head_sha_is_the_short_sha(tmp_path):
     _seed_commit(repo)
     assert publish.head_sha(repo) == _git(repo, "rev-parse", "--short", "HEAD").stdout.strip()
     assert publish.head_sha(tmp_path / "nowhere") is None
+
+
+# --- task 1 review fixes: stuck rebase, no fork-point drops, redaction -------
+
+
+def test_stuck_rebase_after_a_failed_abort_is_a_visible_error(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    first = commit_and_push(repo, [_write_log(repo, '{"a": 1}\n')], "predictions: 2026-10-21 slate")
+    assert first.pushed is True
+    _push_from_elsewhere(
+        tmp_path, remote, "predictions/2026-27.jsonl", '{"a": 9}\n', "predictions: edited elsewhere"
+    )
+
+    real_git = publish._git
+    pushes = []
+
+    def failing_abort(repo_dir, args, timeout=publish._GIT_TIMEOUT):
+        if args[:2] == ["rebase", "--abort"]:
+            return subprocess.CompletedProcess(["git", *args], 1, "", "error: could not abort")
+        if args[:1] == ["push"]:
+            pushes.append(args)
+        return real_git(repo_dir, args, timeout)
+
+    monkeypatch.setattr(publish, "_git", failing_abort)
+    result = commit_and_push(repo, [_write_log(repo, '{"a": 2}\n')], "predictions: 2026-10-22 slate")
+
+    assert result.pushed is False
+    assert result.error is True
+    assert "stuck" in result.message
+    assert "git rebase --abort" in result.message
+    assert publish._operation_in_progress(repo) is not None
+    assert pushes == []
+
+
+def test_remote_force_push_does_not_drop_a_previously_pushed_local_commit(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    seed = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    first = commit_and_push(
+        repo, [_write_log(repo, '{"a": 1}\n')], "predictions: 2026-10-21 slate"
+    )
+    assert first.pushed is True
+
+    # Someone force-pushes the remote back to the seed plus their own commit,
+    # throwing away our already-pushed prediction commit.
+    other = tmp_path / "other"
+    assert _git(tmp_path, "clone", str(remote), str(other)).returncode == 0
+    assert _git(other, "reset", "--hard", seed).returncode == 0
+    (other / "NOTES.md").write_text("rewritten\n", encoding="utf-8")
+    assert _git(other, "add", "NOTES.md").returncode == 0
+    assert _git(other, "commit", "-m", "docs: rewritten").returncode == 0
+    assert _git(other, "push", "--force", "origin", "main").returncode == 0
+
+    result = commit_and_push(
+        repo, [_write_log(repo, '{"a": 1}\n{"b": 2}\n')], "predictions: 2026-10-22 slate"
+    )
+
+    assert result.pushed is True
+    assert _subjects(remote, "main")[:3] == [
+        "predictions: 2026-10-22 slate",
+        "predictions: 2026-10-21 slate",
+        "docs: rewritten",
+    ]
+
+
+def test_push_refused_when_the_rebase_drops_a_local_commit(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    commit_and_push(repo, [_write_log(repo)], "predictions: 2026-10-22 slate", push=False)
+    ours = _git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    # Another commit, then the very same change, land on the remote from
+    # elsewhere -- the rebase would silently drop ours as already applied.
+    # (The other commit goes first so the cherry-pick has a different parent
+    # and therefore a different sha from ours, whatever the clock says.)
+    other = tmp_path / "other"
+    assert _git(tmp_path, "clone", str(remote), str(other)).returncode == 0
+    (other / "NOTES.md").write_text("x\n", encoding="utf-8")
+    assert _git(other, "add", "NOTES.md").returncode == 0
+    assert _git(other, "commit", "-m", "docs: notes").returncode == 0
+    assert _git(other, "fetch", str(repo), "main").returncode == 0
+    assert _git(other, "cherry-pick", ours).returncode == 0
+    assert _git(other, "rev-parse", "HEAD").stdout.strip() != ours
+    assert _git(other, "push", "origin", "main").returncode == 0
+    remote_before = _git(remote, "rev-parse", "main").stdout.strip()
+
+    result = publish.push_pending(repo)
+
+    assert result.pushed is False
+    assert result.error is True
+    assert "dropped" in result.message
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == ours  # put back
+    assert _git(remote, "rev-parse", "main").stdout.strip() == remote_before
+    assert publish._operation_in_progress(repo) is None
+
+
+_PLANTED = "ghs_PlantedTokenValue0123456789"
+
+
+@pytest.mark.parametrize("failing", ["fetch", "rebase", "push"])
+def test_credentials_in_git_stderr_never_reach_the_message(tmp_path, monkeypatch, failing):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    remote = _init_bare_remote(tmp_path / "remote.git")
+    _establish_remote(repo, remote)
+    if failing == "rebase":
+        _push_from_elsewhere(tmp_path, remote, "README.md", "elsewhere\n", "docs: readme")
+
+    real_git = publish._git
+    leaky = (
+        f"fatal: unable to access 'https://x-access-token:{_PLANTED}@github.com/o/r.git/': "
+        f"also https://someone:{_PLANTED}@example.com/x\n"
+    )
+
+    def leaking_git(repo_dir, args, timeout=publish._GIT_TIMEOUT):
+        if args[:1] == [failing]:
+            # Raw, unredacted stderr -- the message layer must redact too.
+            return subprocess.CompletedProcess(["git", *args], 1, "", leaky)
+        return real_git(repo_dir, args, timeout)
+
+    monkeypatch.setattr(publish, "_git", leaking_git)
+    result = commit_and_push(repo, [_write_log(repo)], "predictions: 2026-10-22 slate")
+
+    assert result.pushed is False
+    assert _PLANTED not in result.message
+    assert "someone" not in result.message
+
+
+def test_git_helper_redacts_credentials_from_real_stderr(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _seed_commit(repo)
+    # A real git call whose stderr echoes a URL with a planted token
+    # (check-ref-format rejects it locally -- no network).
+    url = f"https://x-access-token:{_PLANTED}@invalid.invalid/o/r.git"
+    done = publish._git(repo, ["check-ref-format", "--branch", url])
+    assert _PLANTED not in done.stderr and _PLANTED not in done.stdout
+
+
+def test_redact_hides_userinfo_and_access_tokens():
+    text = (
+        f"https://x-access-token:{_PLANTED}@github.com/a "
+        f"http://user:{_PLANTED}@h/x x-access-token:{_PLANTED}@github.com"
+    )
+    out = publish._redact(text)
+    assert _PLANTED not in out
+    assert "github.com/a" in out
