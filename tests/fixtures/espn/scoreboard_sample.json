@@ -1,0 +1,546 @@
+{
+ "_note": "Trimmed real ESPN scoreboard responses captured 2026-10-24 (dates=20261020 and dates=20261025, single-day form); only fields the parser reads are kept.",
+ "leagues": [
+  {
+   "id": "46",
+   "abbreviation": "NBA",
+   "slug": "nba",
+   "season": {
+    "year": 2027,
+    "startDate": "2026-09-30T07:00Z",
+    "endDate": "2027-06-26T06:59Z",
+    "displayName": "2026-27",
+    "type": {
+     "id": "2",
+     "type": 2,
+     "name": "Regular Season",
+     "abbreviation": "reg"
+    }
+   }
+  }
+ ],
+ "events": [
+  {
+   "id": "401909088",
+   "date": "2026-10-20T19:00Z",
+   "name": "Boston Celtics at Detroit Pistons",
+   "shortName": "BOS @ DET",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "status": {
+    "clock": 0.0,
+    "displayClock": "0.0",
+    "period": 4,
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401909088",
+     "date": "2026-10-20T19:00Z",
+     "timeValid": true,
+     "neutralSite": false,
+     "venue": {
+      "id": "5404",
+      "fullName": "Little Caesars Arena",
+      "address": {
+       "city": "Detroit",
+       "state": "MI"
+      },
+      "indoor": true
+     },
+     "status": {
+      "clock": 0.0,
+      "displayClock": "0.0",
+      "period": 4,
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final",
+       "shortDetail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "id": "8",
+       "homeAway": "home",
+       "order": 0,
+       "winner": true,
+       "score": "121",
+       "team": {
+        "id": "8",
+        "abbreviation": "DET",
+        "displayName": "Detroit Pistons",
+        "location": "Detroit",
+        "name": "Pistons",
+        "shortDisplayName": "Pistons"
+       }
+      },
+      {
+       "id": "2",
+       "homeAway": "away",
+       "order": 1,
+       "winner": false,
+       "score": "113",
+       "team": {
+        "id": "2",
+        "abbreviation": "BOS",
+        "displayName": "Boston Celtics",
+        "location": "Boston",
+        "name": "Celtics",
+        "shortDisplayName": "Celtics"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401909089",
+   "date": "2026-10-20T23:00Z",
+   "name": "Philadelphia 76ers at New York Knicks",
+   "shortName": "PHI @ NY",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "status": {
+    "clock": 720.0,
+    "displayClock": "12:00",
+    "period": 4,
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401909089",
+     "date": "2026-10-20T23:00Z",
+     "timeValid": true,
+     "neutralSite": false,
+     "venue": {
+      "id": "1830",
+      "fullName": "Madison Square Garden",
+      "address": {
+       "city": "New York",
+       "state": "NY"
+      },
+      "indoor": true
+     },
+     "status": {
+      "clock": 720.0,
+      "displayClock": "12:00",
+      "period": 4,
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final",
+       "shortDetail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "id": "18",
+       "homeAway": "home",
+       "order": 0,
+       "winner": false,
+       "score": "100",
+       "team": {
+        "id": "18",
+        "abbreviation": "NY",
+        "displayName": "New York Knicks",
+        "location": "New York",
+        "name": "Knicks",
+        "shortDisplayName": "Knicks"
+       }
+      },
+      {
+       "id": "20",
+       "homeAway": "away",
+       "order": 1,
+       "winner": true,
+       "score": "106",
+       "team": {
+        "id": "20",
+        "abbreviation": "PHI",
+        "displayName": "Philadelphia 76ers",
+        "location": "Philadelphia",
+        "name": "76ers",
+        "shortDisplayName": "76ers"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401909090",
+   "date": "2026-10-21T01:50Z",
+   "name": "Oklahoma City Thunder at San Antonio Spurs",
+   "shortName": "OKC @ SA",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "status": {
+    "clock": 0.0,
+    "displayClock": "0.0",
+    "period": 4,
+    "type": {
+     "id": "3",
+     "name": "STATUS_FINAL",
+     "state": "post",
+     "completed": true,
+     "description": "Final",
+     "detail": "Final",
+     "shortDetail": "Final"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401909090",
+     "date": "2026-10-21T01:50Z",
+     "timeValid": true,
+     "neutralSite": false,
+     "venue": {
+      "id": "780",
+      "fullName": "Frost Bank Center",
+      "address": {
+       "city": "San Antonio",
+       "state": "TX"
+      },
+      "indoor": true
+     },
+     "status": {
+      "clock": 0.0,
+      "displayClock": "0.0",
+      "period": 4,
+      "type": {
+       "id": "3",
+       "name": "STATUS_FINAL",
+       "state": "post",
+       "completed": true,
+       "description": "Final",
+       "detail": "Final",
+       "shortDetail": "Final"
+      }
+     },
+     "competitors": [
+      {
+       "id": "24",
+       "homeAway": "home",
+       "order": 0,
+       "winner": false,
+       "score": "104",
+       "team": {
+        "id": "24",
+        "abbreviation": "SA",
+        "displayName": "San Antonio Spurs",
+        "location": "San Antonio",
+        "name": "Spurs",
+        "shortDisplayName": "Spurs"
+       }
+      },
+      {
+       "id": "25",
+       "homeAway": "away",
+       "order": 1,
+       "winner": true,
+       "score": "116",
+       "team": {
+        "id": "25",
+        "abbreviation": "OKC",
+        "displayName": "Oklahoma City Thunder",
+        "location": "Oklahoma City",
+        "name": "Thunder",
+        "shortDisplayName": "Thunder"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401909861",
+   "date": "2026-10-25T21:00Z",
+   "name": "Los Angeles Lakers at Utah Jazz",
+   "shortName": "LAL @ UTAH",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "status": {
+    "clock": 0.0,
+    "displayClock": "0.0",
+    "period": 0,
+    "type": {
+     "id": "1",
+     "name": "STATUS_SCHEDULED",
+     "state": "pre",
+     "completed": false,
+     "description": "Scheduled",
+     "detail": "Sun, October 25th at 5:00 PM EDT",
+     "shortDetail": "10/25 - 5:00 PM EDT"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401909861",
+     "date": "2026-10-25T21:00Z",
+     "timeValid": true,
+     "neutralSite": false,
+     "venue": {
+      "id": "3093",
+      "fullName": "Delta Center",
+      "address": {
+       "city": "Salt Lake City",
+       "state": "UT"
+      },
+      "indoor": true
+     },
+     "status": {
+      "clock": 0.0,
+      "displayClock": "0.0",
+      "period": 0,
+      "type": {
+       "id": "1",
+       "name": "STATUS_SCHEDULED",
+       "state": "pre",
+       "completed": false,
+       "description": "Scheduled",
+       "detail": "Sun, October 25th at 5:00 PM EDT",
+       "shortDetail": "10/25 - 5:00 PM EDT"
+      }
+     },
+     "competitors": [
+      {
+       "id": "26",
+       "homeAway": "home",
+       "order": 0,
+       "score": "0",
+       "team": {
+        "id": "26",
+        "abbreviation": "UTAH",
+        "displayName": "Utah Jazz",
+        "location": "Utah",
+        "name": "Jazz",
+        "shortDisplayName": "Jazz"
+       }
+      },
+      {
+       "id": "13",
+       "homeAway": "away",
+       "order": 1,
+       "score": "0",
+       "team": {
+        "id": "13",
+        "abbreviation": "LAL",
+        "displayName": "Los Angeles Lakers",
+        "location": "Los Angeles",
+        "name": "Lakers",
+        "shortDisplayName": "Lakers"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401909865",
+   "date": "2026-10-25T23:00Z",
+   "name": "LA Clippers at Oklahoma City Thunder",
+   "shortName": "LAC @ OKC",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "status": {
+    "clock": 0.0,
+    "displayClock": "0.0",
+    "period": 0,
+    "type": {
+     "id": "1",
+     "name": "STATUS_SCHEDULED",
+     "state": "pre",
+     "completed": false,
+     "description": "Scheduled",
+     "detail": "Sun, October 25th at 7:00 PM EDT",
+     "shortDetail": "10/25 - 7:00 PM EDT"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401909865",
+     "date": "2026-10-25T23:00Z",
+     "timeValid": true,
+     "neutralSite": false,
+     "venue": {
+      "id": "2559",
+      "fullName": "Paycom Center",
+      "address": {
+       "city": "Oklahoma City",
+       "state": "OK"
+      },
+      "indoor": true
+     },
+     "status": {
+      "clock": 0.0,
+      "displayClock": "0.0",
+      "period": 0,
+      "type": {
+       "id": "1",
+       "name": "STATUS_SCHEDULED",
+       "state": "pre",
+       "completed": false,
+       "description": "Scheduled",
+       "detail": "Sun, October 25th at 7:00 PM EDT",
+       "shortDetail": "10/25 - 7:00 PM EDT"
+      }
+     },
+     "competitors": [
+      {
+       "id": "25",
+       "homeAway": "home",
+       "order": 0,
+       "score": "0",
+       "team": {
+        "id": "25",
+        "abbreviation": "OKC",
+        "displayName": "Oklahoma City Thunder",
+        "location": "Oklahoma City",
+        "name": "Thunder",
+        "shortDisplayName": "Thunder"
+       }
+      },
+      {
+       "id": "12",
+       "homeAway": "away",
+       "order": 1,
+       "score": "0",
+       "team": {
+        "id": "12",
+        "abbreviation": "LAC",
+        "displayName": "LA Clippers",
+        "location": "LA",
+        "name": "Clippers",
+        "shortDisplayName": "Clippers"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "401909867",
+   "date": "2026-10-26T01:00Z",
+   "name": "Memphis Grizzlies at Sacramento Kings",
+   "shortName": "MEM @ SAC",
+   "season": {
+    "year": 2027,
+    "type": 2,
+    "slug": "regular-season"
+   },
+   "status": {
+    "clock": 0.0,
+    "displayClock": "0.0",
+    "period": 0,
+    "type": {
+     "id": "1",
+     "name": "STATUS_SCHEDULED",
+     "state": "pre",
+     "completed": false,
+     "description": "Scheduled",
+     "detail": "Sun, October 25th at 9:00 PM EDT",
+     "shortDetail": "10/25 - 9:00 PM EDT"
+    }
+   },
+   "competitions": [
+    {
+     "id": "401909867",
+     "date": "2026-10-26T01:00Z",
+     "timeValid": true,
+     "neutralSite": false,
+     "venue": {
+      "id": "5310",
+      "fullName": "Golden 1 Center",
+      "address": {
+       "city": "Sacramento",
+       "state": "CA"
+      },
+      "indoor": true
+     },
+     "status": {
+      "clock": 0.0,
+      "displayClock": "0.0",
+      "period": 0,
+      "type": {
+       "id": "1",
+       "name": "STATUS_SCHEDULED",
+       "state": "pre",
+       "completed": false,
+       "description": "Scheduled",
+       "detail": "Sun, October 25th at 9:00 PM EDT",
+       "shortDetail": "10/25 - 9:00 PM EDT"
+      }
+     },
+     "competitors": [
+      {
+       "id": "23",
+       "homeAway": "home",
+       "order": 0,
+       "score": "0",
+       "team": {
+        "id": "23",
+        "abbreviation": "SAC",
+        "displayName": "Sacramento Kings",
+        "location": "Sacramento",
+        "name": "Kings",
+        "shortDisplayName": "Kings"
+       }
+      },
+      {
+       "id": "29",
+       "homeAway": "away",
+       "order": 1,
+       "score": "0",
+       "team": {
+        "id": "29",
+        "abbreviation": "MEM",
+        "displayName": "Memphis Grizzlies",
+        "location": "Memphis",
+        "name": "Grizzlies",
+        "shortDisplayName": "Grizzlies"
+       }
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}

@@ -52,3 +52,35 @@ def team_abbr(team_name: str | None) -> str | None:
         return None
     key = team_name.replace(" ", "").upper()
     return _team_abbreviations().get(key)
+
+
+# ESPN's own short codes where they differ from the NBA's (nba_api's). Every
+# other ESPN abbreviation is already the NBA one (PHX, LAC, BKN, ...).
+ESPN_ABBR: dict[str, str] = {
+    "GS": "GSW",
+    "NY": "NYK",
+    "NO": "NOP",
+    "SA": "SAS",
+    "UTAH": "UTA",
+    "WSH": "WAS",
+}
+
+
+def espn_team_abbr(abbr: str | None, display_name: str | None) -> str | None:
+    """Canonical abbreviation for an ESPN competitor, or None.
+
+    The display name goes through `team_abbr` first ("LA Clippers" -> LAC),
+    then the abbreviation through `ESPN_ABBR` ("GS" -> GSW), then the
+    abbreviation itself if `team_abbr` accepts it. None means an unknown
+    team (All-Star "Team LeBron", an exhibition opponent): callers report
+    it, never guess.
+    """
+    by_name = team_abbr(display_name)
+    if by_name:
+        return by_name
+    if not abbr:
+        return None
+    key = abbr.strip().upper()
+    if key in ESPN_ABBR:
+        return ESPN_ABBR[key]
+    return team_abbr(key)
