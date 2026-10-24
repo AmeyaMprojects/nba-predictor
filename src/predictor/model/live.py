@@ -20,9 +20,11 @@ here ever reads the wall clock itself.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 import duckdb
@@ -95,6 +97,97 @@ _NO_MARKET = {
     "market_observed_at": None,
     "market_label": None,
 }
+
+
+# --- the 15-minute cloud runs (cloud-operation plan, Task 7) ---------------
+#
+# The cloud runs every 15 minutes, but there is still one call per game per
+# slate: the EARLY call, made by the first run at or after 18:00 IST on the
+# slate date (12:30 UTC all year -- IST has no daylight saving). GitHub cron
+# starts late and skips slots, so "due" means "at or after", never "at".
+EARLY_CALL_IST = time(18, 0)
+
+# Odds budget: two windows per slate day, at most ODDS_MAX_ATTEMPTS fetches
+# each, none while the last recorded quota is below ODDS_MIN_REMAINING.
+# "early" opens with the early call (so the call sees a line) and stays open
+# ODDS_EARLY_WINDOW; "pre_tip" opens ODDS_PRE_TIP_LEAD before the slate's
+# first tip and closes at it.
+ODDS_EARLY_WINDOW = timedelta(hours=2)
+ODDS_PRE_TIP_LEAD = timedelta(minutes=75)
+ODDS_MAX_ATTEMPTS = 2
+ODDS_MIN_REMAINING = 30
+
+
+@dataclass(frozen=True)
+class OddsWindow:
+    name: Literal["early", "pre_tip"]
+    opens: datetime
+    closes: datetime
+
+
+def early_call_at(slate: date) -> datetime:
+    """18:00 IST on the slate date, as a UTC instant (12:30 UTC)."""
+    return datetime.combine(slate, EARLY_CALL_IST, tzinfo=IST).astimezone(UTC)
+
+
+def early_call_due(now: datetime) -> bool:
+    """Whether a run at ``now`` makes the slate's call: ``now`` is at or
+    after 18:00 IST on ``slate_date(now)``. Repeat runs are harmless --
+    ``predict_today`` writes each game once."""
+    return now >= early_call_at(slate_date(now))
+
+
+def _as_instant(value) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def odds_window_due(
+    con, now: datetime, attempts: list[dict], remaining: int | None
+) -> OddsWindow | None:
+    """The odds window a run at ``now`` should fetch for, or None.
+
+    ``first_tip`` is the earliest tip of ``slate_for(con, now)``; an empty
+    slate is never due. A window is due when ``opens <= now < closes``, a
+    slate game still tips more than ``START_BUFFER`` after ``now``, no live
+    (``theoddsapi``) row was observed at or after ``opens``, fewer than
+    ``ODDS_MAX_ATTEMPTS`` attempts are recorded at or after ``opens``, and
+    ``remaining`` (the last ``x-requests-remaining``) is unknown or at
+    least ``ODDS_MIN_REMAINING``. ``attempts`` are the records of
+    ``state/odds/attempts-*.jsonl`` (``attempted_at`` as text or datetime).
+    """
+    db.require_utc(now, "now")
+    if remaining is not None and remaining < ODDS_MIN_REMAINING:
+        return None
+    slate = slate_for(con, now)
+    if not slate:
+        return None
+    if not any(g.tip_off_utc - START_BUFFER > now for g in slate):
+        return None
+    first_tip = min(g.tip_off_utc for g in slate)
+    early_opens = early_call_at(slate_date(now))
+    pre_tip_opens = first_tip - ODDS_PRE_TIP_LEAD
+    windows = (
+        OddsWindow("early", early_opens, min(early_opens + ODDS_EARLY_WINDOW, pre_tip_opens)),
+        OddsWindow("pre_tip", pre_tip_opens, first_tip),
+    )
+    window = next((w for w in windows if w.opens <= now < w.closes), None)
+    if window is None:
+        return None
+    tries = sum(1 for a in attempts if _as_instant(a["attempted_at"]) >= window.opens)
+    if tries >= ODDS_MAX_ATTEMPTS:
+        return None
+    table = db.POINT_IN_TIME_TABLES["odds_snapshots"]
+    (seen,) = con.execute(
+        f"""
+        SELECT count(*) FROM {table}
+        WHERE source = '{market.LIVE_SOURCE}'
+          AND observed_at >= ? AND observed_at <= ?
+        """,
+        [window.opens, now],
+    ).fetchone()
+    return window if seen == 0 else None
 
 
 class LogError(Exception):
@@ -292,6 +385,56 @@ def grades_path(repo_dir: Path, season: str) -> Path:
     return repo_dir / "predictions" / f"{season}-grades.jsonl"
 
 
+_SEASON_LOG = re.compile(r"^\d{4}-\d{2}\.jsonl$")
+
+
+def id_links_path(repo_dir: Path, season: str) -> Path:
+    """Provisional-id links for one season's log. A subdirectory, so the
+    site (which reads only top-level ``predictions/*.jsonl``) ignores it."""
+    return repo_dir / "predictions" / "id-links" / f"{season}.jsonl"
+
+
+def read_id_links(repo_dir: Path, season: str) -> dict[str, str]:
+    """provisional ``espn:`` id -> NBA game id for one season; a later line
+    wins."""
+    from predictor.cloud import state
+
+    path = id_links_path(repo_dir, season)
+    if not path.exists():
+        return {}
+    return {r["provisional_id"]: r["game_id"] for r in state.read_records(path)}
+
+
+def append_id_links(repo_dir: Path, links: list[dict]) -> list[Path]:
+    """Record ``{provisional_id, game_id, linked_at}`` for each link whose
+    provisional id appears in a season's prediction log and whose mapping
+    that season has not recorded yet. Logged lines are never touched: the
+    link file is what tells dedupe and grading that a line under the
+    provisional id is about the NBA game. Returns the files appended to."""
+    from predictor.cloud import state
+
+    pred_dir = repo_dir / "predictions"
+    if not pred_dir.is_dir():
+        return []
+    touched: list[Path] = []
+    for log_file in sorted(pred_dir.iterdir()):
+        if not _SEASON_LOG.match(log_file.name):
+            continue
+        season = log_file.name.removesuffix(".jsonl")
+        logged = {line["game_id"] for line in read_log(log_file)}
+        known = read_id_links(repo_dir, season)
+        new: list[dict] = []
+        for link in links:
+            prov, gid = link["provisional_id"], link["game_id"]
+            if prov not in logged or known.get(prov) == gid:
+                continue
+            known[prov] = gid
+            new.append({"provisional_id": prov, "game_id": gid, "linked_at": link["linked_at"]})
+        if new:
+            touched.append(state.append_records(id_links_path(repo_dir, season), new))
+    return touched
+
+
 def read_log(path: Path) -> list[dict]:
     """Every line of an append-only JSONL log, or ``[]`` if it is missing.
 
@@ -404,7 +547,15 @@ def _append_line(path: Path, line: dict) -> None:
         f.write(json.dumps(line, sort_keys=True) + "\n")
 
 
-def predict_today(con, settings: ModelSettings, repo_dir: Path, now: datetime) -> RunResult:
+def predict_today(
+    con,
+    settings: ModelSettings,
+    repo_dir: Path,
+    now: datetime,
+    *,
+    code_dir: Path | None = None,
+    state_version: str | None = None,
+) -> RunResult:
     """Predict every not-yet-logged game on the slate, once each, and log
     an honest not_predicted line for every game that could not be.
 
@@ -422,6 +573,12 @@ def predict_today(con, settings: ModelSettings, repo_dir: Path, now: datetime) -
     game (its catch-up of newly-visible results is incremental), all cut at
     the same ``AsOfView(con, now)`` -- so a result observed after ``now``
     cannot reach any prediction made in this run.
+
+    Every line carries ``state_version`` (the cloud state commit the run
+    was computed from; None on the Mac) and the ``code_version`` of
+    ``code_dir`` (default ``repo_dir``). A logged line under a provisional
+    ``espn:`` id that ``read_id_links`` maps to an NBA id covers that NBA
+    id too, so a linked game is never predicted twice.
     """
     db.require_utc(now, "now")
     today = slate_date(now)
@@ -435,7 +592,7 @@ def predict_today(con, settings: ModelSettings, repo_dir: Path, now: datetime) -
     stale_flag = bool(results_missing(con, now))
     settings_dict = _settings_dict(settings)
     # Which code made these lines -- see publish.code_version.
-    code_sha, code_dirty = publish.code_version(repo_dir)
+    code_sha, code_dirty = publish.code_version(code_dir or repo_dir)
     predictor = Stage1Predictor(con, settings)
 
     predicted = not_predicted = skipped_duplicates = backfilled = 0
@@ -448,12 +605,18 @@ def predict_today(con, settings: ModelSettings, repo_dir: Path, now: datetime) -
     def keys_for(season: str) -> tuple[set, set]:
         if season not in any_line:
             log = read_log(log_path(repo_dir, season))
-            any_line[season] = {(line["game_id"], line["game_date"]) for line in log}
-            blocking[season] = {
-                (line["game_id"], line["game_date"])
-                for line in log
-                if line.get("reason") != _TBD_REASON
-            }
+            links = read_id_links(repo_dir, season)
+            any_line[season] = set()
+            blocking[season] = set()
+            for line in log:
+                ids = [line["game_id"]]
+                if line["game_id"] in links:
+                    ids.append(links[line["game_id"]])
+                for gid in ids:
+                    key = (gid, line["game_date"])
+                    any_line[season].add(key)
+                    if line.get("reason") != _TBD_REASON:
+                        blocking[season].add(key)
         return any_line[season], blocking[season]
 
     def base_line(g: SlateGame) -> dict:
@@ -470,6 +633,7 @@ def predict_today(con, settings: ModelSettings, repo_dir: Path, now: datetime) -
             "last_result_capture": last_cap.isoformat() if last_cap is not None else None,
             "code_version": code_sha,
             "code_dirty": code_dirty,
+            "state_version": state_version,
         }
 
     def not_predicted_line(g: SlateGame, reason: str) -> dict:
@@ -568,39 +732,66 @@ def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
     That tie-break is deliberate and fixed; it is stated here because it
     is part of how the public record is scored. Each grade line also
     carries the final score and teams, so it can be checked on its own.
+
+    A line under a provisional ``espn:`` id that ``read_id_links`` maps to
+    an NBA id is graded under its own id (the log is never rewritten): the
+    current tip and the FINAL row are looked up under the line's own id,
+    then under the linked id, and the grade line names the link in
+    ``linked_game_id`` (null when there is none). A game graded under
+    either id is not graded again.
     """
     log = read_log(log_path(repo_dir, season))
+    links = read_id_links(repo_dir, season)
+
+    def ids_of(game_id: str) -> list[str]:
+        return [game_id, links[game_id]] if game_id in links else [game_id]
+
+    # Keyed by the game the line is about (the linked id when there is one).
     latest_predicted: dict[str, dict] = {}
     for line in log:
         if line["status"] != "predicted":
             continue
         own_tip = datetime.fromisoformat(line["tip_off_utc"])
-        current_tip = _current_tip(con, line["game_id"])
+        current_tip = next(
+            (t for t in (_current_tip(con, gid) for gid in ids_of(line["game_id"])) if t is not None),
+            None,
+        )
         cutoff = own_tip if current_tip is None else min(own_tip, current_tip)
         predicted_at = datetime.fromisoformat(line["predicted_at"])
         if predicted_at >= cutoff:
             continue
-        current = latest_predicted.get(line["game_id"])
+        game = links.get(line["game_id"], line["game_id"])
+        current = latest_predicted.get(game)
         if current is None or predicted_at > datetime.fromisoformat(current["predicted_at"]):
-            latest_predicted[line["game_id"]] = line
+            latest_predicted[game] = line
 
     gpath = grades_path(repo_dir, season)
-    already_graded = {g["game_id"] for g in read_log(gpath)}
+    already_graded: set[str] = set()
+    for g in read_log(gpath):
+        already_graded.add(g["game_id"])
+        if g.get("linked_game_id"):
+            already_graded.add(g["linked_game_id"])
     games_table = db.POINT_IN_TIME_TABLES["games"]
 
     code_sha, code_dirty = publish.code_version(repo_dir)
     appended = 0
-    for game_id in sorted(latest_predicted):
-        if game_id in already_graded:
+    for key in sorted(latest_predicted):
+        line = latest_predicted[key]
+        game_id = line["game_id"]
+        ids = ids_of(game_id)
+        if any(gid in already_graded for gid in ids):
             continue
-        line = latest_predicted[game_id]
-        row = con.execute(
-            f"SELECT home_points, away_points FROM {games_table} "
-            "WHERE game_id = ? AND game_date = ? AND status = 'FINAL' "
-            "AND home_points IS NOT NULL AND away_points IS NOT NULL "
-            "ORDER BY observed_at DESC LIMIT 1",
-            [game_id, date.fromisoformat(line["game_date"])],
-        ).fetchone()
+        row = None
+        for gid in ids:
+            row = con.execute(
+                f"SELECT home_points, away_points FROM {games_table} "
+                "WHERE game_id = ? AND game_date = ? AND status = 'FINAL' "
+                "AND home_points IS NOT NULL AND away_points IS NOT NULL "
+                "ORDER BY observed_at DESC LIMIT 1",
+                [gid, date.fromisoformat(line["game_date"])],
+            ).fetchone()
+            if row is not None:
+                break
         if row is None:
             continue
         home_points, away_points = row
@@ -609,6 +800,7 @@ def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
         market_p = line.get("market_p_home")
         grade_line = {
             "game_id": game_id,
+            "linked_game_id": links.get(game_id),
             "home_team": line["home_team"],
             "away_team": line["away_team"],
             "home_points": home_points,

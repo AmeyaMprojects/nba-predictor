@@ -1076,3 +1076,192 @@ def test_market_odds_not_due_when_every_game_has_started(tmp_path):
     # Inside START_BUFFER: logged as not_predicted, so no market line needed.
     _slate_game(con, now, tip=now + timedelta(minutes=20))
     assert market_odds_due(con, now) is False
+
+
+# --- Task 7 (cloud operation): state version, code dir, provisional links ----
+
+from predictor.cloud import state as cloud_state  # noqa: E402
+from predictor.model.live import (  # noqa: E402
+    append_id_links,
+    id_links_path,
+    read_id_links,
+)
+
+_PROV = "espn:401705555"
+_NBA = "0042600101"
+
+
+def test_state_version_written_on_every_line(tmp_path):
+    con = fixture_con(tmp_path)
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    insert_schedule_row(con, "0022607001", date(2026, 11, 10), "PHI", "NYK",
+                         now + timedelta(hours=2), season=SEASON)      # predicted
+    insert_schedule_row(con, "0022607002", date(2026, 11, 10), "BOS", "MIA",
+                         now - timedelta(minutes=5), season=SEASON)    # too late
+    insert_schedule_row(con, "0022607003", date(2026, 11, 9), "DEN", "LAL",
+                         now - timedelta(hours=20), season=SEASON)     # back-filled
+    insert_schedule_row(con, "0022607004", date(2026, 11, 10), "UTA", "OKC", None,
+                         observed_at=now - timedelta(days=1), season=SEASON)  # TBD
+
+    result = predict_today(con, S, tmp_path / "cloud", now, state_version="abc1234")
+    assert len(result.lines_written) == 4
+    assert all(line["state_version"] == "abc1234" for line in result.lines_written)
+    assert all(line["state_version"] == "abc1234"
+               for line in read_log(log_path(tmp_path / "cloud", SEASON)))
+
+    mac = predict_today(con, S, tmp_path / "mac", now)
+    assert len(mac.lines_written) == 4
+    assert all(line["state_version"] is None for line in mac.lines_written)
+
+
+def test_code_version_taken_from_code_dir(tmp_path, monkeypatch):
+    con = fixture_con(tmp_path)
+    code_dir = tmp_path / "code"
+    sha = _git_repo(code_dir, monkeypatch)
+    state_repo = tmp_path / "state-repo"   # not a git checkout
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    insert_schedule_row(con, "0022607011", date(2026, 11, 10), "PHI", "NYK",
+                         now + timedelta(hours=2), season=SEASON)
+
+    (line,) = predict_today(con, S, state_repo, now, code_dir=code_dir).lines_written
+    assert line["code_version"] == sha and line["code_dirty"] is False
+    assert log_path(state_repo, SEASON).exists()
+    assert not (code_dir / "predictions").exists()
+
+
+def _provisional_line(tip, predicted_at):
+    line = _hand_predicted_line(_PROV, "PHI", "NYK", tip, 0.6, predicted_at,
+                                game_date="2026-12-16")
+    return line
+
+
+def test_provisional_line_blocks_repredicting_linked_game(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 12, 16, 20, 0, tzinfo=UTC)
+    tip = now + timedelta(hours=3)
+    _append_raw_line(log_path(repo_dir, SEASON),
+                      _provisional_line(tip, now - timedelta(hours=7)))
+    append_id_links(repo_dir, [{"provisional_id": _PROV, "game_id": _NBA,
+                                "linked_at": now - timedelta(hours=1)}])
+    # After the rebuild maps the provisional id, the schedule shows the NBA id.
+    insert_schedule_row(con, _NBA, date(2026, 12, 16), "PHI", "NYK", tip, season=SEASON)
+    before = log_path(repo_dir, SEASON).read_bytes()
+
+    result = predict_today(con, S, repo_dir, now, state_version="abc1234")
+
+    assert result.skipped_duplicates == 1
+    assert result.lines_written == []
+    assert log_path(repo_dir, SEASON).read_bytes() == before
+
+
+def test_unlinked_provisional_line_does_not_block_a_different_game(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 12, 16, 20, 0, tzinfo=UTC)
+    tip = now + timedelta(hours=3)
+    _append_raw_line(log_path(repo_dir, SEASON),
+                      _provisional_line(tip, now - timedelta(hours=7)))
+    insert_schedule_row(con, _NBA, date(2026, 12, 16), "PHI", "NYK", tip, season=SEASON)
+
+    result = predict_today(con, S, repo_dir, now)
+    assert result.predicted == 1
+
+
+def test_grade_uses_linked_result_and_keeps_provisional_id(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 12, 16, 13, 0, tzinfo=UTC)
+    tip = datetime(2026, 12, 17, 0, 0, tzinfo=UTC)
+    _append_raw_line(log_path(repo_dir, SEASON), _provisional_line(tip, now))
+    before = log_path(repo_dir, SEASON).read_bytes()
+    append_id_links(repo_dir, [{"provisional_id": _PROV, "game_id": _NBA,
+                                "linked_at": now + timedelta(hours=2)}])
+    insert_schedule_row(con, _NBA, date(2026, 12, 16), "PHI", "NYK", tip, season=SEASON)
+    later = tip + timedelta(hours=4)
+    _insert_final(con, _NBA, SEASON, date(2026, 12, 16), "PHI", "NYK", 101, 99,
+                  observed_at=later)
+
+    assert grade(con, repo_dir, SEASON, later) == 1
+    (g,) = read_log(grades_path(repo_dir, SEASON))
+    assert g["game_id"] == _PROV
+    assert g["linked_game_id"] == _NBA
+    assert g["home_points"] == 101 and g["correct"] is True
+    assert grade(con, repo_dir, SEASON, later + timedelta(hours=1)) == 0
+    assert log_path(repo_dir, SEASON).read_bytes() == before
+
+
+def test_grade_cutoff_follows_the_linked_games_current_tip(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    predicted_at = datetime(2026, 12, 16, 13, 0, tzinfo=UTC)
+    logged_tip = datetime(2026, 12, 17, 0, 0, tzinfo=UTC)
+    _append_raw_line(log_path(repo_dir, SEASON), _provisional_line(logged_tip, predicted_at))
+    append_id_links(repo_dir, [{"provisional_id": _PROV, "game_id": _NBA,
+                                "linked_at": predicted_at}])
+    # The linked game actually tipped before the call was made.
+    insert_schedule_row(con, _NBA, date(2026, 12, 16), "PHI", "NYK",
+                         predicted_at - timedelta(hours=1), season=SEASON)
+    _insert_final(con, _NBA, SEASON, date(2026, 12, 16), "PHI", "NYK", 101, 99,
+                  observed_at=logged_tip + timedelta(hours=4))
+    assert grade(con, repo_dir, SEASON, logged_tip + timedelta(hours=5)) == 0
+
+
+def test_grade_lines_without_a_link_have_null_linked_game_id(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    tip = now + timedelta(hours=2)
+    insert_schedule_row(con, "0022607021", date(2026, 11, 10), "PHI", "NYK", tip, season=SEASON)
+    _append_raw_line(log_path(repo_dir, SEASON),
+                      _hand_predicted_line("0022607021", "PHI", "NYK", tip, 0.6, now))
+    _insert_final(con, "0022607021", SEASON, date(2026, 11, 10), "PHI", "NYK", 110, 100,
+                  observed_at=tip + timedelta(hours=3))
+    assert grade(con, repo_dir, SEASON, tip + timedelta(hours=4)) == 1
+    (g,) = read_log(grades_path(repo_dir, SEASON))
+    assert g["linked_game_id"] is None
+
+
+def test_already_graded_under_the_linked_id_is_not_graded_again(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 12, 16, 13, 0, tzinfo=UTC)
+    tip = datetime(2026, 12, 17, 0, 0, tzinfo=UTC)
+    _append_raw_line(log_path(repo_dir, SEASON), _provisional_line(tip, now))
+    append_id_links(repo_dir, [{"provisional_id": _PROV, "game_id": _NBA, "linked_at": now}])
+    insert_schedule_row(con, _NBA, date(2026, 12, 16), "PHI", "NYK", tip, season=SEASON)
+    _insert_final(con, _NBA, SEASON, date(2026, 12, 16), "PHI", "NYK", 101, 99,
+                  observed_at=tip + timedelta(hours=3))
+    _append_raw_line(grades_path(repo_dir, SEASON), {"game_id": _NBA, "linked_game_id": None})
+    assert grade(con, repo_dir, SEASON, tip + timedelta(hours=4)) == 0
+
+
+def test_append_id_links_only_for_logged_provisional_ids_once(tmp_path):
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 12, 16, 13, 0, tzinfo=UTC)
+    tip = datetime(2026, 12, 17, 0, 0, tzinfo=UTC)
+    _append_raw_line(log_path(repo_dir, SEASON), _provisional_line(tip, now))
+    links = [
+        {"provisional_id": _PROV, "game_id": _NBA, "linked_at": now},
+        # never predicted under its provisional id: not recorded
+        {"provisional_id": "espn:401709999", "game_id": "0022600999", "linked_at": now},
+    ]
+
+    touched = append_id_links(repo_dir, links)
+    path = id_links_path(repo_dir, SEASON)
+    assert path == repo_dir / "predictions" / "id-links" / f"{SEASON}.jsonl"
+    assert touched == [path]
+    assert read_id_links(repo_dir, SEASON) == {_PROV: _NBA}
+    records = list(cloud_state.read_records(path))
+    assert records == [{"provisional_id": _PROV, "game_id": _NBA,
+                        "linked_at": now.isoformat()}]
+    first = path.read_bytes()
+    assert first.splitlines()[0] == b'{"format":"lines","v":1}'
+
+    assert append_id_links(repo_dir, links) == []
+    assert path.read_bytes() == first
+    assert read_id_links(repo_dir, "2025-26") == {}
+    # the site reads only top-level *.jsonl files in predictions/
+    assert sorted(p.name for p in (repo_dir / "predictions").glob("*.jsonl")) == [
+        f"{SEASON}.jsonl"
+    ]
