@@ -128,7 +128,7 @@ def test_raw_kept_as_artifact_only_when_the_release_upload_failed():
     assert keep["with"]["path"] == "${{ runner.temp }}/predictor-data/raw"
     assert _job()["env"]["PREDICTOR_DATA_DIR"] == "${{ runner.temp }}/predictor-data"
     assert keep["with"]["name"] == "raw-${{ github.run_id }}-${{ github.run_attempt }}"
-    assert int(keep["with"]["retention-days"]) <= 90
+    assert int(keep["with"]["retention-days"]) <= 7
 
 
 def test_site_yml_still_has_workflow_dispatch():

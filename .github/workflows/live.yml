@@ -82,4 +82,4 @@ jobs:
         with:
           name: 'raw-${{ github.run_id }}-${{ github.run_attempt }}'
           path: '${{ runner.temp }}/predictor-data/raw'
-          retention-days: 90
+          retention-days: 7

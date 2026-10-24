@@ -734,3 +734,44 @@ def test_secret_leak_flag_drives_the_outputs(world, monkeypatch):
     assert report.secret_leak and report.unexpected
     assert "SECRET FOUND" in summary.markdown(report)
     assert summary.outputs(report)["raw_upload_failed"] == "false"
+
+
+@pytest.mark.parametrize("refspec", ["absent", "single-branch-main"])
+def test_start_fetch_does_not_rely_on_the_remote_fetch_config(world, refspec):
+    """actions/checkout's remote config is not ours to rely on: with no
+    fetch refspec (or one for main only) a plain ``git fetch origin <branch>``
+    would only update FETCH_HEAD and the fast-forward would miss the remote."""
+    work = world["work"]
+    _git(work, "config", "--unset-all", "remote.origin.fetch")
+    if refspec == "single-branch-main":
+        _git(work, "config", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
+    theirs = _advance_remote(world, "other", "state: someone else")
+    report = run_once(work, world["seed"], branch="cloud-shadow", fetchers=fetchers())
+    assert not report.publish_error, step(report, "rebuild").detail
+    assert report.pushed
+    assert _git(work, "rev-parse", "HEAD~2").strip() == theirs
+    assert _git(world["remote"], "rev-parse", "cloud-shadow").strip() == (
+        _git(work, "rev-parse", "HEAD").strip())
+
+
+def test_start_fetch_fast_forwards_a_shallow_single_branch_clone(world):
+    """A depth-1 checkout (as in live.yml) whose remote moved by two commits
+    still fast-forwards: the start fetch must not cut the history at the new
+    tip (``--depth=1`` there would make the old HEAD look unrelated)."""
+    shallow = world["tmp"] / "shallow"
+    _git(world["tmp"], "clone", "-q", "--depth", "1", "-b", "cloud-shadow",
+         f"file://{world['remote']}", str(shallow))
+    assert _git(shallow, "rev-parse", "--is-shallow-repository").strip() == "true"
+    first = _advance_remote(world, "one", "state: one")
+    other = world["tmp"] / "one"
+    (other / "state" / "players" / "aliases.json").write_text('{"a": "b"}\n')
+    _git(other, "commit", "-q", "-am", "state: two")
+    _git(other, "push", "-q", "origin", "cloud-shadow")
+    theirs = _git(other, "rev-parse", "HEAD").strip()
+    assert _git(other, "rev-parse", "HEAD~1").strip() == first
+    report = run_once(shallow, world["seed"], branch="cloud-shadow", fetchers=fetchers())
+    assert not report.publish_error, step(report, "rebuild").detail
+    assert report.pushed
+    assert _git(shallow, "rev-parse", "HEAD~2").strip() == theirs
+    assert _git(world["remote"], "rev-parse", "cloud-shadow").strip() == (
+        _git(shallow, "rev-parse", "HEAD").strip())

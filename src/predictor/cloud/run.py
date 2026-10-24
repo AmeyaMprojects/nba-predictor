@@ -618,7 +618,13 @@ def _sync_checkout(run: _Run) -> str | None:
     actual = publish.current_branch(repo)
     if actual != branch:
         return f"the checkout is on {actual or 'a detached HEAD'}, not {branch}"
-    fetch = publish._git(repo, ["fetch", "origin", branch], timeout=publish._PUSH_TIMEOUT)
+    # Explicit refspec: the checkout's remote.origin.fetch may be absent or
+    # name another branch (actions/checkout's config is not ours), and then a
+    # bare `fetch origin <branch>` only updates FETCH_HEAD. No --depth even on
+    # a shallow clone: it would graft the new tip and make HEAD look
+    # unrelated; a plain fetch there brings only the commits we lack.
+    refspec = f"+refs/heads/{branch}:refs/remotes/origin/{branch}"
+    fetch = publish._git(repo, ["fetch", "origin", refspec], timeout=publish._PUSH_TIMEOUT)
     if fetch.returncode != 0:
         return f"fetching origin/{branch} failed ({publish._err(fetch)})"
     merge = publish._git(repo, ["merge", "--ff-only", "--quiet", f"origin/{branch}"])
