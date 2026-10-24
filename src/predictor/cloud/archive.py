@@ -13,11 +13,16 @@ survive across runs.
 - Append-only. ``gh release upload`` is never given ``--clobber``; a name
   already on the release gets a ``-2``, ``-3``, ... suffix instead, so an
   existing asset is never replaced.
-- Secret guard. The release is on a public repo, so every file is
-  byte-searched for the odds key before anything is bundled or uploaded
-  (`assert_no_secret`), and the tarball's members are searched again just
-  before upload. A hit raises `SecretLeak` and nothing is uploaded; the
-  key itself is never put in the message.
+- Secret guard. The release is on a public repo, so every file path and
+  file content is searched for the odds key, in any letter case, before
+  anything is bundled or uploaded (`assert_no_secret`), and the tarball's
+  member names and contents are searched again just before upload. Gzip
+  content is decompressed and searched too (up to `GZIP_CAP`); gzip that
+  cannot be decompressed is refused as unscannable. A hit raises
+  `SecretLeak` and nothing is uploaded; the key itself never reaches a
+  message. ``upload``/``archive_run`` require ``secret``: None falls back
+  to env ``ODDS_API_KEY`` and, if that is unset, uploads nothing;
+  ``secret=""`` is the explicit opt-out.
 
 `gh` failures never raise: they come back as ``ArchiveResult(ok=False)``
 with gh's stderr, stripped of credentials.
@@ -31,6 +36,7 @@ import re
 import shutil
 import subprocess
 import tarfile
+import zlib
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -45,13 +51,21 @@ MAX_ASSETS = 1000
 RELEASE_NOTES = "Append-only raw source responses, one asset per cloud run."
 
 _SUFFIX = ".tar.gz"
-_HEX32 = re.compile(rb"(?<![0-9A-Fa-f])[0-9A-Fa-f]{32}(?![0-9A-Fa-f])")
+_GZIP_MAGIC = b"\x1f\x8b"
+# Largest decompressed gzip the guard will search; anything bigger is
+# refused as unscannable rather than uploaded unchecked.
+GZIP_CAP = 200 * 1024 * 1024
+# Gzip inside gzip is decompressed this many levels deep, then refused.
+_GZIP_DEPTH = 3
 # Environment variables whose values must never appear in a message.
 _SECRET_ENV = ("ODDS_API_KEY", "GH_TOKEN", "GITHUB_TOKEN")
+# gh must never stop to ask a question or print an update banner.
+_GH_ENV = {"GH_PROMPT_DISABLED": "1", "GH_NO_UPDATE_NOTIFIER": "1"}
 
 
 class SecretLeak(Exception):
-    """A file that would be archived or committed contains the odds key."""
+    """A file that would be archived or committed contains the odds key,
+    or cannot be searched for it."""
 
 
 @dataclass(frozen=True)
@@ -85,43 +99,102 @@ def _files(paths: Iterable[Path]) -> Iterator[Path]:
             yield path
 
 
-def _contains(data: bytes, secret: str) -> bool:
-    """True when ``data`` holds ``secret`` byte for byte, or holds a
-    standalone 32-hex run equal to it in any letter case."""
-    if secret.encode() in data:
-        return True
-    want = secret.lower().encode()
-    return any(m.group().lower() == want for m in _HEX32.finditer(data))
+def _scrub(text: str, extra: str | None = None) -> str:
+    """``text`` with credentials removed: URL userinfo / access tokens
+    (`publish._redact`), and -- in any letter case -- ``extra`` and the
+    values of `_SECRET_ENV`."""
+    text = _redact(text)
+    for value in [extra, *(os.environ.get(name) for name in _SECRET_ENV)]:
+        value = (value or "").strip()
+        if value:
+            text = re.sub(re.escape(value), "***", text, flags=re.IGNORECASE)
+    return text
+
+
+def _gunzip(data: bytes) -> bytes:
+    """Decompress gzip ``data`` (all members), refusing past `GZIP_CAP`."""
+    out = bytearray()
+    while data:
+        d = zlib.decompressobj(wbits=31)
+        out += d.decompress(data, GZIP_CAP + 1 - len(out))
+        if len(out) > GZIP_CAP or d.unconsumed_tail:
+            raise OverflowError("over the decompression cap")
+        if not d.eof:
+            raise zlib.error("truncated gzip stream")
+        data = d.unused_data
+    return bytes(out)
+
+
+def _check_name(name: str, secret: str) -> None:
+    if secret.lower() in name.lower():
+        raise SecretLeak(
+            f"{_scrub(name, secret)} has the odds API key in its name; refusing to archive it"
+        )
+
+
+def _check_bytes(data: bytes, secret: str, label: str, depth: int = 0) -> None:
+    """Raise `SecretLeak` if ``data`` holds ``secret`` in any letter case,
+    searching gzip content too; unscannable gzip is refused."""
+    if secret.lower().encode() in data.lower():
+        raise SecretLeak(f"{_scrub(label, secret)} contains the odds API key; refusing it")
+    if not data.startswith(_GZIP_MAGIC):
+        return
+    if depth >= _GZIP_DEPTH:
+        raise SecretLeak(f"{_scrub(label, secret)} is unscannable (gzip nested too deep); refusing it")
+    try:
+        inner = _gunzip(data)
+    except (OverflowError, zlib.error, EOFError) as exc:
+        raise SecretLeak(
+            f"{_scrub(label, secret)} is unscannable gzip ({exc}); refusing it"
+        ) from None
+    _check_bytes(inner, secret, label, depth + 1)
 
 
 def assert_no_secret(paths: Iterable[Path], secret: str | None) -> None:
-    """Raise `SecretLeak` if any file (directories are searched recursively)
-    contains ``secret``. A no-op when ``secret`` is None or blank."""
+    """Raise `SecretLeak` if any file (directories are searched
+    recursively) has ``secret`` in its path or content, in any letter case.
+    Gzip content is decompressed and searched; gzip that cannot be
+    (corrupt, or over `GZIP_CAP`) is refused. A no-op when ``secret`` is
+    None or blank."""
     secret = (secret or "").strip()
     if not secret:
         return
     for path in _files(paths):
-        if _contains(path.read_bytes(), secret):
-            raise SecretLeak(f"{path} contains the odds API key; refusing to archive or commit it")
+        _check_name(str(path), secret)
+        _check_bytes(path.read_bytes(), secret, str(path))
 
 
-def _assert_tarball_clean(asset: Path, secret: str | None) -> None:
-    secret = (secret or "").strip()
+def _assert_tarball_clean(asset: Path, secret: str) -> None:
     if not secret:
         return
+    _check_name(str(asset), secret)
     if not tarfile.is_tarfile(asset):
         assert_no_secret([asset], secret)
         return
     with tarfile.open(asset, "r:*") as tar:
         for member in tar:
+            _check_name(member.name, secret)
             if not member.isfile():
                 continue
             fh = tar.extractfile(member)
-            if fh is not None and _contains(fh.read(), secret):
-                raise SecretLeak(
-                    f"{asset.name} member {member.name} contains the odds API key; "
-                    "refusing to upload it"
-                )
+            if fh is not None:
+                _check_bytes(fh.read(), secret, f"{asset.name} member {member.name}")
+
+
+def _resolve_secret(secret: str | None) -> str | None:
+    """The key to guard against: ``secret`` itself when given (``""`` is
+    the explicit opt-out: no guard); for None, env ``ODDS_API_KEY``; None
+    when neither exists (the caller must refuse)."""
+    if secret is not None:
+        return secret.strip()
+    env = os.environ.get("ODDS_API_KEY", "").strip()
+    return env or None
+
+
+_NO_SECRET = (
+    "no odds key to guard against (secret=None and ODDS_API_KEY unset); "
+    "nothing uploaded -- pass secret='' to archive without a guard"
+)
 
 
 def bundle(raw_dir: Path, out: Path) -> Path | None:
@@ -141,15 +214,6 @@ def bundle(raw_dir: Path, out: Path) -> Path | None:
     return out
 
 
-def _scrub(text: str, extra: str | None = None) -> str:
-    text = _redact(text)
-    for value in [extra, *(os.environ.get(name) for name in _SECRET_ENV)]:
-        value = (value or "").strip()
-        if value:
-            text = text.replace(value, "***")
-    return text
-
-
 def _run(runner, argv: list[str]):
     """Run one gh command; never raises. Returns (ok, stdout, error text)."""
     try:
@@ -159,6 +223,7 @@ def _run(runner, argv: list[str]):
             text=True,
             timeout=GH_TIMEOUT,
             stdin=subprocess.DEVNULL,
+            env={**os.environ, **_GH_ENV},
         )
     except (subprocess.TimeoutExpired, OSError) as exc:
         return False, "", f"{type(exc).__name__}: {exc}"
@@ -168,11 +233,17 @@ def _run(runner, argv: list[str]):
 
 
 def _existing_names(stdout: str) -> set[str] | None:
+    """Asset names from ``gh release view --json assets``; None when the
+    output is not that shape."""
     try:
         data = json.loads(stdout)
-        return {a["name"] for a in data.get("assets") or []}
+        assets = data["assets"]
+        if not isinstance(assets, list):
+            return None
+        names = {a["name"] for a in assets}
     except (ValueError, TypeError, KeyError, AttributeError):
         return None
+    return names if all(isinstance(n, str) for n in names) else None
 
 
 def _unique(asset: Path, taken: set[str]) -> Path:
@@ -190,28 +261,37 @@ def _unique(asset: Path, taken: set[str]) -> Path:
     return copy
 
 
-def upload(tag: str, asset: Path, runner=subprocess.run, *, secret: str | None = None) -> ArchiveResult:
+def upload(tag: str, asset: Path, runner=subprocess.run, *, secret: str | None) -> ArchiveResult:
     """Upload ``asset`` to release ``tag``, creating the release if missing.
 
+    ``secret`` is required: the key every tarball member (and its name) is
+    searched for before gh runs -- a hit raises `SecretLeak`. None means
+    env ``ODDS_API_KEY``; if that is unset too, nothing is uploaded
+    (ok=False). ``secret=""`` is the explicit opt-out: upload unguarded.
+
     Never passes ``--clobber``: a name already on the release is uploaded
-    under a suffixed name instead. With ``secret``, the asset (each tarball
-    member) is searched first and `SecretLeak` is raised before gh runs.
+    under a suffixed name instead. gh failures, and view output that
+    cannot be read, give ok=False and never raise.
     """
     asset = Path(asset)
-    _assert_tarball_clean(asset, secret)
+    key = _resolve_secret(secret)
+    if key is None:
+        return ArchiveResult(False, _NO_SECRET)
+    _assert_tarball_clean(asset, key)
 
     def fail(what: str, err: str) -> ArchiveResult:
-        return ArchiveResult(False, _scrub(f"{what}: {err}" if err else what, secret))
+        return ArchiveResult(False, _scrub(f"{what}: {err}" if err else what, key))
 
     ok, out, err = _run(runner, ["gh", "release", "view", tag, "--json", "assets"])
     taken: set[str] = set()
     if ok:
         names = _existing_names(out)
-        if names is not None:
-            taken = names
+        if names is None:
+            return fail(f"could not read the asset list of release {tag}; not uploading", "")
+        taken = names
         if len(taken) >= MAX_ASSETS:
             return fail(f"release {tag} already has {len(taken)} assets; not uploading", "")
-    elif "not found" in err.lower():
+    elif "release not found" in err.lower():
         ok, _, err = _run(runner, [
             "gh", "release", "create", tag,
             "--title", f"Raw archive {tag}",
@@ -239,12 +319,17 @@ def archive_run(
     secret: str | None,
     runner=subprocess.run,
 ) -> ArchiveResult:
-    """Guard, bundle and upload one run's raw dir. Raises `SecretLeak`
-    (before writing or uploading anything) if the key is in any raw file."""
+    """Guard, bundle and upload one run's raw dir. ``secret`` as for
+    `upload`. Raises `SecretLeak` (before writing or uploading anything)
+    if the key is in any raw file or file name."""
     raw_dir = Path(raw_dir)
-    if raw_dir.is_dir():
-        assert_no_secret([raw_dir], secret)
+    if not (raw_dir.is_dir() and any(_files([raw_dir]))):
+        return ArchiveResult(True, "no raw responses this run; nothing archived")
+    key = _resolve_secret(secret)
+    if key is None:
+        return ArchiveResult(False, _NO_SECRET)
+    assert_no_secret([raw_dir], key)
     out = bundle(raw_dir, Path(out_dir) / asset_name(now, run_attempt))
     if out is None:
         return ArchiveResult(True, "no raw responses this run; nothing archived")
-    return upload(release_tag(now), out, runner=runner, secret=secret)
+    return upload(release_tag(now), out, runner=runner, secret=key)

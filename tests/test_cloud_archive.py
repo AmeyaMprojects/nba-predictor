@@ -191,7 +191,7 @@ def test_upload_scans_the_tarball_members_too(tmp_path):
 def test_upload_to_existing_release(tmp_path):
     asset = make_asset(tmp_path)
     runner = FakeRunner()
-    result = upload("raw-2026-W43", asset, runner=runner)
+    result = upload("raw-2026-W43", asset, secret=FAKE_KEY, runner=runner)
     assert result == ArchiveResult(ok=True, message=result.message)
     assert result.ok
     assert [c[:3] for c in runner.calls] == [
@@ -204,7 +204,7 @@ def test_upload_to_existing_release(tmp_path):
 def test_upload_never_clobbers(tmp_path):
     asset = make_asset(tmp_path)
     for runner in (FakeRunner(), FakeRunner(view=(1, "", "release not found"))):
-        upload("raw-2026-W43", asset, runner=runner)
+        upload("raw-2026-W43", asset, secret=FAKE_KEY, runner=runner)
         assert runner.calls
         assert not any("--clobber" in arg for call in runner.calls for arg in call)
 
@@ -212,7 +212,7 @@ def test_upload_never_clobbers(tmp_path):
 def test_every_call_has_a_120s_timeout(tmp_path):
     asset = make_asset(tmp_path)
     runner = FakeRunner(view=(1, "", "release not found"))
-    upload("raw-2026-W43", asset, runner=runner)
+    upload("raw-2026-W43", asset, secret=FAKE_KEY, runner=runner)
     assert len(runner.kwargs) == 3
     assert all(kw.get("timeout") == 120 for kw in runner.kwargs)
 
@@ -220,7 +220,7 @@ def test_every_call_has_a_120s_timeout(tmp_path):
 def test_release_created_once_when_missing(tmp_path):
     asset = make_asset(tmp_path)
     runner = FakeRunner(view=(1, "", "release not found"))
-    result = upload("raw-2026-W43", asset, runner=runner)
+    result = upload("raw-2026-W43", asset, secret=FAKE_KEY, runner=runner)
     assert result.ok
     assert len(runner.calls) == 3
     assert runner.calls[1] == [
@@ -235,7 +235,7 @@ def test_release_created_once_when_missing(tmp_path):
 def test_view_failing_for_another_reason_does_not_create(tmp_path):
     asset = make_asset(tmp_path)
     runner = FakeRunner(view=(1, "", "HTTP 401: Bad credentials"))
-    result = upload("raw-2026-W43", asset, runner=runner)
+    result = upload("raw-2026-W43", asset, secret=FAKE_KEY, runner=runner)
     assert not result.ok
     assert "Bad credentials" in result.message
     assert len(runner.calls) == 1
@@ -246,7 +246,7 @@ def test_existing_asset_name_is_suffixed_not_replaced(tmp_path):
     existing = {"assets": [{"name": asset.name},
                            {"name": "run-20261022T1307Z-a1-2.tar.gz"}]}
     runner = FakeRunner(view=(0, json.dumps(existing), ""))
-    result = upload("raw-2026-W43", asset, runner=runner)
+    result = upload("raw-2026-W43", asset, secret=FAKE_KEY, runner=runner)
     assert result.ok
     uploaded = Path(runner.calls[-1][4])
     assert uploaded.name == "run-20261022T1307Z-a1-3.tar.gz"
@@ -258,22 +258,22 @@ def test_full_release_is_not_uploaded_to(tmp_path):
     asset = make_asset(tmp_path)
     full = {"assets": [{"name": f"x{i}"} for i in range(archive.MAX_ASSETS)]}
     runner = FakeRunner(view=(0, json.dumps(full), ""))
-    result = upload("raw-2026-W43", asset, runner=runner)
+    result = upload("raw-2026-W43", asset, secret=FAKE_KEY, runner=runner)
     assert not result.ok
     assert len(runner.calls) == 1
 
 
 def test_failures_become_results_not_exceptions(tmp_path):
     asset = make_asset(tmp_path)
-    r = upload("t", asset, runner=FakeRunner(upload=(1, "", "asset already exists")))
+    r = upload("t", asset, secret=FAKE_KEY, runner=FakeRunner(upload=(1, "", "asset already exists")))
     assert not r.ok and "already exists" in r.message
-    r = upload("t", asset, runner=FakeRunner(
+    r = upload("t", asset, secret=FAKE_KEY, runner=FakeRunner(
         raise_on={"view": subprocess.TimeoutExpired(["gh"], 120)}))
     assert not r.ok
-    r = upload("t", asset, runner=FakeRunner(
+    r = upload("t", asset, secret=FAKE_KEY, runner=FakeRunner(
         raise_on={"view": FileNotFoundError("gh")}))
     assert not r.ok
-    r = upload("t", asset, runner=FakeRunner(
+    r = upload("t", asset, secret=FAKE_KEY, runner=FakeRunner(
         view=(1, "", "release not found"), create=(1, "", "boom")))
     assert not r.ok and "boom" in r.message
 
@@ -285,7 +285,7 @@ def test_credentials_never_reach_the_message(tmp_path, monkeypatch):
     asset = make_asset(tmp_path)
     err = (f"failed https://x-access-token:{token}@github.com/o/r "
            f"token {token} key {FAKE_KEY}")
-    r = upload("t", asset, runner=FakeRunner(upload=(1, "", err)))
+    r = upload("t", asset, secret=FAKE_KEY, runner=FakeRunner(upload=(1, "", err)))
     assert not r.ok
     assert token not in r.message
     assert FAKE_KEY not in r.message
@@ -311,3 +311,153 @@ def test_archive_run_with_nothing_raw_uploads_nothing(tmp_path):
                          dt("2026-10-22T13:07Z"), 1, secret=None, runner=runner)
     assert result.ok
     assert runner.calls == []
+
+
+# --- fix round 1: hardened guard ------------------------------------------------
+
+import gzip  # noqa: E402
+
+
+def test_gzipped_loose_file_is_decompressed_and_searched(tmp_path):
+    f = tmp_path / "blob"
+    f.write_bytes(gzip.compress(b'{"apiKey":"' + FAKE_KEY.encode() + b'"}'))
+    with pytest.raises(SecretLeak):
+        assert_no_secret([f], FAKE_KEY)
+
+
+def test_gzipped_tar_member_is_decompressed_and_searched(tmp_path):
+    asset = make_asset(tmp_path, content=gzip.compress(FAKE_KEY.encode()))
+    runner = FakeRunner()
+    with pytest.raises(SecretLeak):
+        upload("t", asset, secret=FAKE_KEY, runner=runner)
+    assert runner.calls == []
+
+
+def test_gzip_over_the_cap_is_refused_as_unscannable(tmp_path, monkeypatch):
+    monkeypatch.setattr(archive, "GZIP_CAP", 1000)
+    f = tmp_path / "big"
+    f.write_bytes(gzip.compress(b"a" * 5000))
+    with pytest.raises(SecretLeak) as exc:
+        assert_no_secret([f], FAKE_KEY)
+    assert "unscannable" in str(exc.value)
+
+
+def test_corrupt_gzip_is_refused_as_unscannable(tmp_path):
+    f = tmp_path / "bad"
+    f.write_bytes(b"\x1f\x8b\x08\x00garbage")
+    with pytest.raises(SecretLeak):
+        assert_no_secret([f], FAKE_KEY)
+
+
+def test_clean_gzip_passes(tmp_path):
+    f = tmp_path / "ok"
+    f.write_bytes(gzip.compress(b"hello"))
+    assert_no_secret([f], FAKE_KEY)
+
+
+def test_secret_in_a_file_name_is_refused_without_echoing_it(tmp_path):
+    f = tmp_path / f"odds-{FAKE_KEY}.json"
+    f.write_text("{}")
+    with pytest.raises(SecretLeak) as exc:
+        assert_no_secret([f], FAKE_KEY)
+    assert FAKE_KEY not in str(exc.value).lower()
+
+
+def test_secret_in_a_tar_member_name_is_refused(tmp_path):
+    raw = tmp_path / "rawsrc" / "raw"
+    raw.mkdir(parents=True)
+    (raw / f"k{FAKE_KEY.upper()}").write_text("{}")
+    asset = bundle(raw, tmp_path / "out" / "a.tar.gz")
+    runner = FakeRunner()
+    with pytest.raises(SecretLeak) as exc:
+        upload("t", asset, secret=FAKE_KEY, runner=runner)
+    assert FAKE_KEY not in str(exc.value).lower()
+    assert runner.calls == []
+
+
+def test_secret_inside_a_longer_hex_run_in_any_case_is_refused(tmp_path):
+    f = tmp_path / "blob"
+    f.write_text("ff" + FAKE_KEY.upper() + "ff")
+    with pytest.raises(SecretLeak):
+        assert_no_secret([f], FAKE_KEY)
+
+
+def test_secret_is_required_keyword(tmp_path):
+    asset = make_asset(tmp_path)
+    with pytest.raises(TypeError):
+        upload("t", asset, runner=FakeRunner())
+    with pytest.raises(TypeError):
+        archive_run(tmp_path / "x", tmp_path / "o", dt("2026-10-22T13:07Z"), 1,
+                    runner=FakeRunner())
+
+
+def test_secret_none_falls_back_to_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("ODDS_API_KEY", FAKE_KEY)
+    asset = make_asset(tmp_path, content=FAKE_KEY.encode())
+    runner = FakeRunner()
+    with pytest.raises(SecretLeak):
+        upload("t", asset, secret=None, runner=runner)
+    raw = tmp_path / "r2" / "raw"
+    make_raw(raw, {"k": FAKE_KEY.encode()})
+    with pytest.raises(SecretLeak):
+        archive_run(raw, tmp_path / "o2", dt("2026-10-22T13:07Z"), 1,
+                    secret=None, runner=runner)
+    assert runner.calls == []
+
+
+def test_secret_none_without_env_refuses_to_upload(tmp_path, monkeypatch):
+    monkeypatch.delenv("ODDS_API_KEY", raising=False)
+    asset = make_asset(tmp_path)
+    runner = FakeRunner()
+    r = upload("t", asset, secret=None, runner=runner)
+    assert not r.ok and "secret=''" in r.message
+    raw = tmp_path / "r2" / "raw"
+    make_raw(raw, {"k": b"x"})
+    r = archive_run(raw, tmp_path / "o2", dt("2026-10-22T13:07Z"), 1,
+                    secret=None, runner=runner)
+    assert not r.ok
+    assert runner.calls == []
+
+
+def test_empty_secret_is_an_explicit_opt_out(tmp_path, monkeypatch):
+    monkeypatch.delenv("ODDS_API_KEY", raising=False)
+    asset = make_asset(tmp_path, content=FAKE_KEY.encode())
+    runner = FakeRunner()
+    assert upload("t", asset, secret="", runner=runner).ok
+    assert runner.calls
+
+
+def test_gh_runs_non_interactively(tmp_path):
+    asset = make_asset(tmp_path)
+    runner = FakeRunner(view=(1, "", "release not found"))
+    upload("t", asset, secret=FAKE_KEY, runner=runner)
+    for kw in runner.kwargs:
+        assert kw["env"]["GH_PROMPT_DISABLED"] == "1"
+        assert kw["env"]["GH_NO_UPDATE_NOTIFIER"] == "1"
+
+
+def test_create_only_on_release_not_found(tmp_path):
+    asset = make_asset(tmp_path)
+    runner = FakeRunner(view=(1, "", "HTTP 404: Not Found (https://api.github.com/x)"))
+    r = upload("t", asset, secret=FAKE_KEY, runner=runner)
+    assert not r.ok and len(runner.calls) == 1
+    runner = FakeRunner(view=(1, "", "Release Not Found"))
+    assert upload("t", asset, secret=FAKE_KEY, runner=runner).ok
+    assert [c[2] for c in runner.calls] == ["view", "create", "upload"]
+
+
+def test_unparseable_view_output_uploads_nothing(tmp_path):
+    asset = make_asset(tmp_path)
+    for out in ("not json", '{"x":1}', '{"assets":[{"nom":"a"}]}', "[]"):
+        runner = FakeRunner(view=(0, out, ""))
+        r = upload("t", asset, secret=FAKE_KEY, runner=runner)
+        assert not r.ok, out
+        assert len(runner.calls) == 1
+
+
+def test_scrub_is_case_insensitive(tmp_path, monkeypatch):
+    monkeypatch.setenv("ODDS_API_KEY", FAKE_KEY)
+    asset = make_asset(tmp_path)
+    err = f"bad key {FAKE_KEY.upper()}"
+    r = upload("t", asset, secret=FAKE_KEY, runner=FakeRunner(upload=(1, "", err)))
+    assert FAKE_KEY not in r.message.lower()
