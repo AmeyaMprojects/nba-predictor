@@ -1,4 +1,5 @@
-"""ESPN's public NBA scoreboard: schedule, tip-off times and final scores.
+"""ESPN's public NBA scoreboard (schedule, tip-off times, final scores) and
+game summaries (box scores).
 
 One request per ET date (``dates=YYYYMMDD``). Each day's response bytes go
 to ``raw_store`` exactly as received (``download_scoreboards``), and parsing
@@ -23,11 +24,22 @@ time (every real sample carried it). An event missing a field the parser
 needs (season year/type, date, id) is reported as malformed and skipped;
 the rest of the response is kept.
 
+Game summary (``summary?event=<id>``), confirmed against a real response
+for a final on 2026-10-24 (see ``tests/fixtures/espn/summary_sample.json``):
+``boxscore.players[]`` has one block per team with ``team.abbreviation`` /
+``displayName`` and ``statistics[0]`` holding ``keys`` (``minutes``,
+``points``, ..., ``rebounds``, ``assists``, ..., ``plusMinus``), ``labels``
+and ``athletes[]``. Each athlete has ``athlete.id`` (string) and
+``athlete.displayName``, ``starter`` and ``didNotPlay`` (bools) and
+``stats``: strings in ``keys`` order, minutes as whole minutes ("31"),
+plus/minus signed ("+9", "-5", "0"). A DNP player has ``stats: []``.
+
 The range form ``dates=YYYYMMDD-YYYYMMDD`` answered HTTP 400 ("Failed to get
 events endpoint.") on 2026-10-24 for every range tried, so it is never used.
 Politeness: at most MAX_SCOREBOARD_REQUESTS day requests per run (3 near
 days every run, 7 far days at most hourly; see cloud/games.py), 20 s
-timeout, 2 retries on network errors or 5xx.
+timeout, 2 retries on network errors or 5xx; at most 15 summaries per run
+(cloud/players.py).
 """
 
 from __future__ import annotations
@@ -44,6 +56,7 @@ from predictor import raw_store
 from predictor.teams import espn_team_abbr
 
 SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"
+SUMMARY_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/summary"
 RAW_SOURCE = "espn"
 EASTERN = ZoneInfo("America/New_York")
 
@@ -56,6 +69,10 @@ _RETRY_PAUSE_SECONDS = 2.0
 
 class EspnFetchError(Exception):
     """ESPN did not give a usable response."""
+
+
+class EspnFormatError(Exception):
+    """An ESPN response does not have the shape the parser relies on."""
 
 
 @dataclass(frozen=True)
@@ -88,6 +105,23 @@ class EspnGame:
 _OFF_WORDS = ("POSTPONED", "CANCEL", "SUSPENDED")
 
 
+@dataclass(frozen=True)
+class EspnPlayerLine:
+    """One player's line in an ESPN box score. ``team`` is the NBA
+    abbreviation. A player who did not play has no minutes or stats."""
+
+    espn_player_id: str
+    name: str
+    team: str
+    starter: bool
+    did_not_play: bool
+    minutes: float | None
+    points: int | None
+    rebounds: int | None
+    assists: int | None
+    plus_minus: int | None
+
+
 # --- fetch --------------------------------------------------------------------
 
 
@@ -95,17 +129,14 @@ def _sleep(seconds: float) -> None:
     time.sleep(seconds)
 
 
-def _get(session, dates: str) -> tuple[int, bytes]:
+def _get(session, url: str, params: dict, label: str) -> tuple[int, bytes]:
     """(status, body) of one request, retrying network errors and 5xx."""
     last = ""
     for attempt in range(RETRIES + 1):
         if attempt:
             _sleep(_RETRY_PAUSE_SECONDS * attempt)
         try:
-            response = session.get(
-                SCOREBOARD_URL, params={"dates": dates, "limit": 1000},
-                timeout=TIMEOUT_SECONDS,
-            )
+            response = session.get(url, params=params, timeout=TIMEOUT_SECONDS)
         except requests.RequestException as exc:
             last = f"could not reach ESPN ({type(exc).__name__})"
             continue
@@ -113,25 +144,36 @@ def _get(session, dates: str) -> tuple[int, bytes]:
             last = f"ESPN returned HTTP {response.status_code}"
             continue
         return response.status_code, response.content
-    raise EspnFetchError(f"{last} for dates={dates} after {RETRIES + 1} attempts")
+    raise EspnFetchError(f"{last} for {label} after {RETRIES + 1} attempts")
+
+
+def _fetch_json_bytes(session, url: str, params: dict, label: str) -> bytes:
+    """The exact bytes of a 200 response whose body is a JSON object."""
+    status, content = _get(session or requests.Session(), url, params, label)
+    if status != 200:
+        raise EspnFetchError(f"ESPN returned HTTP {status} for {label}")
+    try:
+        payload = json.loads(content)
+    except ValueError:
+        raise EspnFetchError(f"ESPN returned a response that is not JSON for {label}") from None
+    if not isinstance(payload, dict):
+        raise EspnFetchError(f"ESPN returned an unexpected response for {label}")
+    return content
 
 
 def fetch_scoreboard_day(day: date, session=None) -> bytes:
     """ESPN's scoreboard for one ET date, as the exact response bytes."""
-    session = session or requests.Session()
     dates = f"{day:%Y%m%d}"
-    status, content = _get(session, dates)
-    if status != 200:
-        raise EspnFetchError(f"ESPN returned HTTP {status} for dates={dates}")
-    try:
-        payload = json.loads(content)
-    except ValueError:
-        raise EspnFetchError(
-            f"ESPN returned a response that is not JSON for dates={dates}"
-        ) from None
-    if not isinstance(payload, dict):
-        raise EspnFetchError(f"ESPN returned an unexpected response for dates={dates}")
-    return content
+    return _fetch_json_bytes(session, SCOREBOARD_URL, {"dates": dates, "limit": 1000},
+                             f"dates={dates}")
+
+
+def fetch_summary(espn_id: str, session=None) -> bytes:
+    """ESPN's game summary (box score included) for one event, as the exact
+    response bytes. Archive them (``archive("summary", body, fetched_at,
+    espn_id)``) before parsing."""
+    return _fetch_json_bytes(session, SUMMARY_URL, {"event": str(espn_id)},
+                             f"event={espn_id}")
 
 
 def archive(kind: str, body: bytes, fetched_at: datetime, ident: str) -> str:
@@ -245,3 +287,88 @@ def parse_scoreboard(body: bytes, problems: list[str] | None = None) -> list[Esp
             continue
         seen.setdefault(game.espn_id, game)
     return list(seen.values())
+
+
+# --- box score (game summary) -------------------------------------------------
+
+# Stat keys the box score must carry (``statistics[0].keys``); values are
+# always looked up by key, never by position or label.
+BOX_KEYS = ("minutes", "points", "rebounds", "assists", "plusMinus")
+_EMPTY = ("", "--", "-")
+
+
+def _stat_int(text) -> int | None:
+    if text is None or str(text).strip() in _EMPTY:
+        return None
+    return int(str(text).strip())  # int() reads "+12" and "-3"
+
+
+def _stat_minutes(text) -> float | None:
+    if text is None or str(text).strip() in _EMPTY:
+        return None
+    text = str(text).strip()
+    if ":" in text:
+        whole, seconds = text.split(":", 1)
+        return int(whole) + int(seconds) / 60
+    return float(text)
+
+
+def _player_line(entry: dict, team: str, index: dict[str, int]) -> EspnPlayerLine:
+    who = entry["athlete"]
+    stats = entry.get("stats") or []
+    did_not_play = bool(entry.get("didNotPlay")) or not stats
+
+    def stat(key: str):
+        if did_not_play:
+            return None
+        return stats[index[key]] if index[key] < len(stats) else None
+
+    return EspnPlayerLine(
+        espn_player_id=str(who["id"]),
+        name=who.get("displayName") or who.get("shortName") or str(who["id"]),
+        team=team,
+        starter=bool(entry.get("starter")),
+        did_not_play=did_not_play,
+        minutes=_stat_minutes(stat("minutes")),
+        points=_stat_int(stat("points")),
+        rebounds=_stat_int(stat("rebounds")),
+        assists=_stat_int(stat("assists")),
+        plus_minus=_stat_int(stat("plusMinus")),
+    )
+
+
+def parse_boxscore(body: bytes) -> list[EspnPlayerLine]:
+    """Every player line in one game summary, team by team in ESPN's order.
+
+    Raises EspnFormatError when the response has no ``boxscore``, a team
+    block lacks one of BOX_KEYS (the message names it), a team is not an NBA
+    team, or a value cannot be read. A summary whose box score has no player
+    blocks yet gives an empty list."""
+    payload = json.loads(body)
+    if not isinstance(payload, dict) or not isinstance(payload.get("boxscore"), dict):
+        raise EspnFormatError("ESPN summary has no boxscore")
+    lines: list[EspnPlayerLine] = []
+    for block in payload["boxscore"].get("players") or []:
+        team_obj = block.get("team") or {}
+        team = espn_team_abbr(team_obj.get("abbreviation"), team_obj.get("displayName"))
+        if team is None:
+            raise EspnFormatError(
+                f"ESPN box score team {team_obj.get('displayName')!r} is not an NBA team"
+            )
+        groups = block.get("statistics") or []
+        if not groups:
+            raise EspnFormatError(f"ESPN box score for {team} has no statistics")
+        keys = groups[0].get("keys") or []
+        index = {}
+        for key in BOX_KEYS:
+            if key not in keys:
+                raise EspnFormatError(f"ESPN box score for {team} has no stat key {key!r}")
+            index[key] = keys.index(key)
+        for entry in groups[0].get("athletes") or []:
+            try:
+                lines.append(_player_line(entry, team, index))
+            except (KeyError, TypeError, ValueError) as exc:
+                raise EspnFormatError(
+                    f"ESPN box score line for {team} cannot be read: {type(exc).__name__} {exc}"
+                ) from exc
+    return lines

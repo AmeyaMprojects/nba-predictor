@@ -9,14 +9,18 @@ Layout (paths relative to ``state/``):
   ``schedule/espn_links.jsonl`` and ``schedule/id_links.jsonl``.
 - ``odds/<season>/<YYYY-MM>.jsonl`` -- live odds rows (month and season from
   the ET date of ``observed_at``); attempts in ``odds/attempts-<YYYY-MM>.jsonl``.
-- ``boxscores/<season>/<YYYY-MM>.jsonl`` -- ESPN box-score rows.
+- ``boxscores/<season>/<YYYY-MM>.jsonl`` -- ESPN box-score rows (ESPN
+  athlete id only; ``player_id`` is resolved on load).
+- ``players/links.jsonl`` -- ESPN athlete id -> NBA player id links (latest
+  line wins); ``players/aliases.json`` -- hand-edited link corrections.
 - ``injuries/<season>/<YYYY-MM>.jsonl`` -- cloud injury report deltas (Task 6).
 - ``nba/`` -- whole-file snapshots written only by the Mac:
   ``games-<season>.jsonl``, ``schedule-<season>.jsonl`` (changed vintages
   only), ``odds-<season>.jsonl``, ``player_games/<season>/<YYYY-MM>.jsonl``
   and ``injuries/<season>/<YYYY-MM>.jsonl`` (the injury_status history as
   per-report deltas; each month file starts from an empty report, so it
-  rebuilds on its own). The flat ``nba/`` tables are in table form (a
+  rebuilds on its own), and ``players-<season>.jsonl`` (``player_id``,
+  ``name``, ``team``) for player linking. The flat ``nba/`` tables are in table form (a
   ``{"columns":[...],"format":"table"}`` header, then one array per row).
 - ``settings/stage1_settings.json`` -- optional settings override.
 
@@ -394,9 +398,14 @@ def _insert(con, logical: str, columns: tuple[str, ...], rows: list[dict]) -> in
     return con.execute(f"SELECT count(*) FROM {physical}").fetchone()[0] - before
 
 
-def load_rows(con, family: str, rows: list[dict], id_links: dict[str, str]) -> int:
+def load_rows(
+    con, family: str, rows: list[dict], id_links: dict[str, str],
+    player_ids: dict[str, str] | None = None,
+) -> int:
     """INSERT OR IGNORE one family's rows, mapping linked ``espn:`` game ids
-    to their NBA ids. Returns the number of rows inserted."""
+    to their NBA ids. Box-score rows get ``player_id`` from ``player_ids``
+    (ESPN athlete id -> resolved id, see `players.resolved_player_ids`),
+    else ``espn:<athlete id>``. Returns the number of rows inserted."""
     fam = _family(family)
     columns = tuple(c for c in fam.columns if c != "source" or fam.table != "games")
     prepared = []
@@ -407,10 +416,12 @@ def load_rows(con, family: str, rows: list[dict], id_links: dict[str, str]) -> i
             row[_GAME_ID_COLUMN] = id_links[gid]
         prepared.append(row)
     if fam.table == "player_boxscores":
-        # State keeps the ESPN athlete id only; the NBA id is resolved at
-        # rebuild time (Task 5 adds the player links).
+        # State keeps the ESPN athlete id only; the NBA id is resolved from
+        # the latest player links (and aliases) every time rows are loaded.
+        resolved = player_ids or {}
         for row in prepared:
-            row["player_id"] = row.get("player_id") or f"espn:{row['espn_player_id']}"
+            espn_id = str(row["espn_player_id"])
+            row["player_id"] = resolved.get(espn_id) or f"espn:{espn_id}"
         columns = columns + ("player_id",)
     return _insert(con, fam.table, columns, prepared)
 
@@ -525,11 +536,16 @@ def rebuild_db(state_dir: Path, db_path: Path) -> RebuildReport:
     con = db.connect(db_path)
     try:
         db.migrate(con)
+        from predictor.cloud.players import resolved_player_ids
+
         id_links = read_id_links(state_dir)
+        player_ids = resolved_player_ids(state_dir)
         counts: dict[str, int] = {name: 0 for name in db.POINT_IN_TIME_TABLES}
         for name in _NBA_FAMILIES + _CLOUD_FAMILIES:
             fam = FAMILIES[name]
-            counts[fam.table] += load_rows(con, name, list(read_rows(state_dir, name)), id_links)
+            counts[fam.table] += load_rows(
+                con, name, list(read_rows(state_dir, name)), id_links, player_ids
+            )
         counts["injury_status"] += _load_injury_history(con, state_dir)
         con.execute("CHECKPOINT")
     finally:

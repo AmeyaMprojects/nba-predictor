@@ -115,6 +115,20 @@ class PlayerIndex:
             return next(iter(ids)) if len(ids) == 1 else None
         return None
 
+    def ids_for(self, name: str) -> set[int]:
+        """Every id carrying ``name``'s key, in any season."""
+        return set(self._by_key.get(name_key(name), ()))
+
+    def ids_on_team(self, name: str, team: str) -> set[int]:
+        """Ids carrying ``name``'s key that were on ``team`` in any season."""
+        key = name_key(name)
+        return {
+            pid
+            for (k, t, _season), ids in self._by_team_season.items()
+            if k == key and t == team
+            for pid in ids
+        }
+
     def link(self, name: str, team: str, season: str) -> int | None:
         player_id = self._resolve(name, team, season)
         if player_id is None:
