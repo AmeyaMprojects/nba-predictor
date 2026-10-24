@@ -15,6 +15,13 @@ Response shape, confirmed against real responses on 2026-10-24 (see
   ``venue.address.city/state`` and ``competitors[]`` with ``homeAway``,
   ``team.abbreviation`` / ``team.displayName`` and ``score`` -- a string
   ("121"), and "0" before tip-off, so a score counts only once completed.
+- ``status.type.name`` (STATUS_SCHEDULED, STATUS_FINAL; STATUS_POSTPONED and
+  STATUS_CANCELED are assumed from ESPN's naming, not yet seen live).
+
+A competition without a ``timeValid`` field is treated as having a valid
+time (every real sample carried it). An event missing a field the parser
+needs (season year/type, date, id) is reported as malformed and skipped;
+the rest of the response is kept.
 
 The range form ``dates=YYYYMMDD-YYYYMMDD`` answered HTTP 400 ("Failed to get
 events endpoint.") on 2026-10-24 for every range tried, so it is never used.
@@ -69,6 +76,16 @@ class EspnGame:
     completed: bool
     home_points: int | None
     away_points: int | None
+    status_name: str | None = None
+
+    @property
+    def postponed(self) -> bool:
+        """Postponed, cancelled or suspended: no tip and no result to use."""
+        name = (self.status_name or "").upper()
+        return any(word in name for word in _OFF_WORDS)
+
+
+_OFF_WORDS = ("POSTPONED", "CANCEL", "SUSPENDED")
 
 
 # --- fetch --------------------------------------------------------------------
@@ -139,11 +156,12 @@ def download_scoreboards(days: list[date], fetched_at: datetime, session=None) -
     return keys
 
 
-def load_scoreboards(keys: list[str]) -> list[EspnGame]:
-    """Parse archived scoreboard responses; each event once (first wins)."""
+def load_scoreboards(keys: list[str], problems: list[str] | None = None) -> list[EspnGame]:
+    """Parse archived scoreboard responses; each event once (first wins).
+    Malformed events are appended to ``problems`` (see `parse_scoreboard`)."""
     seen: dict[str, EspnGame] = {}
     for key in keys:
-        for game in parse_scoreboard(raw_store.load(RAW_SOURCE, key)):
+        for game in parse_scoreboard(raw_store.load(RAW_SOURCE, key), problems):
             seen.setdefault(game.espn_id, game)
     return list(seen.values())
 
@@ -201,13 +219,29 @@ def _parse_event(event: dict) -> EspnGame:
         completed=completed,
         home_points=_points(home.get("score")) if completed else None,
         away_points=_points(away.get("score")) if completed else None,
+        status_name=status.get("name"),
     )
 
 
-def parse_scoreboard(body: bytes) -> list[EspnGame]:
-    """Every event in one scoreboard response, once."""
+def _malformed_label(event, exc: Exception) -> str:
+    if not isinstance(event, dict):
+        return f"? ? (malformed event: {type(exc).__name__} {exc})"
+    short = event.get("shortName") or event.get("name") or "?"
+    day = str(event.get("date") or "?")[:10]
+    return f"{short} {day} (malformed event {event.get('id', '?')}: {type(exc).__name__} {exc})"
+
+
+def parse_scoreboard(body: bytes, problems: list[str] | None = None) -> list[EspnGame]:
+    """Every event in one scoreboard response, once. An event that cannot be
+    parsed is skipped and described in ``problems`` (when given); the other
+    events are still returned."""
     seen: dict[str, EspnGame] = {}
     for event in json.loads(body).get("events") or []:
-        game = _parse_event(event)
+        try:
+            game = _parse_event(event)
+        except (KeyError, TypeError, ValueError, IndexError, AttributeError) as exc:
+            if problems is not None:
+                problems.append(_malformed_label(event, exc))
+            continue
         seen.setdefault(game.espn_id, game)
     return list(seen.values())

@@ -31,6 +31,7 @@ def espn_event(
     event_id="401705555", when="2026-10-23T02:00Z", home="GS", away="LAL",
     home_score="0", away_score="0", completed=False, season_year=2027, season_type=2,
     time_valid=True, neutral=False, venue=("Chase Center", "San Francisco", "CA"),
+    status_name=None,
 ):
     def competitor(side, abbr, score):
         return {
@@ -39,7 +40,8 @@ def espn_event(
         }
 
     status = {"type": {"completed": completed, "state": "post" if completed else "pre",
-                       "name": "STATUS_FINAL" if completed else "STATUS_SCHEDULED"}}
+                       "name": status_name
+                       or ("STATUS_FINAL" if completed else "STATUS_SCHEDULED")}}
     return {
         "id": event_id,
         "date": when,
@@ -445,3 +447,123 @@ def test_apply_sync_writes_state_with_headers_and_loads_db(con, tmp_path):
     assert con.execute(
         f"SELECT game_id, home_points, status FROM {table}"
     ).fetchall() == [("0042600101", 118, "FINAL")]
+
+
+# --- fix round 2: reschedules, postponements, duplicate links, malformed ------
+
+
+def test_parse_reads_status_name():
+    assert parse_one().status_name == "STATUS_SCHEDULED"
+    assert parse_one(status_name="STATUS_POSTPONED").status_name == "STATUS_POSTPONED"
+
+
+def test_rescheduled_to_tbd_on_a_new_date(con):
+    add_schedule(con, "0022600010", date(2026, 10, 22), "GSW", "LAL", tip="2026-10-23T02:00Z")
+    moved = parse_one(when="2026-11-05T05:00Z", time_valid=False)
+    (row,) = games.sync_games(con, [moved], FETCHED, {"401705555": "0022600010"}).schedule_rows
+    assert row["game_date"] == date(2026, 11, 5) and row["tip_off_utc"] is None
+
+
+@pytest.mark.parametrize("status_name", ["STATUS_POSTPONED", "STATUS_CANCELED",
+                                         "STATUS_SUSPENDED", "STATUS_CANCELLED"])
+def test_postponed_or_cancelled_game_becomes_tbd_and_is_reported(con, status_name):
+    add_schedule(con, "0022600010", date(2026, 10, 22), "GSW", "LAL", tip="2026-10-22T23:30Z")
+    off = parse_one(when="2026-10-22T23:30Z", status_name=status_name, completed=True,
+                    home_score="0", away_score="0")
+    sync = games.sync_games(con, [off], dt("2026-10-23T05:00Z"), {"401705555": "0022600010"})
+    (row,) = sync.schedule_rows
+    assert row["tip_off_utc"] is None and row["game_date"] == date(2026, 10, 22)
+    assert sync.finals == []
+    assert sync.postponed == [f"LAL@GSW 2026-10-22 ({status_name})"]
+    assert sync.skipped == []
+
+
+def test_postponed_provisional_game_without_known_row(con):
+    off = parse_one(status_name="STATUS_POSTPONED")
+    sync = games.sync_games(con, [off], FETCHED, {})
+    assert sync.schedule_rows[0]["tip_off_utc"] is None
+    assert len(sync.postponed) == 1
+
+
+def test_back_to_back_does_not_claim_a_known_nba_id(con):
+    d = date(2026, 12, 1)
+    add_schedule(con, "0022600301", d, "LAL", "SAC", tip="2026-12-02T03:00Z")
+    nxt = parse_one(event_id="12", home="LAL", away="SAC", when="2026-12-03T03:00Z")
+    sync = games.sync_games(con, [nxt], FETCHED, {"11": "0022600301"})
+    assert sync.espn_links[0]["game_id"] == "espn:12"
+
+
+def test_back_to_back_does_not_claim_an_exact_match_of_this_run(con):
+    d = date(2026, 12, 1)
+    add_schedule(con, "0022600301", d, "LAL", "SAC", tip="2026-12-02T03:00Z")
+    # The D+1 event comes first, so order cannot decide it.
+    nxt = parse_one(event_id="12", home="LAL", away="SAC", when="2026-12-03T03:00Z")
+    first = parse_one(event_id="11", home="LAL", away="SAC", when="2026-12-02T03:00Z")
+    sync = games.sync_games(con, [nxt, first], FETCHED, {})
+    assert {r["espn_id"]: r["game_id"] for r in sync.espn_links} == {
+        "11": "0022600301", "12": "espn:12",
+    }
+
+
+def test_one_day_fallback_still_links_an_unclaimed_game(con):
+    add_schedule(con, "0022600301", date(2026, 12, 1), "LAL", "SAC")
+    shifted = parse_one(event_id="12", home="LAL", away="SAC", when="2026-12-03T03:00Z")
+    sync = games.sync_games(con, [shifted], FETCHED, {})
+    assert sync.espn_links[0]["game_id"] == "0022600301"
+
+
+def test_malformed_event_is_skipped_and_the_rest_of_the_day_kept():
+    bad = espn_event("9", home="BOS", away="NY")
+    del bad["season"]["type"]
+    problems: list[str] = []
+    parsed = espn.parse_scoreboard(body(bad, espn_event("1")), problems)
+    assert [g.espn_id for g in parsed] == ["1"]
+    (problem,) = problems
+    assert "malformed event 9" in problem and "type" in problem
+
+
+def test_malformed_events_reach_the_sync_skipped_list(con):
+    sync = games.sync_games(con, [parse_one()], FETCHED, {},
+                            malformed=["NY @ BOS 2026-10-22 (malformed event 9: KeyError 'type')"])
+    assert sync.skipped == ["NY @ BOS 2026-10-22 (malformed event 9: KeyError 'type')"]
+    assert len(sync.schedule_rows) == 1
+
+
+def test_load_scoreboards_collects_malformed_events():
+    bad = espn_event("9")
+    del bad["season"]
+    key = espn.archive("scoreboard", body(bad, espn_event("1")), dt("2026-10-22T17:00Z"),
+                       "20261022")
+    problems: list[str] = []
+    assert [g.espn_id for g in espn.load_scoreboards([key], problems)] == ["1"]
+    assert len(problems) == 1
+
+
+@pytest.mark.parametrize(("when", "et_day"), [
+    ("2026-11-01T02:30Z", date(2026, 10, 31)),  # Sat 10:30 pm EDT, night DST ends
+    ("2026-11-02T03:30Z", date(2026, 11, 1)),   # Sun 10:30 pm EST, first Sunday of Nov
+    ("2027-03-14T03:30Z", date(2027, 3, 13)),   # Sat 10:30 pm EST, night DST starts
+    ("2027-03-15T02:30Z", date(2027, 3, 14)),   # Sun 10:30 pm EDT, second Sunday of March
+])
+def test_late_games_around_dst_changes_keep_their_et_date(when, et_day):
+    g = parse_one(when=when)
+    assert g.game_date == et_day
+    assert g.tip_off_utc == dt(when)
+    assert g.tip_off_utc.astimezone(espn.EASTERN).strftime("%H:%M") == "22:30"
+
+
+def test_provisional_game_at_a_neutral_site(con):
+    g = parse_one(neutral=True, venue=("Arena CDMX", "Mexico City", None))
+    (row,) = games.sync_games(con, [g], FETCHED, {}).schedule_rows
+    assert row["game_id"] == "espn:401705555"
+    assert row["is_neutral"] is True and row["is_neutral_reported"] is True
+    assert (row["arena_name"], row["arena_city"], row["arena_state"]) == (
+        "Arena CDMX", "Mexico City", None)
+
+
+def test_tip_change_to_a_new_time_writes_a_new_row(con):
+    add_schedule(con, "0022600010", date(2026, 10, 22), "GSW", "LAL", tip="2026-10-23T02:00Z")
+    later = parse_one(when="2026-10-23T03:00Z")
+    (row,) = games.sync_games(con, [later], FETCHED, {"401705555": "0022600010"}).schedule_rows
+    assert row["tip_off_utc"] == dt("2026-10-23T03:00Z")
+    assert row["game_date"] == date(2026, 10, 22) and row["arena_name"] == "NBA Arena"

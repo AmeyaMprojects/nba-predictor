@@ -6,10 +6,15 @@ directory and loads them into the run's DuckDB.
 Game ids: an ESPN event keeps the NBA id it was linked to before
 (``schedule/espn_links.jsonl``, latest line wins); otherwise it is linked
 by ET date and teams against the latest NBA schedule (exact date, or one
-day either side when exactly one game fits); otherwise it gets the
+day either side when exactly one game fits among NBA ids not already
+claimed by a known link or an exact match); otherwise it gets the
 provisional id ``espn:<event id>``. When a provisional game later links to
 an NBA id, ``schedule/id_links.jsonl`` records it, and every rebuild maps
 the provisional rows onto the NBA id.
+
+A TBD time keeps the known tip only on the same date. A postponed,
+cancelled or suspended game gets a TBD (None) tip, no final, and a line in
+``GameSync.postponed``.
 """
 
 from __future__ import annotations
@@ -46,6 +51,9 @@ class GameSync:
     espn_links: list[dict] = field(default_factory=list)
     id_links: list[dict] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    # "<AWAY>@<HOME> <date> (<status name>)" per postponed/cancelled game;
+    # its schedule row has no tip (TBD), so no call and no final follow.
+    postponed: list[str] = field(default_factory=list)
 
 
 def scoreboard_days(now: datetime, include_far: bool) -> list[date]:
@@ -132,17 +140,45 @@ def _nba_link_index(con, games: list[EspnGame]):
     return odds.build_link_index(g for g in listed if not _is_provisional(g.game_id))
 
 
-def _resolve_id(game: EspnGame, known: str | None, index) -> str:
-    if known and not _is_provisional(known):
-        return known
-    linked, _ = odds.link_game(index, game.game_date, game.home_team, game.away_team)
-    return linked or provisional_id(game.espn_id)
+def _exact_match(index, game: EspnGame) -> str | None:
+    exact = index.get((game.game_date, game.home_team, game.away_team), [])
+    return exact[0] if len(exact) == 1 else None
+
+
+def _without(index, claimed: set[str]):
+    return {k: [g for g in ids if g not in claimed] for k, ids in index.items()}
+
+
+def _resolve_ids(games: list[EspnGame], known_links: dict[str, str], index) -> list[str]:
+    """Game id per event. Known NBA links and exact-date matches claim their
+    NBA ids first; the one-day fallback (`odds.link_game`) then only sees
+    unclaimed ids, so a back-to-back pair never shares one NBA game."""
+    claimed = {g for g in known_links.values() if g and not _is_provisional(g)}
+    chosen: list[str | None] = []
+    for game in games:
+        known = known_links.get(game.espn_id)
+        gid = known if known and not _is_provisional(known) else _exact_match(index, game)
+        chosen.append(gid)
+        if gid:
+            claimed.add(gid)
+    out: list[str] = []
+    for game, gid in zip(games, chosen, strict=True):
+        if gid is None:
+            free = _without(index, claimed)
+            gid, _ = odds.link_game(free, game.game_date, game.home_team, game.away_team)
+            if gid:
+                claimed.add(gid)
+        out.append(gid or provisional_id(game.espn_id))
+    return out
 
 
 def _schedule_row(game: EspnGame, game_id: str, latest: dict | None,
                   fetched_at: datetime) -> dict:
     tip = game.tip_off_utc
-    if tip is None and latest is not None:
+    if game.postponed:
+        tip = None  # TBD until ESPN lists a new time
+    elif tip is None and latest is not None and latest["game_date"] == game.game_date:
+        # A TBD time keeps the known tip only on the same date.
         tip = latest["tip_off_utc"]
     row = {
         "game_id": game_id,
@@ -175,12 +211,14 @@ def _changed(row: dict, latest: dict | None) -> bool:
 
 
 def sync_games(
-    con, espn_games: list[EspnGame], fetched_at: datetime, known_links: dict[str, str]
+    con, espn_games: list[EspnGame], fetched_at: datetime, known_links: dict[str, str],
+    malformed: list[str] | None = None,
 ) -> GameSync:
-    """Schedule change rows, new finals and link rows for one scoreboard."""
+    """Schedule change rows, new finals and link rows for one scoreboard.
+    ``malformed`` (from `espn.load_scoreboards`) is carried into ``skipped``."""
     db.require_utc(fetched_at, "fetched_at")
     stamp = fetched_at.isoformat()
-    out = GameSync()
+    out = GameSync(skipped=list(malformed or []))
     kept: list[EspnGame] = []
     for game in espn_games:
         reason = _skip_reason(game)
@@ -191,9 +229,8 @@ def sync_games(
 
     index = _nba_link_index(con, kept)
     resolved: list[tuple[EspnGame, str, str | None]] = []
-    for game in kept:
+    for game, game_id in zip(kept, _resolve_ids(kept, known_links, index), strict=True):
         known = known_links.get(game.espn_id)
-        game_id = _resolve_id(game, known, index)
         if known != game_id:
             out.espn_links.append(
                 {"espn_id": game.espn_id, "game_id": game_id, "linked_at": stamp}
@@ -211,6 +248,9 @@ def sync_games(
         row = _schedule_row(game, game_id, latest.get(game_id), fetched_at)
         if _changed(row, latest.get(game_id)):
             out.schedule_rows.append(row)
+        if game.postponed:
+            out.postponed.append(f"{_label(game)} ({game.status_name})")
+            continue
         tip = row["tip_off_utc"]
         if (
             game.completed
