@@ -7,6 +7,9 @@ that is not due has ``due=False``)::
     mac_history, rebuild, espn_scoreboard, espn_boxscores, injury_report,
     odds, state_commit, predict, grade, raw_archive, push
 
+- ``mac_history`` copies the Mac's weekly ``state/nba/`` refresh (and its
+  news history) from branch ``mac-history`` into the working tree, only
+  when every commit there is a safe ``state:`` commit (cloud/macsync.py).
 - Source steps append their rows to ``state/`` first, then load them into
   the run's DuckDB (rebuilt from ``state/`` at the start of every run).
 - A source that fails with an expected error (network, ESPN format, Odds
@@ -41,7 +44,7 @@ from pathlib import Path
 import requests
 
 from predictor import config, db
-from predictor.cloud import archive, games, injuries, players, state
+from predictor.cloud import archive, games, injuries, macsync, players, state
 from predictor.model import live, publish
 from predictor.sources import espn, injury_report, news_rss, odds
 
@@ -260,6 +263,20 @@ def _to_int(value) -> int | None:
 
 
 # --- the steps ---------------------------------------------------------------
+
+
+def _mac_history(run: _Run) -> tuple[bool, bool, str]:
+    """Copy the Mac's weekly ``state/nba/`` refresh (and news history) in
+    before the rebuild; the run's state commit carries it."""
+    result = macsync.sync_mac_history(run.state_repo)
+    if result.skipped_reason is not None:
+        return True, False, f"skipped: {result.skipped_reason}"
+    if not result.copied and not result.news_items:
+        return True, True, f"nothing new on {macsync.MAC_BRANCH}"
+    detail = f"copied {len(result.copied)} file(s) from {macsync.MAC_BRANCH}"
+    if result.news_items:
+        detail += f"; {result.news_items} news item(s) added"
+    return True, True, detail
 
 
 def _rebuild(run: _Run) -> tuple[bool, bool, str]:
@@ -652,7 +669,6 @@ def run_once(
                started=db.require_utc(fetchers.clock(), "clock"))
     config.settings.ensure_dirs()
     try:
-        run.record("mac_history", False, True, "not built yet (Task 12)")
         problem = _sync_checkout(run)
         if problem is not None:
             run.publish_error = True
@@ -660,6 +676,7 @@ def run_once(
             run.notes.append(_plain(
                 f"the run stopped before writing anything: {problem}; fix the checkout by hand"))
             raise _Halt()
+        run.step("mac_history", lambda: _mac_history(run))
         run.step("rebuild", lambda: _rebuild(run))
         run.step("espn_scoreboard", lambda: _scoreboard(run), needs_db=True)
         run.step("espn_boxscores", lambda: _boxscores(run), needs_db=True)

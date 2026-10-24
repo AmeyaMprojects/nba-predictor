@@ -1,4 +1,5 @@
 import plistlib
+import re
 import subprocess
 
 from predictor.config import PROJECT_ROOT
@@ -76,6 +77,7 @@ ALL_JOBS = (
     "com.predictor.results.plist",
     "com.predictor.predict.plist",
     "com.predictor.odds.plist",
+    "com.predictor.history.plist",
 )
 
 
@@ -128,11 +130,52 @@ def test_odds_job_runs_ingest_odds_once_a_day_at_1730():
     assert p["RunAtLoad"] is False
 
 
-def test_install_script_installs_all_five_jobs():
+def test_install_script_installs_all_six_jobs():
     script = SCRIPTS / "install_schedule.sh"
     text = script.read_text()
     for name in ALL_JOBS:
         assert f"install_job {name.removesuffix('.plist')}" in text
-    assert text.count("\ninstall_job ") == 5
+    assert text.count("\ninstall_job ") == 6
     assert "Market odds will be fetched at 17:30 daily." in text
+    subprocess.run(["bash", "-n", str(script)], check=True)
+
+
+# --- cloud operation: the Mac's weekly history refresh ---------------------
+
+def test_history_job_runs_weekly_on_monday_1115():
+    p = _load("com.predictor.history.plist")
+    assert p["Label"] == "com.predictor.history"
+    assert p["ProgramArguments"] == ["PROJECT_DIR/.venv/bin/predictor", "refresh-history"]
+    assert p["StartCalendarInterval"] == [{"Weekday": 1, "Hour": 11, "Minute": 15}]
+    assert p["WorkingDirectory"] == "PROJECT_DIR"
+    assert p["StandardOutPath"] == "PROJECT_DIR/data/logs/history.out.log"
+    assert p["StandardErrorPath"] == "PROJECT_DIR/data/logs/history.err.log"
+    assert p["RunAtLoad"] is False
+
+
+def _case_block(text: str, label: str) -> str:
+    start = text.index(f"    {label})")
+    return text[start:text.index(";;", start)]
+
+
+def test_install_script_after_cutover_installs_only_news_and_history():
+    script = SCRIPTS / "install_schedule.sh"
+    text = script.read_text()
+    block = _case_block(text, "--after-cutover")
+    installed = re.findall(r"install_job (com\.predictor\.\w+)", block)
+    assert installed == ["com.predictor.daily", "com.predictor.history"]
+    assert "exit 0" in block  # nothing after the case installs the live jobs
+    # Before the option is parsed, nothing is installed.
+    assert text.index("--after-cutover)") < text.index("\ninstall_job ")
+    subprocess.run(["bash", "-n", str(script)], check=True)
+
+
+def test_uninstall_script_names_exactly_the_four_live_jobs():
+    script = SCRIPTS / "uninstall_live_jobs.sh"
+    text = script.read_text()
+    named = set(re.findall(r"com\.predictor\.\w+", text))
+    assert named == {"com.predictor.predict", "com.predictor.results",
+                     "com.predictor.odds", "com.predictor.schedule"}
+    assert "launchctl unload" in text
+    assert 'rm -f "$target"' in text
     subprocess.run(["bash", "-n", str(script)], check=True)

@@ -26,7 +26,10 @@ Layout (paths relative to ``state/``):
   only), ``odds-<season>.jsonl``, ``player_games/<season>/<YYYY-MM>.jsonl``
   and ``injuries/<season>/<YYYY-MM>.jsonl`` (the injury_status history as
   per-report deltas; each month file starts from an empty report, so it
-  rebuilds on its own). ``nba/player_games`` is also the index ESPN players
+  rebuilds on its own), plus ``players-<season>.jsonl`` (the season's
+  players list from the weekly refresh; not loaded into the DB). The Mac
+  pushes these to branch ``mac-history`` and each cloud run copies them in
+  (cloud/macsync.py). ``nba/player_games`` is also the index ESPN players
   are linked against (cloud/players.py). The flat ``nba/`` tables are in table form (a
   ``{"columns":[...],"format":"table"}`` header, then one array per row).
 - ``settings/stage1_settings.json`` -- optional settings override.
@@ -303,19 +306,30 @@ def _read_lines(paths: Iterable[Path]) -> Iterator[dict]:
     """Every data line of each file as a dict (table-form files are zipped
     back). The first line must be a version header this code reads."""
     for path in paths:
-        columns: list[str] | None = None
         with path.open(encoding="utf-8") as fh:
-            for n, line in enumerate(fh):
-                if not line.strip():
-                    continue
-                obj = json.loads(line)
-                if n == 0:
-                    columns = _check_header(path, obj)
-                    continue
-                if columns is not None:
-                    yield dict(zip(columns, obj, strict=True))
-                else:
-                    yield obj
+            yield from _parse_lines(path, fh)
+
+
+def _parse_lines(name, lines: Iterable[str]) -> Iterator[dict]:
+    columns: list[str] | None = None
+    for n, line in enumerate(lines):
+        if not line.strip():
+            continue
+        obj = json.loads(line)
+        if n == 0:
+            columns = _check_header(name, obj)
+            continue
+        if columns is not None:
+            yield dict(zip(columns, obj, strict=True))
+        else:
+            yield obj
+
+
+def parse_records(text: str, name: str) -> Iterator[dict]:
+    """The records of one state file's text (e.g. read from another branch
+    with ``git show``), after checking its version header; ``name`` is
+    only used in error messages."""
+    return _parse_lines(name, text.splitlines(keepends=True))
 
 
 def _check_header(path: Path, obj) -> list[str] | None:

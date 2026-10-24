@@ -568,26 +568,17 @@ def _is_network_failure(exc: BaseException) -> bool:
     return isinstance(exc, (requests.ConnectionError, requests.Timeout))
 
 
-def _capture_results(target: str):
-    """Download, archive and record one season's newly FINAL results -- the
-    whole of `capture-results`, shared with `predict-today`'s catch-up so
-    both follow the same rules (`results.load`: FINAL only once both WL are
-    set and FINISHED_AFTER_TIP has passed). Raises `_CaptureFailed` for
-    every expected failure; the connection is closed before returning, so a
-    caller can open its own afterwards."""
-    import duckdb
+def _download_results(target: str):
+    """Download, archive and parse one season's results; touches no
+    database. Raises `_CaptureFailed` for every expected failure."""
     import requests
     import tenacity
 
-    from predictor import db, raw_store
+    from predictor import raw_store
     from predictor.sources import results
 
-    # Raw-first, and the download happens entirely before the database is
-    # opened -- same discipline as ingest-schedule: a slow or retried
-    # download must never hold the DuckDB write lock the unattended news
-    # job also needs.
     try:
-        downloaded = results.download(target)
+        return results.download(target)
     except (requests.RequestException, tenacity.RetryError) as exc:
         if _is_network_failure(exc):
             raise _CaptureFailed(_UNREACHABLE, network=True) from None
@@ -603,6 +594,25 @@ def _capture_results(target: str):
             f"archived under the same name ({exc}). Nothing was overwritten "
             "or loaded; the next scheduled run will try again."
         ) from None
+
+
+def _capture_results(target: str):
+    """Download, archive and record one season's newly FINAL results -- the
+    whole of `capture-results`, shared with `predict-today`'s catch-up so
+    both follow the same rules (`results.load`: FINAL only once both WL are
+    set and FINISHED_AFTER_TIP has passed). Raises `_CaptureFailed` for
+    every expected failure; the connection is closed before returning, so a
+    caller can open its own afterwards."""
+    import duckdb
+
+    from predictor import db
+    from predictor.sources import results
+
+    # Raw-first, and the download happens entirely before the database is
+    # opened -- same discipline as ingest-schedule: a slow or retried
+    # download must never hold the DuckDB write lock the unattended news
+    # job also needs.
+    downloaded = _download_results(target)
 
     try:
         con = db.connect_with_retry()
@@ -1825,6 +1835,150 @@ def fit_player_model_cmd() -> None:
     )
     typer.echo(f"Saved to {path}.")
     typer.echo("The current model stays live until plan 3 switches it over.")
+
+
+class _HistoryJob:
+    """One source of the weekly history refresh: ``download()`` touches no
+    database (raw-first archive included); ``load(con, payload)`` saves it
+    and returns one line for the log."""
+
+    def __init__(self, name: str, download, load) -> None:
+        self.name = name
+        self.download = download
+        self.load = load
+
+
+def _history_jobs(season: str) -> list[_HistoryJob]:
+    """The Mac's weekly refresh sources for ``season``: the schedule,
+    results (the `capture-results` download and rules, without grading or
+    publishing) and plan 1's player game logs. One indirection point so
+    tests replace them with fakes (no network)."""
+    from predictor.sources import player_games, results, schedule
+
+    def schedule_load(con, fetched):
+        result = schedule.load(con, fetched)
+        return f"schedule {result.season}: {result.written:,} games saved"
+
+    def results_load(con, downloaded):
+        result = results.load(con, downloaded)
+        return (f"results {result.season}: {result.new_finals} new game result(s) "
+                f"({result.already_known} already known)")
+
+    def logs_job(season_type: str) -> _HistoryJob:
+        def load(con, item):
+            result = player_games.load(con, item)
+            return f"player logs {item.season} {season_type}: {result.rows_written} rows"
+
+        return _HistoryJob(f"player logs {season_type}",
+                           lambda: player_games.download(season, season_type), load)
+
+    return [
+        _HistoryJob("schedule", lambda: schedule.fetch_and_archive(season), schedule_load),
+        _HistoryJob("results", lambda: _download_results(season), results_load),
+        *(logs_job(t) for t in player_games.ALL_SEASON_TYPES),
+    ]
+
+
+def _brief_error(exc: BaseException) -> str:
+    import tenacity
+
+    if isinstance(exc, tenacity.RetryError) and exc.last_attempt.exception() is not None:
+        exc = exc.last_attempt.exception()
+    if isinstance(exc, _CaptureFailed):
+        return str(exc)
+    return f"{type(exc).__name__}: {exc}"
+
+
+@app.command("refresh-history")
+def refresh_history_cmd(
+    all_seasons: bool = typer.Option(
+        False, "--all-seasons", help="Export every season in the DB (the first seeding)."
+    ),
+    no_push: bool = typer.Option(
+        False, "--no-push", help="Commit on mac-history locally, but do not push it."
+    ),
+) -> None:
+    """Weekly (Mac): refresh the DB's history and push state/nba/ (plus news
+    history) to branch mac-history, which the cloud run copies in."""
+    import duckdb
+
+    from predictor import db
+    from predictor.cloud import macsync, state
+    from predictor.config import previous_season_label, season_label, settings
+    from predictor.model import publish
+
+    settings.ensure_dirs()
+    now = _now()
+    season = season_label(now)
+    try:
+        worktree = macsync.prepare_worktree(_repo_dir(), settings.data_dir / macsync.MAC_BRANCH)
+    except macsync.MacSyncError as exc:
+        typer.echo(f"refresh-history: {exc}. Nothing was refreshed.")
+        raise typer.Exit(code=1) from None
+    state_dir = worktree / state.STATE_DIRNAME
+
+    # Every download happens BEFORE the database is opened: network work
+    # must never hold the DuckDB write lock the other jobs need.
+    problems: list[str] = []
+    downloaded = []
+    for job in _history_jobs(season):
+        try:
+            downloaded.append((job, job.download()))
+        except Exception as exc:  # noqa: BLE001 -- reported; the other sources still run
+            problems.append(f"{job.name}: could not download ({_brief_error(exc)})")
+    try:
+        players = macsync.fetch_current_players(season)
+    except Exception as exc:  # noqa: BLE001
+        players = []
+        problems.append(f"players: could not download ({_brief_error(exc)})")
+
+    try:
+        con = db.connect_with_retry()
+        db.migrate(con)
+    except duckdb.Error as exc:
+        typer.echo(f"refresh-history: could not open the database ({exc}). The downloads "
+                   "are archived on disk; nothing was loaded or pushed.")
+        raise typer.Exit(code=1) from None
+    try:
+        for job, payload in downloaded:
+            try:
+                typer.echo(job.load(con, payload))
+            except Exception as exc:  # noqa: BLE001
+                problems.append(f"{job.name}: could not save ({_brief_error(exc)})")
+        seasons = (state.seasons_in_db(con) if all_seasons
+                   else [previous_season_label(season), season])
+        paths = state.export_from_db(con, state_dir, seasons)
+        table = db.POINT_IN_TIME_TABLES["news_items"]
+        cols = state.NEWS_COLUMNS
+        news = [dict(zip(cols, r, strict=True))
+                for r in con.execute(f"SELECT {', '.join(cols)} FROM {table}").fetchall()]
+    finally:
+        con.close()
+
+    if players:
+        paths.append(state.write_snapshot(state_dir, f"nba/players-{season}.jsonl", players,
+                                          macsync.PLAYERS_COLUMNS))
+    news_files, news_added = macsync.append_new_news(state_dir, news)
+    paths.extend(news_files)
+    typer.echo(f"exported {len(seasons)} season(s); {len(players)} players; "
+               f"{news_added} news item(s) added")
+
+    result = publish.commit_and_push(
+        worktree, paths, f"state: nba history refresh {now.date().isoformat()}",
+        push=not no_push, kind="state", branch=macsync.MAC_BRANCH,
+    )
+    if result.message == publish.NOTHING_TO_COMMIT and not no_push:
+        # Nothing new; an earlier refresh's push may still be waiting.
+        pending = publish.push_pending(worktree, branch=macsync.MAC_BRANCH)
+        if pending.message != publish.NOTHING_TO_PUSH:
+            result = pending
+    typer.echo(result.message)
+    pushed_ok = (no_push or result.pushed or result.message in
+                 (publish.NOTHING_TO_COMMIT, publish.NOTHING_TO_PUSH))
+    for problem in problems:
+        typer.echo(f"WARNING: {problem}")
+    if result.error or problems or not pushed_ok:
+        raise typer.Exit(code=1)
 
 
 @app.command("export-state")

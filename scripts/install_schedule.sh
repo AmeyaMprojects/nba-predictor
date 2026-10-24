@@ -47,14 +47,35 @@ PYTHON_SCRIPT
     fi
 }
 
+# After the cut-over (Task 14) the cloud run does the live work: only the
+# news archiver and the weekly history refresh stay on this Mac. The four
+# live jobs are removed with scripts/uninstall_live_jobs.sh.
+case "${1:-}" in
+    --after-cutover)
+        install_job com.predictor.daily
+        install_job com.predictor.history
+        echo "The news archiver will run at 09:00, 14:00, and 19:00 daily."
+        echo "The history refresh will run on Mondays at 11:15."
+        exit 0
+        ;;
+    "")
+        ;;
+    *)
+        echo "usage: $0 [--after-cutover]" >&2
+        exit 2
+        ;;
+esac
+
 install_job com.predictor.daily
 install_job com.predictor.schedule
 install_job com.predictor.results
 install_job com.predictor.predict
 install_job com.predictor.odds
+install_job com.predictor.history
 
 echo "The news archiver will run at 09:00, 14:00, and 19:00 daily."
 echo "The schedule archiver will run at 10:30 daily."
 echo "Live results will be captured at 12:00, 16:00 and 22:00 daily."
 echo "Market odds will be fetched at 17:30 daily."
 echo "Today's predictions will be published at 18:00 daily."
+echo "The history refresh will run on Mondays at 11:15."

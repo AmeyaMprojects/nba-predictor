@@ -249,13 +249,19 @@ def _commit_subject(repo_dir: Path, sha: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else sha
 
 
-def _is_safe_commit(repo_dir: Path, sha: str) -> bool:
+def _is_safe_commit(
+    repo_dir: Path, sha: str, *, only_under: tuple[str, ...] | None = None
+) -> bool:
     """True only for a commit THIS module could plausibly have made itself:
     subject starts with ``"predictions: "`` and it touches only paths under
     ``predictions/``, or subject starts with ``"state: "`` and it touches
     only paths under ``state/``. Anything else (a mixed commit included)
     ahead of ``origin/<branch>`` is someone else's work, and must never be
-    dragged along by our push -- nor rebased by us."""
+    dragged along by our push -- nor rebased by us.
+
+    ``only_under`` narrows it further: every touched path must also start
+    with one of these prefixes (the cloud's copy of ``mac-history`` accepts
+    only ``state/nba/`` and ``state/news/``)."""
     subject = _commit_subject(repo_dir, sha)
     dirname = next(
         (d for d, prefix in _KINDS.values() if subject.startswith(prefix)), None
@@ -266,7 +272,14 @@ def _is_safe_commit(repo_dir: Path, sha: str) -> bool:
     if files.returncode != 0:
         return False
     names = [n for n in files.stdout.splitlines() if n.strip()]
+    if only_under is not None and not all(n.startswith(only_under) for n in names):
+        return False
     return bool(names) and all(n.startswith(f"{dirname}/") for n in names)
+
+
+# The commit-safety rule, for callers outside this module (cloud/macsync.py).
+is_safe_commit = _is_safe_commit
+commit_subject = _commit_subject
 
 
 def commit_and_push(
