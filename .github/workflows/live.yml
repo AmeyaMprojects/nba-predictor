@@ -1,0 +1,85 @@
+name: live
+
+on:
+  schedule:
+    - cron: '7,22,37,52 * * * *' # off the top of the hour, where GitHub delays are worst
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write # to dispatch site.yml (GITHUB_TOKEN pushes do not trigger it)
+
+concurrency:
+  group: live
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      # Shadow by default: set the repository variable to `main` at cut-over.
+      PREDICTOR_PUBLISH_BRANCH: ${{ vars.PREDICTOR_PUBLISH_BRANCH || 'cloud-shadow' }}
+      PREDICTOR_DATA_DIR: ${{ runner.temp }}/predictor-data
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      GH_PROMPT_DISABLED: '1'
+    steps:
+      # Shallow is enough: cloud-run's start-of-run `git fetch` + `merge --ff-only`
+      # and its pushes work on a shallow clone. site.yml keeps full history.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.14'
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - run: uv sync --locked
+
+      - name: Git identity
+        run: |
+          git config --global user.name "nba-predictor-bot"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # The state worktree lives in $RUNNER_TEMP so it never makes the code
+      # checkout look dirty to code_version.
+      - name: State checkout
+        run: |
+          case "$PREDICTOR_PUBLISH_BRANCH" in
+            main|cloud-shadow) ;;
+            *) echo "::error::PREDICTOR_PUBLISH_BRANCH must be main or cloud-shadow"; exit 1 ;;
+          esac
+          if [ "$PREDICTOR_PUBLISH_BRANCH" = main ]; then
+            echo "STATE_REPO=$GITHUB_WORKSPACE" >> "$GITHUB_ENV"
+          else
+            git fetch --depth=1 origin "+refs/heads/$PREDICTOR_PUBLISH_BRANCH:refs/remotes/origin/$PREDICTOR_PUBLISH_BRANCH" \
+              || { echo "::error::branch $PREDICTOR_PUBLISH_BRANCH missing - create it by hand"; exit 1; }
+            git worktree add -B "$PREDICTOR_PUBLISH_BRANCH" "$RUNNER_TEMP/state-repo" "origin/$PREDICTOR_PUBLISH_BRANCH"
+            echo "STATE_REPO=$RUNNER_TEMP/state-repo" >> "$GITHUB_ENV"
+          fi
+
+      - id: cloud
+        name: Cloud run
+        run: uv run --frozen predictor cloud-run --state-repo "$STATE_REPO"
+        env:
+          ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
+
+      # cloud-run sets site_changed only for a push to main; the branch check
+      # is a second guard so shadow mode never rebuilds the public site.
+      - name: Rebuild site
+        if: always() && steps.cloud.outputs.site_changed == 'true' && env.PREDICTOR_PUBLISH_BRANCH == 'main'
+        run: gh workflow run site.yml --ref main
+
+      # cloud-run keeps raw_upload_failed false when it found the odds key in
+      # the run's files, so a raw dir holding a secret is never uploaded.
+      - name: Keep raw responses if the release upload failed
+        if: always() && steps.cloud.outputs.raw_upload_failed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: 'raw-${{ github.run_id }}-${{ github.run_attempt }}'
+          path: '${{ runner.temp }}/predictor-data/raw'
+          retention-days: 90
