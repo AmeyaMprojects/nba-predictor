@@ -1265,3 +1265,22 @@ def test_append_id_links_only_for_logged_provisional_ids_once(tmp_path):
     assert sorted(p.name for p in (repo_dir / "predictions").glob("*.jsonl")) == [
         f"{SEASON}.jsonl"
     ]
+
+
+def test_grade_cutoff_uses_the_earliest_tip_across_linked_ids(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    predicted_at = datetime(2026, 12, 16, 13, 0, tzinfo=UTC)
+    logged_tip = datetime(2026, 12, 17, 0, 0, tzinfo=UTC)
+    _append_raw_line(log_path(repo_dir, SEASON), _provisional_line(logged_tip, predicted_at))
+    append_id_links(repo_dir, [{"provisional_id": _PROV, "game_id": _NBA,
+                                "linked_at": predicted_at}])
+    # A stale schedule row is still there under the provisional id...
+    insert_schedule_row(con, _PROV, date(2026, 12, 16), "PHI", "NYK", logged_tip,
+                         season=SEASON)
+    # ...but under the NBA id the game was moved earlier, before the call.
+    insert_schedule_row(con, _NBA, date(2026, 12, 16), "PHI", "NYK",
+                         predicted_at - timedelta(hours=1), season=SEASON)
+    _insert_final(con, _NBA, SEASON, date(2026, 12, 16), "PHI", "NYK", 101, 99,
+                  observed_at=logged_tip + timedelta(hours=4))
+    assert grade(con, repo_dir, SEASON, logged_tip + timedelta(hours=5)) == 0

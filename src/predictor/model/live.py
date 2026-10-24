@@ -735,8 +735,9 @@ def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
 
     A line under a provisional ``espn:`` id that ``read_id_links`` maps to
     an NBA id is graded under its own id (the log is never rewritten): the
-    current tip and the FINAL row are looked up under the line's own id,
-    then under the linked id, and the grade line names the link in
+    cutoff uses the earliest current tip found under either id, the FINAL
+    row is looked up under the line's own id, then under the linked id, and
+    the grade line names the link in
     ``linked_game_id`` (null when there is none). A game graded under
     either id is not graded again.
     """
@@ -752,11 +753,13 @@ def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
         if line["status"] != "predicted":
             continue
         own_tip = datetime.fromisoformat(line["tip_off_utc"])
-        current_tip = next(
-            (t for t in (_current_tip(con, gid) for gid in ids_of(line["game_id"])) if t is not None),
-            None,
-        )
-        cutoff = own_tip if current_tip is None else min(own_tip, current_tip)
+        # The earliest current tip known under any of the line's ids: a
+        # stale row left under the provisional id must not hide that the
+        # linked game was moved earlier.
+        current_tips = [
+            t for t in (_current_tip(con, gid) for gid in ids_of(line["game_id"])) if t is not None
+        ]
+        cutoff = min([own_tip, *current_tips])
         predicted_at = datetime.fromisoformat(line["predicted_at"])
         if predicted_at >= cutoff:
             continue
