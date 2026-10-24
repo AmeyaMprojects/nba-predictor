@@ -540,15 +540,17 @@ def test_new_sources_have_staleness_thresholds():
     assert status.STALENESS_HOURS["player_boxscores"] == 24 * 150
 
 
-def test_injury_reports_fresh_within_36_hours_is_not_stale(con):
+def test_injury_reports_fresh_within_36_hours_is_not_stale(con, tmp_path):
     seen = NOW - timedelta(hours=30)
     con.execute(
         f"INSERT INTO {db.POINT_IN_TIME_TABLES['injury_reports']} (observed_at, fetched_at,"
         " source_key, row_count, content_sha) VALUES (?,?,?,?,?)",
         [seen, seen, "k", 1, "b" * 64],
     )
-    health = {h.name: h for h in status.check_sources(con, NOW)}
+    health = {h.name: h for h in status.check_sources(con, NOW, cloud_state=tmp_path)}
     assert health["injury_reports"].stale is False
+    # On cloud state (the only place these tables are written) an empty
+    # table is a problem; on the Mac's own DB it is information only.
     assert health["player_boxscores"].stale is True
 
 
@@ -622,7 +624,7 @@ def test_cloud_detail_for_a_run_in_progress():
                   _run("2026-10-22T11:38:00Z")])
     health = status.check_cloud(CLOUD_NOW, runner=gh)
     assert health.stale is False
-    assert health.detail == "last cloud run 7m ago (in_progress)"
+    assert health.detail == "last cloud run 22m ago (success); one in_progress now"
 
 
 def test_cloud_three_failures_is_stale():
@@ -648,6 +650,22 @@ def test_cloud_two_failures_is_not_stale():
     assert status.check_cloud(CLOUD_NOW, runner=gh).stale is False
 
 
+def test_cloud_age_is_from_the_last_completed_run():
+    gh = _FakeGh([_run("2026-10-22T11:50:00Z", "in_progress", ""),
+                  _run("2026-10-22T09:59:00Z")])
+    health = status.check_cloud(CLOUD_NOW, runner=gh)
+    assert health.stale is True
+    assert health.info is False
+    assert "2h ago" in health.detail or "121m" in health.detail
+
+
+def test_cloud_could_not_check_never_fails_the_report():
+    health = status.check_cloud(CLOUD_NOW, runner=_FakeGh(raises=FileNotFoundError("gh")))
+    text = status.format_report([health])
+    assert text.startswith("ALL OK")
+    assert "[INFO ] cloud_runs: could not check" in text
+
+
 def test_cloud_no_runs_is_stale():
     health = status.check_cloud(CLOUD_NOW, runner=_FakeGh([]))
     assert health.stale is True
@@ -657,7 +675,8 @@ def test_cloud_no_runs_is_stale():
 def test_cloud_gh_missing_is_reported():
     gh = _FakeGh(raises=FileNotFoundError("gh"))
     health = status.check_cloud(CLOUD_NOW, runner=gh)
-    assert health.stale is True
+    assert health.stale is False
+    assert health.info is True
     assert "gh auth status" in health.advice
     assert health.detail.startswith("could not check")
 
@@ -665,7 +684,8 @@ def test_cloud_gh_missing_is_reported():
 def test_cloud_gh_timeout_is_a_plain_could_not_check():
     gh = _FakeGh(raises=subprocess.TimeoutExpired(["gh"], 20))
     health = status.check_cloud(CLOUD_NOW, runner=gh)
-    assert health.stale is True
+    assert health.stale is False
+    assert health.info is True
     assert health.detail.startswith("could not check")
     assert "gh auth status" in health.advice
 
@@ -678,7 +698,8 @@ def test_cloud_gh_error_never_leaks_a_token():
     ))
     health = status.check_cloud(CLOUD_NOW, runner=gh)
     text = status.format_report([health])
-    assert health.stale is True
+    assert health.stale is False
+    assert health.info is True
     assert health.detail.startswith("could not check")
     assert token not in text
     assert "github_pat_Z9" not in text
@@ -687,7 +708,8 @@ def test_cloud_gh_error_never_leaks_a_token():
 
 def test_cloud_unreadable_gh_output_is_a_plain_could_not_check():
     health = status.check_cloud(CLOUD_NOW, runner=_FakeGh(stdout="not json"))
-    assert health.stale is True
+    assert health.stale is False
+    assert health.info is True
     assert health.detail.startswith("could not check")
 
 
@@ -747,12 +769,21 @@ def test_log_published_cloud_advice_says_the_next_run_redoes_the_work(con, tmp_p
 # --- advice for the new sources ----------------------------------------------
 
 
-def test_new_sources_have_run_advice(con):
+def test_cloud_only_sources_are_information_on_the_mac(con):
     health = {h.name: h for h in status.check_sources(con, NOW)}
-    assert health["injury_reports"].stale is True
-    assert health["injury_reports"].advice.startswith("Run: ")
-    assert health["player_boxscores"].stale is True
-    assert health["player_boxscores"].advice.startswith("Run: ")
+    for name in ("injury_reports", "player_boxscores"):
+        assert health[name].stale is False
+        assert health[name].info is True
+    text = status.format_report(list(health.values()))
+    assert "[INFO ] injury_reports: information only" in text
+    assert "[INFO ] player_boxscores: information only" in text
+
+
+def test_cloud_only_sources_have_run_advice_on_cloud_state(con, tmp_path):
+    health = {h.name: h for h in status.check_sources(con, NOW, cloud_state=tmp_path)}
+    for name in ("injury_reports", "player_boxscores"):
+        assert health[name].stale is True
+        assert health[name].advice.startswith("Run: ")
 
 
 # --- check_sources on cloud state ---------------------------------------------

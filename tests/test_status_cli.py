@@ -78,7 +78,14 @@ def test_status_exits_nonzero_when_a_source_is_stale(tmp_path, monkeypatch):
     assert "PROBLEMS" in result.stdout
 
 
-def test_status_exits_zero_when_every_source_is_fresh(tmp_path, monkeypatch):
+import pytest  # noqa: E402
+
+
+@pytest.mark.parametrize("mac_only", [False, True])
+def test_status_exits_zero_when_every_source_is_fresh(tmp_path, monkeypatch, mac_only):
+    """mac_only: only the tables the Mac writes are filled, and gh is not
+    available -- the cloud-only tables and the cloud check are information
+    and must not fail the Mac's report."""
     s = _point_settings_at_tmp(tmp_path, monkeypatch)
     _point_repo_dir_at_tmp(tmp_path, monkeypatch)
     con = db.connect(s.db_path)
@@ -119,6 +126,14 @@ def test_status_exits_zero_when_every_source_is_fresh(tmp_path, monkeypatch):
         ["0022400561", "2024-25", now.date(), "regular", 1, "someone", "PHI",
          "nba_stats", True, now],
     )
+    if mac_only:
+        con.close()
+        result = runner.invoke(cli.app, ["status"])
+        assert result.exit_code == 0, result.stdout
+        assert "ALL OK" in result.stdout
+        assert "[INFO ] cloud_runs: could not check" in result.stdout
+        assert "[INFO ] injury_reports" in result.stdout
+        return
     con.execute(
         "INSERT INTO injury_reports_raw (observed_at, fetched_at, source_key,"
         " row_count, content_sha) VALUES (?,?,?,?,?)",
@@ -180,9 +195,9 @@ def test_mac_status_without_gh_says_could_not_check(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, "_gh_runner", missing)
     result = runner.invoke(cli.app, ["status"])
 
-    assert "cloud_runs: could not check" in result.stdout
+    assert "[INFO ] cloud_runs: could not check" in result.stdout
     assert "gh auth status" in result.stdout
-    assert result.exit_code == 1
+    assert "[STALE] cloud_runs" not in result.stdout
 
 
 def _state_checkout(tmp_path, branch="cloud-shadow"):

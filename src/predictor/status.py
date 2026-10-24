@@ -62,7 +62,9 @@ throwaway DuckDB from them. Some table ages mean something different there:
 - `cloud_runs` (`check_cloud`) asks GitHub, through `gh run list`, when
   live.yml last ran and how. It never prompts, times out after 20 s, and
   redacts tokens from anything gh prints; without gh or network it is one
-  plain "could not check" line.
+  plain "could not check" INFO line that never fails the report.
+- On the Mac's own DB, injury_reports and player_boxscores are INFO only:
+  only the cloud run writes them.
 - `player_links` (`check_player_links`) names ESPN players who played in
   the last 7 days but could not be linked to an NBA player id.
 """
@@ -128,6 +130,9 @@ class SourceHealth:
     # of deriving one from latest/row_count (check_live's entries, whose
     # "rows" are not table rows).
     detail: str | None = None
+    # Information only: shown as INFO, never stale, never affects the exit
+    # code (a table the Mac never writes; a cloud check that could not run).
+    info: bool = False
 
 
 # The cloud's "where to look": every cloud step is a row of the run summary.
@@ -196,19 +201,12 @@ def _advice(name: str, latest: datetime | None, now: datetime) -> str:
             "recaptured later."
         )
 
-    if name in ("injury_reports", "player_boxscores"):
-        # Only the cloud run writes these two tables: the Mac's own database
-        # holds them only once cloud state is loaded into it.
-        return (
-            f"{_RUN_SUMMARY} {_CLOUD_STEP[name]} step -- only the cloud run "
-            f"writes {name}; check the cloud copy with: predictor status "
-            "--from-state <checkout of the publish branch>"
-        )
-
     return ""
 
 
 NEWS_ON_CLOUD = "news is archived by the Mac (research only)"
+# Tables only the cloud run writes: information only on the Mac's own DB.
+_CLOUD_ONLY = ("injury_reports", "player_boxscores")
 
 
 def _far_fetched_at(state_dir: Path) -> datetime | None:
@@ -290,6 +288,24 @@ def check_sources(
                     f"SELECT max(observed_at) FROM {POINT_IN_TIME_TABLES['injury_reports']}"
                 ).fetchone()[0]
                 latest = _newest(latest, reports)
+
+        if cloud_state is None and name in _CLOUD_ONLY:
+            # Only the cloud run writes these: on the Mac's own DB they are
+            # shown for information and never judged.
+            if latest is None:
+                seen = "no rows in this database"
+            else:
+                age = (now - latest).total_seconds() / 3600
+                seen = f"{count:,} rows, newest {_format_age(age)} old ({latest.date()})"
+            out.append(SourceHealth(
+                name, latest, count, None if latest is None else age, False, "",
+                detail=(
+                    f"information only (written by the cloud run; check it with "
+                    f"predictor status --from-state <checkout>): {seen}"
+                ),
+                info=True,
+            ))
+            continue
 
         def advice_for(when: datetime | None) -> str:
             if cloud_state is not None:
@@ -593,9 +609,11 @@ def _redact_gh(text: str) -> str:
 
 
 def _could_not_check(reason: str) -> SourceHealth:
+    # Information, not a problem: no gh or no network says nothing about the
+    # cloud, and must not fail the report.
     return SourceHealth(
-        "cloud_runs", None, 0, None, True, _GH_ADVICE,
-        detail=f"could not check cloud runs ({reason})",
+        "cloud_runs", None, 0, None, False, _GH_ADVICE,
+        detail=f"could not check cloud runs ({reason})", info=True,
     )
 
 
@@ -653,11 +671,16 @@ def check_cloud(
             "gh workflow list, or start it with gh workflow run live.yml",
             detail="no cloud run found for live.yml",
         )
-    newest_at, newest = dated[0]
+    finished = [(at, r) for at, r in dated if r.get("status") == "completed"]
+    # Age is that of the last COMPLETED run (a run still going says nothing
+    # yet); with none completed so far, the newest run's.
+    newest_at, newest = finished[0] if finished else dated[0]
     age = now - newest_at
     state = newest.get("conclusion") or newest.get("status") or "unknown"
     detail = f"last cloud run {_ago(age)} ({state})"
-    completed = [r for _, r in dated if r.get("status") == "completed"][:CLOUD_FAILURES]
+    if finished and dated[0][1].get("status") != "completed":
+        detail += f"; one {dated[0][1].get('status') or 'running'} now"
+    completed = [r for _, r in finished][:CLOUD_FAILURES]
     failing = len(completed) == CLOUD_FAILURES and all(
         r.get("conclusion") == "failure" for r in completed
     )
@@ -757,7 +780,7 @@ def format_report(health: list[SourceHealth]) -> str:
     lines.append("")
 
     for h in health:
-        mark = "STALE" if h.stale else "OK"
+        mark = "STALE" if h.stale else ("INFO" if h.info else "OK")
         if h.detail is not None:
             detail = h.detail
         elif h.name == "log_published":
