@@ -386,7 +386,21 @@ def _is_rejected(push_result) -> bool:
     return any(marker in stderr for marker in _REJECTED_MARKERS)
 
 
-def _fetch_and_rebase(repo_dir: Path, branch: str, lead: str, committed: bool) -> PublishResult | None:
+def _remote_moved(branch: str, lead: str, committed: bool) -> PublishResult:
+    return PublishResult(
+        committed=committed,
+        pushed=False,
+        message=(
+            f"{lead} the remote moved: origin/{branch} has commits this checkout "
+            "lacks and rebasing is off for this run; nothing pushed -- the next "
+            "run starts from the remote and will redo the work"
+        ),
+    )
+
+
+def _fetch_and_rebase(
+    repo_dir: Path, branch: str, lead: str, committed: bool, rebase: bool = True
+) -> PublishResult | None:
     """The narrow rebase: fetch ``origin/<branch>`` and, if it is ahead,
     replay our own unpushed commits on top of it.
 
@@ -398,6 +412,9 @@ def _fetch_and_rebase(repo_dir: Path, branch: str, lead: str, committed: bool) -
     silently dropped; if the rebase still ends with FEWER unpushed commits
     than it started with (one was dropped as "already applied"), the branch
     is put back and nothing is pushed.
+
+    With ``rebase=False`` nothing is ever rewritten: a remote that is ahead
+    gives the "remote moved" result and the local commits stay as they are.
 
     None when the push may go ahead; otherwise the result to return."""
     fetch = _git(repo_dir, ["fetch", "origin", branch], timeout=_PUSH_TIMEOUT)
@@ -423,6 +440,8 @@ def _fetch_and_rebase(repo_dir: Path, branch: str, lead: str, committed: bool) -
         )
     if behind.stdout.strip() in ("", "0"):
         return None
+    if not rebase:
+        return _remote_moved(branch, lead, committed)
 
     before = _unpushed_shas(repo_dir, branch)
     if isinstance(before, str):
@@ -495,13 +514,16 @@ def _cannot_list(lead: str, detail: str, committed: bool) -> PublishResult:
     )
 
 
-def _push_if_safe(repo_dir: Path, *, committed: bool, branch: str = "main") -> PublishResult:
+def _push_if_safe(
+    repo_dir: Path, *, committed: bool, branch: str = "main", rebase: bool = True
+) -> PublishResult:
     """Push ``branch`` to ``origin`` -- but only if EVERY commit on
     ``branch`` not yet on ``origin/<branch>`` is one of our own safe
     automated commits, and never the very first push. Shared by
     ``commit_and_push`` (right after its own commit) and ``push_pending``
     (retrying an earlier failed push); ``committed`` only shapes the
-    wording of the result."""
+    wording of the result. ``rebase=False`` (cloud runs) never rewrites a
+    local commit: if the remote moved, nothing is pushed."""
     lead = "committed, but" if committed else "earlier prediction commit(s) are waiting, but"
 
     if not _has_remote(repo_dir):
@@ -541,7 +563,7 @@ def _push_if_safe(repo_dir: Path, *, committed: bool, branch: str = "main") -> P
     # narrow fetch + rebase run. One retry after a non-fast-forward
     # rejection (someone pushed between our fetch and our push).
     for attempt in range(2):
-        problem = _fetch_and_rebase(repo_dir, branch, lead, committed)
+        problem = _fetch_and_rebase(repo_dir, branch, lead, committed, rebase)
         if problem is not None:
             return problem
         # Belt and braces: the rebased commits must still all be safe.
@@ -552,6 +574,8 @@ def _push_if_safe(repo_dir: Path, *, committed: bool, branch: str = "main") -> P
         if offending:
             return _refused_unsafe(lead, branch, offending, committed)
         push_result = _git(repo_dir, ["push", "origin", branch], timeout=_PUSH_TIMEOUT)
+        if not rebase and push_result.returncode != 0 and _is_rejected(push_result):
+            return _remote_moved(branch, lead, committed)
         if push_result.returncode == 0 or not _is_rejected(push_result) or attempt == 1:
             break
     if push_result.returncode != 0:
@@ -602,7 +626,7 @@ def _refused_unsafe(lead: str, branch: str, offending: list[str], committed: boo
     )
 
 
-def push_pending(repo_dir: Path, *, branch: str = "main") -> PublishResult:
+def push_pending(repo_dir: Path, *, branch: str = "main", rebase: bool = True) -> PublishResult:
     """Push prediction commits an earlier run made but could not push (e.g.
     no network at 18:00) -- committing nothing itself.
 
@@ -611,7 +635,8 @@ def push_pending(repo_dir: Path, *, branch: str = "main") -> PublishResult:
     the very first push is left to a human, and a push (or the narrow
     rebase before it) only happens when EVERY unpushed commit is a safe
     automated commit. With nothing unpushed this is a no-op whose message
-    is ``NOTHING_TO_PUSH``.
+    is ``NOTHING_TO_PUSH``. ``rebase=False`` (cloud runs): no rebase at
+    all -- a moved remote leaves the commits unpushed (not an error).
     """
     actual = current_branch(repo_dir)
     if actual != branch:
@@ -632,7 +657,7 @@ def push_pending(repo_dir: Path, *, branch: str = "main") -> PublishResult:
                 "abort it by hand first"
             ),
         )
-    return _push_if_safe(repo_dir, committed=False, branch=branch)
+    return _push_if_safe(repo_dir, committed=False, branch=branch, rebase=rebase)
 
 
 def unpushed_commits(repo_dir: Path, branch: str = "main") -> int | None:

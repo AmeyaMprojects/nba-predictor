@@ -48,6 +48,8 @@ def markdown(report: RunReport) -> str:
         flags.append("site rebuild requested")
     if not report.raw_archived:
         flags.append("raw responses not archived to a release")
+    if report.secret_leak:
+        flags.append("SECRET FOUND — the run stopped; nothing more was committed or pushed")
     if report.unexpected:
         flags.append("UNEXPECTED ERROR — the run exits 1")
     if report.publish_error:
@@ -66,7 +68,7 @@ def outputs(report: RunReport) -> dict[str, str]:
     failed -- never after a secret was found, so a raw dir holding a secret
     is never uploaded as a workflow artifact either."""
     raw = next((s for s in report.steps if s.name == "raw_archive"), None)
-    failed = raw is not None and raw.due and not raw.ok and not raw.detail.startswith("stopped:")
+    failed = raw is not None and raw.due and not raw.ok and not report.secret_leak
     return {
         "site_changed": "true" if report.site_changed else "false",
         "raw_upload_failed": "true" if failed else "false",

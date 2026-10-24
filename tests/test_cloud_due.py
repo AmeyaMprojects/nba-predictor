@@ -147,3 +147,13 @@ def test_late_first_run_still_makes_the_early_call_and_odds(tmp_path):
     now = dt("2026-11-10T14:20Z")
     assert early_call_due(now) is True
     assert odds_window_due(con, now, [], None).name == "early"
+
+
+def test_a_downloaded_attempt_closes_the_window_even_if_loading_failed(tmp_path):
+    con = _slate(tmp_path)
+    now = dt("2026-11-10T13:10Z")
+    failed = {"attempted_at": "2026-11-10T12:37:00+00:00", "window": "early", "ok": False,
+              "remaining": 400}
+    assert odds_window_due(con, now, [failed], 400).name == "early"
+    spent = {**failed, "downloaded": True}
+    assert odds_window_due(con, now, [spent], 400) is None

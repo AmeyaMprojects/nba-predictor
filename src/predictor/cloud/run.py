@@ -131,11 +131,17 @@ class RunReport:
     # players, news feeds, the push message.
     notes: list[str] = field(default_factory=list)
     push_message: str = ""
+    # A SecretLeak stopped the run (nothing more committed or pushed).
+    secret_leak: bool = False
 
 
 class _Stop(Exception):
     """A SecretLeak was found: stop the run before anything else is
     committed or pushed."""
+
+
+class _Halt(Exception):
+    """The checkout could not be brought up to the remote: nothing is run."""
 
 
 @dataclass
@@ -157,6 +163,7 @@ class _Run:
     push_message: str = ""
     raw_archived: bool = False
     site_changed: bool = False
+    secret_leak: bool = False
 
     @property
     def state_dir(self) -> Path:
@@ -178,6 +185,7 @@ class _Run:
             due, ok, detail = fn()
         except archive.SecretLeak as exc:
             self.unexpected = True
+            self.secret_leak = True
             self.record(name, True, False, f"stopped: {exc}")
             raise _Stop() from None
         except EXPECTED_ERRORS as exc:
@@ -377,13 +385,16 @@ def _odds(run: _Run) -> tuple[bool, bool, str]:
     if window is None:
         return False, True, "no odds window due"
     attempted_at = run.clock()
+    # "downloaded": the response body reached the archive, so its credits
+    # are spent -- `odds_window_due` closes the window even if loading failed.
     attempt = {"attempted_at": attempted_at, "window": window.name, "ok": False,
-               "remaining": None}
+               "downloaded": False, "remaining": None}
     try:
         key = config.odds_api_key()
         if not key:
             raise odds.MissingOddsKey("no key")
         downloaded = run.fetchers.odds_download(key, attempted_at)
+        attempt["downloaded"] = True
         attempt["remaining"] = _to_int(downloaded.requests_remaining)
         summary = odds.load(run.con, downloaded)
         rows = _odds_rows(run.con, downloaded.observed_at)
@@ -450,7 +461,7 @@ def _news(run: _Run) -> None:
 def _changed_files(repo: Path, dirname: str) -> list[Path]:
     """Files under ``repo/dirname`` that differ from HEAD or are untracked."""
     result = subprocess.run(
-        ["git", "status", "--porcelain=v1", "-z", "-uall", "--", dirname],
+        ["git", "status", "--porcelain=v1", "-z", "-uall", "--no-renames", "--", dirname],
         cwd=repo, capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
     )
     if result.returncode != 0:
@@ -478,6 +489,13 @@ def _commit(run: _Run, kind: str, paths: list[Path], message: str) -> tuple[bool
 
 
 def _state_commit(run: _Run) -> tuple[bool, bool, str]:
+    # The commit sweeps up every changed file under state/, whichever step
+    # wrote it -- including files a failed step or a killed earlier run left
+    # half done. That is safe only because every state writer appends whole
+    # lines (one write per batch, a version header on a new file), never
+    # rewrites a line, and dedupes against what state already holds, so a
+    # partial write is a valid prefix the next run completes without
+    # duplicates. A new writer under state/ must keep that property.
     paths = _changed_files(run.state_repo, state.STATE_DIRNAME)
     archive.assert_no_secret([*paths, config.settings.raw_dir], config.odds_api_key())
     now = run.started
@@ -497,8 +515,19 @@ def _id_links(run: _Run) -> list[Path]:
     return live.append_id_links(run.state_repo, records)
 
 
+def _state_committed(run: _Run) -> bool:
+    """The state commit step succeeded and left nothing under state/
+    uncommitted, so ``head_sha`` names the state the call is made from."""
+    outcome = run.steps.get("state_commit")
+    if outcome is None or not outcome.ok:
+        return False
+    return not _changed_files(run.state_repo, state.STATE_DIRNAME)
+
+
 def _predict(run: _Run) -> tuple[bool, bool, str]:
     now = run.clock()  # re-read after the fetches
+    if not _state_committed(run):
+        return live.early_call_due(now), False, "not run: state commit failed"
     if not live.early_call_due(now):
         _id_links(run)
         return False, True, f"the early call is due from {live.early_call_at(live.slate_date(now)):%H:%M} UTC"
@@ -567,7 +596,10 @@ def _unpushed_subjects(repo: Path, branch: str) -> list[str]:
 def _push(run: _Run) -> tuple[bool, bool, str]:
     predictions = any(s.startswith("predictions: ")
                       for s in _unpushed_subjects(run.state_repo, run.branch))
-    result = publish.push_pending(run.state_repo, branch=run.branch)
+    # No rebase in a cloud run: rewriting our commits would orphan the
+    # state_version on lines already sealed. A moved remote leaves them
+    # unpushed; the next run starts from the remote and redoes the work.
+    result = publish.push_pending(run.state_repo, branch=run.branch, rebase=False)
     run.pushed = result.pushed
     run.push_message = _plain(result.message)
     run.site_changed = result.pushed and predictions and run.branch == "main"
@@ -575,6 +607,25 @@ def _push(run: _Run) -> tuple[bool, bool, str]:
         run.publish_error = True
     ok = result.pushed or result.message == publish.NOTHING_TO_PUSH
     return True, ok and not result.error, result.message
+
+
+def _sync_checkout(run: _Run) -> str | None:
+    """Fast-forward the checkout to ``origin/<branch>`` before anything is
+    written, so the state commit (and the ``state_version`` sealed into
+    calls) sits on top of what the remote has and is never rewritten later.
+    Returns why that was impossible, or None."""
+    repo, branch = run.state_repo, run.branch
+    actual = publish.current_branch(repo)
+    if actual != branch:
+        return f"the checkout is on {actual or 'a detached HEAD'}, not {branch}"
+    fetch = publish._git(repo, ["fetch", "origin", branch], timeout=publish._PUSH_TIMEOUT)
+    if fetch.returncode != 0:
+        return f"fetching origin/{branch} failed ({publish._err(fetch)})"
+    merge = publish._git(repo, ["merge", "--ff-only", "--quiet", f"origin/{branch}"])
+    if merge.returncode != 0:
+        return (f"{branch} cannot fast-forward to origin/{branch} "
+                f"({publish._err(merge) or 'the branches have diverged'})")
+    return None
 
 
 # --- the run -----------------------------------------------------------------
@@ -596,6 +647,13 @@ def run_once(
     config.settings.ensure_dirs()
     try:
         run.record("mac_history", False, True, "not built yet (Task 12)")
+        problem = _sync_checkout(run)
+        if problem is not None:
+            run.publish_error = True
+            run.record("rebuild", True, False, f"not run: {problem}")
+            run.notes.append(_plain(
+                f"the run stopped before writing anything: {problem}; fix the checkout by hand"))
+            raise _Halt()
         run.step("rebuild", lambda: _rebuild(run))
         run.step("espn_scoreboard", lambda: _scoreboard(run), needs_db=True)
         run.step("espn_boxscores", lambda: _boxscores(run), needs_db=True)
@@ -610,6 +668,7 @@ def run_once(
             _predictions_commit(run)
         except archive.SecretLeak as exc:
             run.unexpected = True
+            run.secret_leak = True
             run.notes.append(_plain(f"stopped before the predictions commit: {exc}"))
             raise _Stop() from None
         except Exception as exc:  # noqa: BLE001
@@ -619,6 +678,8 @@ def run_once(
         run.step("push", lambda: _push(run))
     except _Stop:
         run.notes.append("the run stopped: a secret was found; nothing more was committed or pushed")
+    except _Halt:
+        pass
     finally:
         if run.con is not None:
             run.con.close()
@@ -640,4 +701,5 @@ def run_once(
         publish_error=run.publish_error,
         notes=run.notes,
         push_message=run.push_message,
+        secret_leak=run.secret_leak,
     )

@@ -154,7 +154,9 @@ def odds_window_due(
     (``theoddsapi``) row was observed at or after ``opens``, fewer than
     ``ODDS_MAX_ATTEMPTS`` attempts are recorded at or after ``opens``, and
     ``remaining`` (the last ``x-requests-remaining``) is unknown or at
-    least ``ODDS_MIN_REMAINING``. ``attempts`` are the records of
+    least ``ODDS_MIN_REMAINING``; an attempt in the window marked
+    ``downloaded`` (its body was archived, so its credits were spent) also
+    closes the window. ``attempts`` are the records of
     ``state/odds/attempts-*.jsonl`` (``attempted_at`` as text or datetime).
     """
     db.require_utc(now, "now")
@@ -175,8 +177,12 @@ def odds_window_due(
     window = next((w for w in windows if w.opens <= now < w.closes), None)
     if window is None:
         return None
-    tries = sum(1 for a in attempts if _as_instant(a["attempted_at"]) >= window.opens)
-    if tries >= ODDS_MAX_ATTEMPTS:
+    in_window = [a for a in attempts if _as_instant(a["attempted_at"]) >= window.opens]
+    if len(in_window) >= ODDS_MAX_ATTEMPTS:
+        return None
+    # A response that reached the archive spent the credits, even if it then
+    # failed to load: the window is done.
+    if any(a.get("downloaded") for a in in_window):
         return None
     table = db.POINT_IN_TIME_TABLES["odds_snapshots"]
     (seen,) = con.execute(

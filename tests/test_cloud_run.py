@@ -307,8 +307,13 @@ def test_second_identical_run_commits_nothing(world):
 
 def test_rerun_after_a_lost_push_redoes_the_work_without_duplicates(world, monkeypatch):
     work, remote, tmp = world["work"], world["remote"], world["tmp"]
-    _git(work, "remote", "set-url", "origin", str(tmp / "unreachable.git"))
-    first = run_once(work, world["seed"], branch="cloud-shadow", fetchers=fetchers())
+
+    def network_drops(now):  # after the start-of-run fetch, before the push
+        _git(work, "remote", "set-url", "origin", str(tmp / "unreachable.git"))
+        return None
+
+    first = run_once(work, world["seed"], branch="cloud-shadow",
+                     fetchers=fetchers(injury_latest=network_drops))
     assert first.state_commit and first.predictions_commit and not first.pushed
     assert not first.unexpected and not first.publish_error
 
@@ -450,11 +455,16 @@ def test_site_changed_only_for_main_pushes(world, monkeypatch):
     assert again.predictions_commit is None and not again.site_changed
 
 
-def test_wrong_branch_checkout_commits_nothing_and_is_reported(world):
-    report = run_once(world["work"], world["seed"], branch="main", fetchers=fetchers())
-    assert report.state_commit is None and not report.pushed
-    assert step(report, "state_commit").ok is False
-    assert "not on main" in step(report, "state_commit").detail
+def test_wrong_branch_checkout_runs_nothing_and_is_reported(world):
+    work = world["work"]
+    head = _git(work, "rev-parse", "HEAD")
+    report = run_once(work, world["seed"], branch="main", fetchers=fetchers())
+    assert report.state_commit is None and not report.pushed and report.publish_error
+    assert step(report, "rebuild").detail == \
+        "not run: the checkout is on cloud-shadow, not main"
+    assert all(not s.due for s in report.steps if s.name not in ("rebuild",))
+    assert _git(work, "rev-parse", "HEAD") == head
+    assert _git(work, "status", "--porcelain") == ""
 
 
 def test_secret_in_a_state_file_stops_the_run_before_any_commit(world, monkeypatch):
@@ -592,3 +602,135 @@ def test_provisional_link_is_recorded_before_predicting(world):
         step(report, "predict").detail
     assert files_of(work, "HEAD") == [f"predictions/id-links/{SEASON}.jsonl"]
     assert subjects(work, 1) == ["predictions: grades 2026-10-22"]
+
+
+# --- fix round 1 --------------------------------------------------------------
+
+
+def _advance_remote(world, name: str, subject: str) -> str:
+    """Another writer pushes a state commit to origin/cloud-shadow."""
+    other = world["tmp"] / name
+    _git(world["tmp"], "clone", "-q", "-b", "cloud-shadow", str(world["remote"]), str(other))
+    (other / "state" / "players").mkdir(parents=True, exist_ok=True)
+    (other / "state" / "players" / "aliases.json").write_text("{}\n")
+    _git(other, "add", "state")
+    _git(other, "commit", "-q", "-m", subject)
+    _git(other, "push", "-q", "origin", "cloud-shadow")
+    return _git(other, "rev-parse", "HEAD").strip()
+
+
+def test_state_commit_failure_skips_predict_but_grades(world, monkeypatch):
+    real = cloud_run.publish.commit_and_push
+
+    def failing(repo, paths, message, push=True, *, kind="predictions", branch="main"):
+        if kind == "state":
+            return cloud_run.publish.PublishResult(False, False, "git commit failed: disk", True)
+        return real(repo, paths, message, push, kind=kind, branch=branch)
+
+    monkeypatch.setattr(cloud_run.publish, "commit_and_push", failing)
+    report = run_once(world["work"], world["seed"], branch="cloud-shadow", fetchers=fetchers())
+    assert step(report, "state_commit").ok is False and report.publish_error
+    assert step(report, "predict") == cloud_run.StepOutcome(
+        "predict", True, False, "not run: state commit failed")
+    assert step(report, "grade").ok is True
+    assert not (world["work"] / "predictions" / f"{SEASON}.jsonl").exists()
+
+
+def test_checkout_is_fast_forwarded_to_the_remote_before_the_run(world):
+    theirs = _advance_remote(world, "other", "state: someone else")
+    report = run_once(world["work"], world["seed"], branch="cloud-shadow", fetchers=fetchers())
+    assert report.pushed and not report.publish_error
+    work = world["work"]
+    assert _git(work, "rev-parse", "HEAD~2").strip() == theirs
+    lines = read_log(work / "predictions" / f"{SEASON}.jsonl")
+    assert {ln["state_version"] for ln in lines if ln["status"] == "predicted"} == {
+        _git(work, "rev-parse", "--short", "HEAD~1").strip()}
+
+
+def test_diverged_checkout_fails_cleanly_before_writing(world):
+    work = world["work"]
+    (work / "state" / "x.jsonl").write_text('{"format":"lines","v":1}\n')
+    _git(work, "add", "state")
+    _git(work, "commit", "-q", "-m", "state: local only")
+    _advance_remote(world, "other", "state: someone else")
+    head = _git(work, "rev-parse", "HEAD")
+    report = run_once(work, world["seed"], branch="cloud-shadow", fetchers=fetchers())
+    assert report.publish_error and not report.pushed
+    assert step(report, "rebuild").detail.startswith(
+        "not run: cloud-shadow cannot fast-forward to origin/cloud-shadow")
+    assert _git(work, "rev-parse", "HEAD") == head
+    assert _git(work, "status", "--porcelain") == ""
+
+
+def test_remote_moved_mid_run_pushes_nothing_and_rewrites_nothing(world):
+    work = world["work"]
+    start = _git(work, "rev-parse", "HEAD").strip()
+    moved = []
+
+    def someone_pushes(now):
+        moved.append(_advance_remote(world, "racer", "state: racer"))
+        return None
+
+    report = run_once(work, world["seed"], branch="cloud-shadow",
+                      fetchers=fetchers(injury_latest=someone_pushes))
+    assert not report.pushed and not report.publish_error and not report.unexpected
+    assert "remote moved" in step(report, "push").detail
+    assert "next run" in step(report, "push").detail
+    # No rebase: our two commits sit on the original start, untouched.
+    assert _git(work, "rev-parse", "HEAD~2").strip() == start
+    assert _git(world["remote"], "rev-parse", "cloud-shadow").strip() == moved[0]
+    sealed = {ln["state_version"] for ln in read_log(work / "predictions" / f"{SEASON}.jsonl")
+              if ln["status"] == "predicted"}
+    assert sealed == {report.state_commit}
+    full = _git(work, "rev-parse", report.state_commit).strip()
+    assert _git(work, "rev-parse", "HEAD~1").strip() == full
+    assert _git(work, "merge-base", "--is-ancestor", full, "HEAD") == ""
+    assert summary.outputs(report)["site_changed"] == "false"
+
+
+def test_odds_credits_counted_once_even_when_loading_fails(world, monkeypatch):
+    def broken_load(con, downloaded):
+        raise ValueError("bad payload")
+
+    monkeypatch.setattr(cloud_run.odds, "load", broken_load)
+    calls = []
+
+    def download(key, now):
+        calls.append(now)
+        return odds.download(key, now=now, session=_OddsSession())
+
+    work = world["work"]
+    report = run_once(work, world["seed"], branch="cloud-shadow",
+                      fetchers=fetchers(odds_download=download))
+    assert step(report, "odds").ok is False and report.unexpected
+    attempts = cloud_run.odds_attempts(work / "state")
+    assert [(a["ok"], a["downloaded"], a["remaining"]) for a in attempts] == [(False, True, 480)]
+    later = datetime(2026, 10, 22, 12, 52, tzinfo=UTC)
+    again = run_once(work, world["seed"], branch="cloud-shadow",
+                     fetchers=fetchers(odds_download=download, clock=lambda: later))
+    assert step(again, "odds").due is False
+    assert len(calls) == 1
+
+
+def test_changed_files_ignores_rename_pairs(world):
+    work = world["work"]
+    src = f"state/nba/schedule-{SEASON}.jsonl"
+    _git(work, "mv", src, "state/nba/renamed.jsonl")
+    (work / "state" / "new.jsonl").write_text("x\n")
+    found = cloud_run._changed_files(work, "state")
+    assert found == sorted([work / "state" / "new.jsonl", work / "state" / "nba" / "renamed.jsonl"])
+    assert all(p.exists() for p in found)
+
+
+def test_secret_leak_flag_drives_the_outputs(world, monkeypatch):
+    work = world["work"]
+
+    def leaky(now):
+        (work / "state" / "leak.jsonl").write_text(f"{FAKE_KEY}\n")
+        return None
+
+    report = run_once(work, world["seed"], branch="cloud-shadow",
+                      fetchers=fetchers(injury_latest=leaky))
+    assert report.secret_leak and report.unexpected
+    assert "SECRET FOUND" in summary.markdown(report)
+    assert summary.outputs(report)["raw_upload_failed"] == "false"
