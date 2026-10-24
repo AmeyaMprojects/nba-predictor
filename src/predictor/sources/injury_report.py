@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import math
 import re
 import time
@@ -16,6 +17,8 @@ import tenacity
 
 from predictor import db, raw_store
 from predictor.teams import team_abbr
+
+log = logging.getLogger(__name__)
 
 BASE_URL = "https://ak-static.cms.nba.com/referee/injury"
 
@@ -71,11 +74,12 @@ class TransientFetchError(Exception):
 # The CDN answers 403 to requests without a browser-like User-Agent, which
 # would read as "not published" for every slot. Every default session sends
 # these headers.
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36"
+)
 BROWSER_HEADERS: dict[str, str] = {
-    "User-Agent": (
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-    ),
+    "User-Agent": BROWSER_USER_AGENT,
     "Accept": "application/pdf,*/*",
 }
 
@@ -340,6 +344,68 @@ def archive_report(
     return _archive(day, hour_label, now, session) is ArchiveOutcome.ARCHIVED
 
 
+# --- the latest 15-minute report (cloud runs) -----------------------------
+
+_QUARTER = timedelta(minutes=15)
+
+
+def quarter_slot(at_utc: datetime) -> tuple[date, str]:
+    """The 15-minute slot at or before ``at_utc``: (Eastern date, label such
+    as ``"05_30PM"``). Midnight is ``"12_00AM"``; the label follows EDT/EST.
+
+    The label comes from `injury_slots.slot_label` (plan 1), so both modules
+    name a slot the same way.
+    """
+    from predictor.sources.injury_slots import slot_label
+
+    at = db.require_utc(at_utc, "at_utc").replace(second=0, microsecond=0)
+    # Eastern offsets are whole hours: flooring in UTC floors the ET clock.
+    at -= timedelta(minutes=at.minute % 15)
+    et = at.astimezone(EASTERN)
+    return et.date(), slot_label(et)
+
+
+def report_url_15(day: date, label: str) -> str:
+    return f"{BASE_URL}/Injury-Report_{day.isoformat()}_{label}.pdf"
+
+
+def raw_key_15(day: date, label: str) -> str:
+    return f"Injury-Report_{day.isoformat()}_{label}.pdf"
+
+
+@dataclass(frozen=True)
+class LatestReport:
+    key: str  # raw_store("injury", key) holds body
+    body: bytes
+    fetched_at: datetime
+
+
+def fetch_latest(now: datetime, session=None, max_back: int = 4) -> LatestReport | None:
+    """The newest published report at or before ``now``.
+
+    Tries the slot of ``now`` (floored to 15 minutes, ET), then up to
+    ``max_back`` earlier slots, so at most ``max_back + 1`` requests. A
+    403/404 or a 200 whose body is not a PDF steps back (the latter is
+    logged); `TransientFetchError` propagates. The PDF is archived to
+    ``raw_store("injury", key)`` before it is returned. Its report time is
+    the PDF header (`parse_report(...).published_at`), never the filename.
+    Returns None when no slot in the window is published.
+    """
+    now = db.require_utc(now, "now")
+    session = session or new_session()
+    at = now  # quarter_slot floors; floor(t - 15 min) is the previous slot
+    for _ in range(max_back + 1):
+        day, label = quarter_slot(at)
+        key = raw_key_15(day, label)
+        outcome = _archive(day, label, now=now, session=session)
+        if outcome in (ArchiveOutcome.ARCHIVED, ArchiveOutcome.ALREADY_ARCHIVED):
+            return LatestReport(key=key, body=raw_store.load("injury", key), fetched_at=now)
+        if outcome is ArchiveOutcome.BAD_CONTENT:
+            log.warning("injury: %s answered 200 with a non-PDF body; stepping back", key)
+        at -= _QUARTER
+    return None
+
+
 EASTERN = ZoneInfo("America/New_York")
 
 COLS = ["GameDate", "GameTime", "Matchup", "Team", "PlayerName", "CurrentStatus", "Reason"]
@@ -403,6 +469,12 @@ class InjuryReportEmptyError(InjuryReportParseError):
     genuinely-fine reports, so an operator could never tell "fixed and
     fully recovered" apart from "still broken".
     """
+
+    def __init__(self, message: str, published_at: datetime | None = None) -> None:
+        super().__init__(message)
+        # The header time still parsed fine; an empty slate is still a report.
+        self.published_at = published_at
+
 
 
 # The old ("spaced") layout keeps each header label as separate words
@@ -719,7 +791,8 @@ def parse_report(pdf_bytes: bytes) -> ParsedReport:
         )
     if not rows:
         raise InjuryReportEmptyError(
-            "parsed zero rows -- column headers WERE located, but no row "
+            published_at=published_at,
+            message="parsed zero rows -- column headers WERE located, but no row "
             "with both a player and a status was ever extracted (every "
             "line was either a header, a placeholder like 'NOT YET "
             "SUBMITTED', or unparseable) -- this is a genuinely empty "

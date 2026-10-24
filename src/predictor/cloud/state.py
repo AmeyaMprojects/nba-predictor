@@ -13,7 +13,8 @@ Layout (paths relative to ``state/``):
   athlete id only; ``player_id`` is resolved on load).
 - ``players/links.jsonl`` -- ESPN athlete id -> NBA player id links (latest
   line wins); ``players/aliases.json`` -- hand-edited link corrections.
-- ``injuries/<season>/<YYYY-MM>.jsonl`` -- cloud injury report deltas (Task 6).
+- ``injuries/<season>/<YYYY-MM>.jsonl`` -- cloud injury report deltas, one
+  season replayed in order from empty (cloud/injuries.py).
 - ``nba/`` -- whole-file snapshots written only by the Mac:
   ``games-<season>.jsonl``, ``schedule-<season>.jsonl`` (changed vintages
   only), ``odds-<season>.jsonl``, ``player_games/<season>/<YYYY-MM>.jsonl``
@@ -547,6 +548,14 @@ def rebuild_db(state_dir: Path, db_path: Path) -> RebuildReport:
                 con, name, list(read_rows(state_dir, name)), id_links, player_ids
             )
         counts["injury_status"] += _load_injury_history(con, state_dir)
+        # Cloud reports after the Mac history: INSERT OR IGNORE on both, so a
+        # report present in both keeps the Mac rows.
+        from predictor.cloud import injuries
+
+        counts["injury_status"] += injuries.expand_into(con, state_dir)
+        counts["injury_reports"] = con.execute(
+            f"SELECT count(*) FROM {db.POINT_IN_TIME_TABLES['injury_reports']}"
+        ).fetchone()[0]
         con.execute("CHECKPOINT")
     finally:
         con.close()

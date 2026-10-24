@@ -222,7 +222,7 @@ CREATE TABLE IF NOT EXISTS player_games_raw (
 -- printed in the PDF header (observed_at), so a report fetched late is still
 -- dated when the league published it. fetched_at is when we downloaded it;
 -- source_key names the raw_store archive entry; content_sha is the full
--- 64-hex sha256 of the PDF bytes. Complements injury_status_raw (the per-
+-- 64-hex sha256 of the report's parsed rows (cloud/injuries.content_sha). Complements injury_status_raw (the per-
 -- player rows): this table answers "which report times were seen".
 CREATE TABLE IF NOT EXISTS injury_reports_raw (
     observed_at TIMESTAMP WITH TIME ZONE NOT NULL PRIMARY KEY,
