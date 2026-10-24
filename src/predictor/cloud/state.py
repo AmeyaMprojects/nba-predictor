@@ -19,8 +19,8 @@ Layout (paths relative to ``state/``):
   only), ``odds-<season>.jsonl``, ``player_games/<season>/<YYYY-MM>.jsonl``
   and ``injuries/<season>/<YYYY-MM>.jsonl`` (the injury_status history as
   per-report deltas; each month file starts from an empty report, so it
-  rebuilds on its own), and ``players-<season>.jsonl`` (``player_id``,
-  ``name``, ``team``) for player linking. The flat ``nba/`` tables are in table form (a
+  rebuilds on its own). ``nba/player_games`` is also the index ESPN players
+  are linked against (cloud/players.py). The flat ``nba/`` tables are in table form (a
   ``{"columns":[...],"format":"table"}`` header, then one array per row).
 - ``settings/stage1_settings.json`` -- optional settings override.
 

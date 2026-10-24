@@ -128,28 +128,85 @@ def test_link_records_are_sorted_compact_json(tmp_path):
     )
 
 
-def test_index_build_reads_static_players_and_mac_players_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(players, "_static_players", lambda: [
-        {"id": 202694, "full_name": "Marcus Morris"},
-        {"id": 1626149, "full_name": "Marcus Morris"},
-        {"id": 1629029, "full_name": "Luka Dončić"},
-    ])
-    state.write_snapshot(tmp_path, "nba/players-2026-27.jsonl", [
-        {"player_id": 1626149, "name": "Marcus Morris Sr.", "team": "PHI"},
-        {"player_id": 1641705, "name": "Brand New", "team": "BOS"},
-    ])
-    idx = players.PlayerIndex.build(tmp_path)
-    assert players.link_player(line(), idx, {}, {}, NOW).nba_player_id == 1629029
-    morris = players.link_player(line("7", "Marcus Morris", "PHI"), idx, {}, {}, NOW)
-    assert (morris.nba_player_id, morris.method) == (1626149, "name+team")
-    rookie = players.link_player(line("8", "Brand New", "BOS"), idx, {}, {}, NOW)
-    assert rookie.nba_player_id == 1641705
+def write_logs(state_dir, rows):
+    """NBA game-log rows (player_id, name, team, season) as the Mac snapshot."""
+    by_season = {}
+    for pid, name, team, season in rows:
+        by_season.setdefault(season, []).append({
+            "game_id": f"g{pid}{season}", "season": season,
+            "game_date": date(int(season[:4]), 11, 1), "season_type": "Regular Season",
+            "player_id": pid, "player_name": name, "team": team, "source": "nba",
+            "reconstructed": False, "observed_at": dt(f"{int(season[:4])}-11-02T00:00Z"),
+        })
+    for season, part in by_season.items():
+        state.write_snapshot(state_dir, f"nba/player_games/{season}/{season[:4]}-11.jsonl",
+                             part, state.PLAYER_GAMES_COLUMNS)
 
 
-def test_index_build_works_offline_with_the_real_static_list(tmp_path):
-    idx = players.PlayerIndex.build(tmp_path)
+def test_index_build_reads_nba_game_logs(tmp_path):
+    write_logs(tmp_path, [
+        (1629029, "Luka Dončić", "LAL", "2026-27"),
+        (1629029, "Luka Dončić", "DAL", "2024-25"),
+    ])
+    idx = players.PlayerIndex.build(tmp_path, NOW)
+    link = players.link_player(line(), idx, {}, {}, NOW)
+    assert (link.nba_player_id, link.method) == (1629029, "name")
+
+
+def test_index_build_uses_no_static_player_list(tmp_path):
+    # Shai is in nba_api's bundled list but not in these logs: unmatched.
+    idx = players.PlayerIndex.build(tmp_path, NOW)
     link = players.link_player(line("1", "Shai Gilgeous-Alexander", "OKC"), idx, {}, {}, NOW)
-    assert link.nba_player_id == 1628983
+    assert (link.nba_player_id, link.method) == (None, "unmatched")
+
+
+def test_rookie_sharing_a_retired_players_name_stays_unmatched(tmp_path):
+    write_logs(tmp_path, [
+        (2399, "Chris Johnson", "MIN", "2012-13"),        # retired namesake
+        (2400, "Chris Johnson", "HOU", "2023-24"),        # outside the last 3 seasons
+        (1629029, "Luka Dončić", "LAL", "2026-27"),
+    ])
+    idx = players.PlayerIndex.build(tmp_path, NOW)
+    rookie = players.link_player(line("5000001", "Chris Johnson", "BOS"), idx, {}, {}, NOW)
+    assert (rookie.nba_player_id, rookie.method) == (None, "unmatched")
+    # An explicit alias still links him.
+    aliased = players.link_player(line("5000001", "Chris Johnson", "BOS"), idx,
+                                  {"by_espn_id": {"5000001": 2399}}, {}, NOW)
+    assert (aliased.nba_player_id, aliased.method) == (2399, "alias")
+
+
+def test_last_three_seasons_are_kept(tmp_path):
+    write_logs(tmp_path, [(1630001, "Old Timer", "UTA", "2024-25")])
+    idx = players.PlayerIndex.build(tmp_path, NOW)  # seasons 2024-25 .. 2026-27
+    assert players.link_player(line("9", "Old Timer", "UTA"), idx, {}, {}, NOW).nba_player_id \
+        == 1630001
+
+
+def test_same_name_pair_on_different_teams_resolves_by_team(tmp_path):
+    write_logs(tmp_path, [
+        (202694, "Marcus Morris Sr.", "CLE", "2026-27"),
+        (1626149, "Marcus Morris", "PHI", "2026-27"),
+    ])
+    idx = players.PlayerIndex.build(tmp_path, NOW)
+    phi = players.link_player(line("7", "Marcus Morris", "PHI"), idx, {}, {}, NOW)
+    cle = players.link_player(line("8", "Marcus Morris Sr.", "CLE"), idx, {}, {}, NOW)
+    assert (phi.nba_player_id, phi.method) == (1626149, "name+team")
+    assert (cle.nba_player_id, cle.method) == (202694, "name+team")
+
+
+def test_unmatched_athlete_links_on_a_later_run_once_his_logs_appear(tmp_path):
+    rookie = line("5000002", "Brand New", "BOS")
+    first = players.link_lines(tmp_path, [rookie],
+                               players.PlayerIndex.build(tmp_path, NOW), NOW)
+    assert [u.espn_player_id for u in first.unmatched] == ["5000002"]
+    assert players.resolved_player_ids(tmp_path) == {}
+
+    write_logs(tmp_path, [(1642001, "Brand New", "BOS", "2026-27")])  # weekly refresh
+    later = players.link_lines(tmp_path, [rookie],
+                               players.PlayerIndex.build(tmp_path, NOW), NOW)
+    assert later.unmatched == []
+    assert later.links["5000002"].nba_player_id == 1642001
+    assert players.resolved_player_ids(tmp_path) == {"5000002": "1642001"}
 
 
 # --- box-score rows and rebuild ----------------------------------------------

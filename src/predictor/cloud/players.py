@@ -2,20 +2,22 @@
 game summaries are due.
 
 Matching reuses plan 1's linker (`predictor.model.player_ids`): names are
-compared by `name_key`, against an index of ``nba_api``'s offline player
-list plus the Mac's ``state/nba/players-<season>.jsonl`` (``player_id``,
-``name``, ``team``). Order, for one ESPN athlete:
+compared by `name_key`, against an index built only from the NBA game logs
+in state (``state/nba/player_games``, the last LINK_SEASONS seasons), so
+a retired namesake or a player the logs have not seen yet is never guessed.
+Order, for one ESPN athlete:
 
 1. a hand alias by ESPN id (``players/aliases.json`` ``by_espn_id``) -- it
    also corrects an existing link;
 2. an existing non-null link (``players/links.jsonl``, latest line wins);
 3. a hand alias by name (``by_name``, keys compared after `normalize_name`);
 4. a unique name match;
-5. several name matches narrowed to one by team (the Mac players file);
+5. several name matches narrowed to one by team (any indexed season);
 6. otherwise ``unmatched``.
 
 New or changed links are appended; an unmatched athlete is stored once and
-re-tried in memory on every run, appending again only when a link is found.
+re-tried on every run, appending again only when a link is found (e.g.
+after the Mac's weekly history refresh brings in his game logs).
 Box-score state rows keep only the ESPN athlete id; ``player_id`` is
 resolved on load (`resolved_player_ids`): the NBA id as a string, else
 ``espn:<athlete id>``, so a later alias fixes old rows on the next rebuild.
@@ -33,6 +35,7 @@ from typing import Literal
 
 from predictor import db
 from predictor.cloud import state
+from predictor.config import season_label
 from predictor.model import player_ids
 from predictor.model.live import slate_date
 from predictor.model.venues import PROVISIONAL_PREFIX
@@ -40,7 +43,8 @@ from predictor.sources.espn import EspnPlayerLine
 
 LINKS_PATH = "players/links.jsonl"
 ALIASES_PATH = "players/aliases.json"
-MAC_PLAYERS_GLOB = "nba/players-*.jsonl"
+# Seasons of NBA game logs a name may link against (now's season and the two before).
+LINK_SEASONS = 3
 SOURCE = "espn"
 MAX_SUMMARIES_PER_RUN = 15
 # Final games dated slate - DUE_DAYS .. slate get their summary fetched.
@@ -61,26 +65,24 @@ def normalize_name(name: str) -> str:
 
 
 class PlayerIndex(player_ids.PlayerIndex):
-    """Plan 1's identity index, built for the cloud from offline sources."""
+    """Plan 1's identity index over the NBA game logs in state."""
 
     @classmethod
-    def build(cls, state_dir: Path) -> PlayerIndex:
-        rows: list[tuple[int, str, str, str]] = [
-            (int(p["id"]), p["full_name"], "", "") for p in _static_players()
-        ]
-        for path in sorted(state_dir.glob(MAC_PLAYERS_GLOB)):
-            season = path.stem.removeprefix("players-")
-            rows += [
-                (int(r["player_id"]), r["name"], r.get("team") or "", season)
-                for r in state.read_records(path)
-            ]
-        return cls.from_rows(rows)
-
-
-def _static_players() -> list[dict]:
-    from nba_api.stats.static import players as static_players
-
-    return static_players.get_players()  # bundled with the package; no network
+    def build(cls, state_dir: Path, now: datetime) -> PlayerIndex:
+        """Index every (player_id, player_name, team, season) in the Mac's
+        ``nba/player_games`` snapshots for the last LINK_SEASONS seasons up to
+        ``now``'s season. No other player list is used: a player without
+        recent game-log rows stays unmatched unless an alias names him."""
+        db.require_utc(now, "now")
+        first_year = int(season_label(now)[:4]) - (LINK_SEASONS - 1)
+        rows: set[tuple[int, str, str, str]] = set()
+        for row in state.read_rows(state_dir, "nba_player_games"):
+            season = str(row["season"])
+            if int(season[:4]) < first_year or row.get("player_id") is None:
+                continue
+            rows.add((int(row["player_id"]), row["player_name"] or "", row["team"] or "",
+                      season))
+        return cls.from_rows(sorted(rows))
 
 
 @dataclass(frozen=True)
