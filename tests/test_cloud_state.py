@@ -566,3 +566,13 @@ def test_export_state_cli_prints_counts(tmp_path, monkeypatch):
         cli.app, ["export-state", "--to", str(tmp_path / "x"), "--seasons", "bogus"]
     )
     assert result.exit_code != 0
+
+
+def test_read_records_reads_one_keyed_file_and_checks_its_header(tmp_path):
+    path = tmp_path / "links.jsonl"
+    state.append_records(path, [{"a": 1}, {"a": 2}])
+    assert list(state.read_records(path)) == [{"a": 1}, {"a": 2}]
+    bad = tmp_path / "bad.jsonl"
+    bad.write_text('{"a":1}\n')
+    with pytest.raises(state.StateVersionError):
+        list(state.read_records(bad))

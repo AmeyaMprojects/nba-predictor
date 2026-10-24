@@ -323,12 +323,18 @@ def read_rows(state_dir: Path, family: str) -> Iterator[dict]:
     return _read_lines(sorted(state_dir.glob(fam.glob)))
 
 
+def read_records(path: Path) -> Iterator[dict]:
+    """Every record of one state file, after checking its version header
+    (the reader for files written by `append_records`)."""
+    return _read_lines([path])
+
+
 def read_id_links(state_dir: Path) -> dict[str, str]:
     """provisional ``espn:`` id -> NBA game id; a later line wins."""
     path = state_dir / ID_LINKS_PATH
     if not path.exists():
         return {}
-    return {r["provisional_id"]: r["game_id"] for r in _read_lines([path])}
+    return {r["provisional_id"]: r["game_id"] for r in read_records(path)}
 
 
 def settings_path(state_dir: Path) -> Path:

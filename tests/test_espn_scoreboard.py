@@ -167,13 +167,6 @@ def test_real_scoreboard_sample_parses():
     assert sac.home_team == "SAC" and sac.game_date == date(2026, 10, 25)
 
 
-def test_per_day_fallback_body_parses():
-    payload = {"days": {"20261022": {"events": [espn_event("1")]},
-                        "20261023": {"events": [espn_event("2", when="2026-10-24T00:00Z")]}}}
-    parsed = espn.parse_scoreboard(json.dumps(payload).encode())
-    assert [g.espn_id for g in parsed] == ["1", "2"]
-
-
 # --- fetch and archive --------------------------------------------------------
 
 
@@ -196,61 +189,90 @@ class FakeSession:
         return item
 
 
-def test_fetch_scoreboard_asks_for_the_date_range(monkeypatch):
+@pytest.fixture
+def no_sleep(monkeypatch):
     monkeypatch.setattr(espn, "_sleep", lambda s: None)
+
+
+def test_fetch_scoreboard_day_asks_for_one_date(no_sleep):
     session = FakeSession([FakeResponse(200, b'{"events":[1]}')])
-    out = espn.fetch_scoreboard(date(2026, 10, 20), date(2026, 10, 29), session=session)
+    out = espn.fetch_scoreboard_day(date(2026, 10, 20), session=session)
     assert out == b'{"events":[1]}'
-    assert session.calls == [
-        (espn.SCOREBOARD_URL, {"dates": "20261020-20261029", "limit": 1000}, 20)
-    ]
+    assert session.calls == [(espn.SCOREBOARD_URL, {"dates": "20261020", "limit": 1000}, 20)]
 
 
-def test_fetch_scoreboard_retries_twice_on_5xx_and_network(monkeypatch):
+def test_fetch_scoreboard_day_retries_twice_on_5xx_and_network(no_sleep):
     import requests
 
-    monkeypatch.setattr(espn, "_sleep", lambda s: None)
     session = FakeSession([requests.ConnectionError("x"), FakeResponse(503), FakeResponse(200)])
-    espn.fetch_scoreboard(date(2026, 10, 20), date(2026, 10, 20), session=session)
+    espn.fetch_scoreboard_day(date(2026, 10, 20), session=session)
     assert len(session.calls) == 3
     session = FakeSession([FakeResponse(500)] * 3)
     with pytest.raises(espn.EspnFetchError):
-        espn.fetch_scoreboard(date(2026, 10, 20), date(2026, 10, 20), session=session)
+        espn.fetch_scoreboard_day(date(2026, 10, 20), session=session)
     assert len(session.calls) == 3
 
 
-def test_range_refused_falls_back_to_one_request_per_day(monkeypatch):
-    monkeypatch.setattr(espn, "_sleep", lambda s: None)
-    session = FakeSession([
-        FakeResponse(400, b'{"code":400}'),
-        FakeResponse(200, json.dumps({"events": [espn_event("1")]}).encode()),
-        FakeResponse(200, json.dumps({"events": [espn_event("2")]}).encode()),
-    ])
-    out = espn.fetch_scoreboard(date(2026, 10, 20), date(2026, 10, 21), session=session)
-    assert [c[1]["dates"] for c in session.calls] == ["20261020-20261021", "20261020", "20261021"]
-    assert sorted(json.loads(out)["days"]) == ["20261020", "20261021"]
-    assert [g.espn_id for g in espn.parse_scoreboard(out)] == ["1", "2"]
-
-
-def test_other_4xx_is_an_error(monkeypatch):
-    monkeypatch.setattr(espn, "_sleep", lambda s: None)
-    session = FakeSession([FakeResponse(404)])
-    with pytest.raises(espn.EspnFetchError):
-        espn.fetch_scoreboard(date(2026, 10, 20), date(2026, 10, 20), session=session)
-    assert len(session.calls) == 1
+def test_4xx_is_an_error_without_retry(no_sleep):
+    for status in (400, 404):
+        session = FakeSession([FakeResponse(status)])
+        with pytest.raises(espn.EspnFetchError):
+            espn.fetch_scoreboard_day(date(2026, 10, 20), session=session)
+        assert len(session.calls) == 1
 
 
 def test_archive_stores_raw_bytes_under_kind_ident_time():
-    key = espn.archive("scoreboard", b"{}", dt("2026-10-22T15:04:05Z"), "20261020-20261029")
-    assert key == "scoreboard_20261020-20261029_20261022T150405Z.json"
+    key = espn.archive("scoreboard", b"{}", dt("2026-10-22T15:04:05Z"), "20261020")
+    assert key == "scoreboard_20261020_20261022T150405Z.json"
     assert raw_store.load(espn.RAW_SOURCE, key) == b"{}"
 
 
-def test_scoreboard_window_is_slate_minus_two_to_plus_seven():
-    # 15:00 UTC Oct 22 -> slate date Oct 22 (ET of now - 7h).
-    assert games.scoreboard_window(dt("2026-10-22T15:00Z")) == (
-        date(2026, 10, 20), date(2026, 10, 29)
-    )
+def test_download_archives_each_day_exact_bytes_and_parses_from_the_archive(no_sleep):
+    # Odd spacing on purpose: the archive must hold ESPN's bytes untouched.
+    day1 = b'{ "events" : [' + json.dumps(espn_event("1")).encode() + b"] }"
+    day2 = json.dumps({"events": [espn_event("2", when="2026-10-24T00:00Z"),
+                                  espn_event("1")]}, indent=3).encode()
+    session = FakeSession([FakeResponse(200, day1), FakeResponse(200, day2)])
+    fetched = dt("2026-10-22T15:00:00Z")
+    keys = espn.download_scoreboards([date(2026, 10, 22), date(2026, 10, 23)], fetched,
+                                     session=session)
+    assert keys == ["scoreboard_20261022_20261022T150000Z.json",
+                    "scoreboard_20261023_20261022T150000Z.json"]
+    assert raw_store.load(espn.RAW_SOURCE, keys[0]) == day1
+    assert raw_store.load(espn.RAW_SOURCE, keys[1]) == day2
+    assert [g.espn_id for g in espn.load_scoreboards(keys)] == ["1", "2"]
+
+
+def test_download_stops_on_a_failed_day_but_keeps_earlier_archives(no_sleep):
+    session = FakeSession([FakeResponse(200, b'{"events":[]}'), FakeResponse(404)])
+    fetched = dt("2026-10-22T16:00:00Z")
+    with pytest.raises(espn.EspnFetchError) as err:
+        espn.download_scoreboards([date(2026, 10, 22), date(2026, 10, 23)], fetched,
+                                  session=session)
+    assert "20261023" in str(err.value)
+    assert raw_store.exists(espn.RAW_SOURCE, "scoreboard_20261022_20261022T160000Z.json")
+
+
+# 15:00 UTC Oct 22 -> slate date Oct 22 (ET of now - 7h).
+NOW = dt("2026-10-22T15:00Z")
+
+
+def test_near_days_every_run():
+    assert games.scoreboard_days(NOW, include_far=False) == [
+        date(2026, 10, 21), date(2026, 10, 22), date(2026, 10, 23),
+    ]
+
+
+def test_far_days_complete_the_window_minus_two_to_plus_seven():
+    days = games.scoreboard_days(NOW, include_far=True)
+    assert days == [date(2026, 10, 20) + timedelta(days=n) for n in range(10)]
+    assert len(days) <= espn.MAX_SCOREBOARD_REQUESTS
+
+
+def test_far_due_after_sixty_minutes():
+    assert games.far_due(None, NOW) is True
+    assert games.far_due(NOW - timedelta(minutes=59, seconds=59), NOW) is False
+    assert games.far_due(NOW - timedelta(minutes=60), NOW) is True
 
 
 # --- sync_games -------------------------------------------------------------

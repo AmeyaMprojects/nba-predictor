@@ -30,8 +30,11 @@ COMPETITIVE_SEASON_TYPES = frozenset({2, 3, 5})
 ESPN_LINKS_PATH = "schedule/espn_links.jsonl"
 SOURCE = "espn"
 
-WINDOW_BEFORE = timedelta(days=2)
-WINDOW_AFTER = timedelta(days=7)
+# Near days (slate -1..+1) are fetched every run; far days (slate -2 and
+# +2..+7) only when the previous far fetch is FAR_INTERVAL old (`far_due`).
+NEAR_OFFSETS = (-1, 0, 1)
+FAR_OFFSETS = (-2, 2, 3, 4, 5, 6, 7)
+FAR_INTERVAL = timedelta(minutes=60)
 # Fields whose change makes a new schedule row.
 _CHANGE_FIELDS = ("game_date", "tip_off_utc", "home_team", "away_team", "is_neutral")
 
@@ -45,10 +48,19 @@ class GameSync:
     skipped: list[str] = field(default_factory=list)
 
 
-def scoreboard_window(now: datetime) -> tuple[date, date]:
-    """ET dates to ask the scoreboard for: slate date - 2 .. slate date + 7."""
+def scoreboard_days(now: datetime, include_far: bool) -> list[date]:
+    """ET dates to fetch this run, in order: the near days always, plus the
+    far days when ``include_far`` (together slate - 2 .. slate + 7)."""
     slate = slate_date(now)
-    return slate - WINDOW_BEFORE, slate + WINDOW_AFTER
+    offsets = NEAR_OFFSETS + (FAR_OFFSETS if include_far else ())
+    return sorted(slate + timedelta(days=n) for n in offsets)
+
+
+def far_due(last_far_at: datetime | None, now: datetime) -> bool:
+    """True when the far days should be fetched: never fetched, or the last
+    far fetch is at least FAR_INTERVAL old."""
+    db.require_utc(now, "now")
+    return last_far_at is None or now - last_far_at >= FAR_INTERVAL
 
 
 def provisional_id(espn_id: str) -> str:
@@ -231,7 +243,7 @@ def read_espn_links(state_dir: Path) -> dict[str, str]:
     path = state_dir / ESPN_LINKS_PATH
     if not path.exists():
         return {}
-    return {r["espn_id"]: r["game_id"] for r in state._read_lines([path])}
+    return {r["espn_id"]: r["game_id"] for r in state.read_records(path)}
 
 
 def apply_sync(con, state_dir: Path, sync: GameSync) -> list[Path]:

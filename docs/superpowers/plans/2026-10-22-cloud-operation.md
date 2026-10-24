@@ -45,7 +45,7 @@
   - At most 2 windows per slate day, and at most 2 attempts per window.
   - Skip the fetch when the last recorded `x-requests-remaining` is below 30.
   - Worst case is 12 credits a day, normal is about 6.
-- **ESPN politeness.** At most 1 scoreboard and 15 summary requests per run, 20 s timeout, 2 retries on network errors or 5xx.
+- **ESPN politeness.** Scoreboard: one request per ET date (ESPN refuses the date-range form with HTTP 400) -- the 3 near days (slate −1..+1) every run, the 7 far days (slate −2, +2..+7) only when the last far fetch is ≥ 60 min old; at most 10 per run. At most 15 summary requests per run. 20 s timeout, 2 retries on network errors or 5xx.
 - **No network in tests.** Inject fetchers and `gh`/git runners. Git tests use throwaway repos and bare remotes under `tmp_path`.
 - **Visible failures.**
   - A source that fails is recorded as a failed step in the run summary, and the run continues.
@@ -294,7 +294,7 @@ def test_export_state_cli_prints_counts(tmp_path, monkeypatch): ...
 - Produces:
   - `espn.SCOREBOARD_URL = "https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard"`
   - `espn.RAW_SOURCE = "espn"`
-  - `espn.fetch_scoreboard(first: date, last: date, session=None) -> bytes` (params `{"dates": f"{first:%Y%m%d}-{last:%Y%m%d}", "limit": 1000}`)
+  - `espn.fetch_scoreboard_day(day: date, session=None) -> bytes` (params `{"dates": f"{day:%Y%m%d}", "limit": 1000}`; the range form returns HTTP 400, ruling 2026-10-24), `espn.download_scoreboards(days, fetched_at, session=None) -> list[str]` (archives each day's exact bytes) and `espn.load_scoreboards(keys) -> list[EspnGame]`
   - `espn.archive(kind: str, body: bytes, fetched_at: datetime, ident: str) -> str` (raw_store key `f"{kind}_{ident}_{fetched_at:%Y%m%dT%H%M%SZ}.json"`)
   - `espn.EspnGame` (frozen): `espn_id, season, season_type: int, game_date: date, tip_off_utc: datetime | None, home_team: str | None, away_team: str | None, home_name, away_name, neutral: bool, venue_name, venue_city, venue_state, completed: bool, home_points: int | None, away_points: int | None`
   - `espn.parse_scoreboard(body: bytes) -> list[EspnGame]`
@@ -327,7 +327,7 @@ def test_export_state_cli_prints_counts(tmp_path, monkeypatch): ...
      - An ESPN tip of None never replaces a known tip.
      - `observed_at = fetched_at`.
    - **Final:** only if `completed`, both points are set, `fetched_at >= tip + FINISHED_AFTER_TIP`, and the game has no FINAL row. Write a games row with `status 'FINAL'`, `reconstructed False`, `observed_at fetched_at`, and `source "espn"` (in state only).
-3. The scoreboard window is ET dates `slate_date(now) − 2` to `slate_date(now) + 7`.
+3. The scoreboard window is ET dates `slate_date(now) − 2` to `slate_date(now) + 7`: `games.scoreboard_days(now, include_far)` gives the near days (−1..+1) every run and adds the far days when `games.far_due(last_far_at, now)` (≥ 60 min since the last far fetch).
 
 **Tests:**
 ```python

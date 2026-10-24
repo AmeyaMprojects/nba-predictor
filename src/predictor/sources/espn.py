@@ -1,7 +1,8 @@
 """ESPN's public NBA scoreboard: schedule, tip-off times and final scores.
 
-One scoreboard request per run covers a window of ET dates. The response
-bytes go to ``raw_store`` (``archive``) before anything parses them.
+One request per ET date (``dates=YYYYMMDD``). Each day's response bytes go
+to ``raw_store`` exactly as received (``download_scoreboards``), and parsing
+reads them back from the archive (``load_scoreboards``).
 
 Response shape, confirmed against real responses on 2026-10-24 (see
 ``tests/fixtures/espn/scoreboard_sample.json``):
@@ -16,10 +17,10 @@ Response shape, confirmed against real responses on 2026-10-24 (see
   ("121"), and "0" before tip-off, so a score counts only once completed.
 
 The range form ``dates=YYYYMMDD-YYYYMMDD`` answered HTTP 400 ("Failed to get
-events endpoint.") on 2026-10-24 for every range tried, while the single-day
-form worked. `fetch_scoreboard` therefore asks for the range first and, on a
-400, falls back to one request per day, returning ``{"days": {YYYYMMDD:
-<that day's response>}}``; `parse_scoreboard` reads both forms.
+events endpoint.") on 2026-10-24 for every range tried, so it is never used.
+Politeness: at most MAX_SCOREBOARD_REQUESTS day requests per run (3 near
+days every run, 7 far days at most hourly; see cloud/games.py), 20 s
+timeout, 2 retries on network errors or 5xx.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 
 import requests
@@ -41,6 +42,8 @@ EASTERN = ZoneInfo("America/New_York")
 
 TIMEOUT_SECONDS = 20
 RETRIES = 2  # extra attempts after the first, on network errors or 5xx
+# slate-2 .. slate+7: the most day requests one run may make.
+MAX_SCOREBOARD_REQUESTS = 10
 _RETRY_PAUSE_SECONDS = 2.0
 
 
@@ -96,36 +99,22 @@ def _get(session, dates: str) -> tuple[int, bytes]:
     raise EspnFetchError(f"{last} for dates={dates} after {RETRIES + 1} attempts")
 
 
-def _ok_json(status: int, content: bytes, dates: str) -> dict:
+def fetch_scoreboard_day(day: date, session=None) -> bytes:
+    """ESPN's scoreboard for one ET date, as the exact response bytes."""
+    session = session or requests.Session()
+    dates = f"{day:%Y%m%d}"
+    status, content = _get(session, dates)
     if status != 200:
         raise EspnFetchError(f"ESPN returned HTTP {status} for dates={dates}")
     try:
         payload = json.loads(content)
     except ValueError:
-        raise EspnFetchError(f"ESPN returned a response that is not JSON for dates={dates}") from None
+        raise EspnFetchError(
+            f"ESPN returned a response that is not JSON for dates={dates}"
+        ) from None
     if not isinstance(payload, dict):
         raise EspnFetchError(f"ESPN returned an unexpected response for dates={dates}")
-    return payload
-
-
-def fetch_scoreboard(first: date, last: date, session=None) -> bytes:
-    """The scoreboard for ET dates ``first``..``last`` as response bytes.
-
-    One range request; if ESPN refuses the range (HTTP 400), one request per
-    day, combined as ``{"days": {...}}`` (see the module docstring)."""
-    session = session or requests.Session()
-    dates = f"{first:%Y%m%d}-{last:%Y%m%d}"
-    status, content = _get(session, dates)
-    if status != 400 or first == last:
-        _ok_json(status, content, dates)
-        return content
-    days: dict[str, dict] = {}
-    day = first
-    while day <= last:
-        key = f"{day:%Y%m%d}"
-        days[key] = _ok_json(*_get(session, key), key)
-        day += timedelta(days=1)
-    return json.dumps({"days": days}, sort_keys=True, separators=(",", ":")).encode()
+    return content
 
 
 def archive(kind: str, body: bytes, fetched_at: datetime, ident: str) -> str:
@@ -134,6 +123,29 @@ def archive(kind: str, body: bytes, fetched_at: datetime, ident: str) -> str:
     raw_store.store(RAW_SOURCE, key, body, fetched_at,
                     meta={"kind": kind, "fetched_at": fetched_at.isoformat()})
     return key
+
+
+def download_scoreboards(days: list[date], fetched_at: datetime, session=None) -> list[str]:
+    """Fetch each day and archive its exact bytes (key ``scoreboard_<YYYYMMDD>_
+    <fetched_at>.json``); returns the keys in ``days`` order. A failed day
+    raises EspnFetchError; days archived before it stay archived."""
+    if len(days) > MAX_SCOREBOARD_REQUESTS:
+        raise ValueError(f"{len(days)} scoreboard days exceeds {MAX_SCOREBOARD_REQUESTS}")
+    session = session or requests.Session()
+    keys = []
+    for day in days:
+        body = fetch_scoreboard_day(day, session=session)
+        keys.append(archive("scoreboard", body, fetched_at, f"{day:%Y%m%d}"))
+    return keys
+
+
+def load_scoreboards(keys: list[str]) -> list[EspnGame]:
+    """Parse archived scoreboard responses; each event once (first wins)."""
+    seen: dict[str, EspnGame] = {}
+    for key in keys:
+        for game in parse_scoreboard(raw_store.load(RAW_SOURCE, key)):
+            seen.setdefault(game.espn_id, game)
+    return list(seen.values())
 
 
 # --- parse --------------------------------------------------------------------
@@ -156,15 +168,6 @@ def _points(score) -> int | None:
     if score is None or score == "":
         return None
     return int(float(score))
-
-
-def _events(payload: dict) -> list[dict]:
-    if "days" in payload:
-        out: list[dict] = []
-        for key in sorted(payload["days"]):
-            out.extend(payload["days"][key].get("events") or [])
-        return out
-    return payload.get("events") or []
 
 
 def _parse_event(event: dict) -> EspnGame:
@@ -202,9 +205,9 @@ def _parse_event(event: dict) -> EspnGame:
 
 
 def parse_scoreboard(body: bytes) -> list[EspnGame]:
-    """Every event in a scoreboard response (range or per-day form), once."""
+    """Every event in one scoreboard response, once."""
     seen: dict[str, EspnGame] = {}
-    for event in _events(json.loads(body)):
+    for event in json.loads(body).get("events") or []:
         game = _parse_event(event)
         seen.setdefault(game.espn_id, game)
     return list(seen.values())
