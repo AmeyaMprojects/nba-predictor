@@ -13,7 +13,9 @@ at a throwaway git repo (never the real predictor checkout; see
 global-constraints.md) via `_point_repo_dir_at_tmp`.
 """
 
+import json
 import subprocess
+from datetime import UTC, datetime, timedelta
 
 from typer.testing import CliRunner
 
@@ -128,8 +130,117 @@ def test_status_exits_zero_when_every_source_is_fresh(tmp_path, monkeypatch):
         ["0022400561", "2024-25", now.date(), "PHI", "1", False, "espn", now],
     )
     con.close()
+    _fake_gh(monkeypatch, now - timedelta(minutes=10))
 
     result = runner.invoke(cli.app, ["status"])
 
-    assert result.exit_code == 0
+    assert result.exit_code == 0, result.stdout
     assert "ALL OK" in result.stdout
+
+
+# --- Task 11: cloud runs, and status on cloud state -------------------------
+
+
+def _fake_gh(monkeypatch, created_at, conclusion="success"):
+    """Points the CLI's gh runner at a fake that answers `gh run list` with
+    one run -- tests never run the real gh."""
+    calls = []
+
+    def fake(args, **kwargs):
+        calls.append((args, kwargs))
+        runs = [{"createdAt": created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                 "status": "completed", "conclusion": conclusion}]
+        return subprocess.CompletedProcess(args, 0, json.dumps(runs), "")
+
+    monkeypatch.setattr(cli, "_gh_runner", fake)
+    return calls
+
+
+def test_mac_status_includes_cloud_runs(tmp_path, monkeypatch):
+    _point_settings_at_tmp(tmp_path, monkeypatch)
+    repo = _point_repo_dir_at_tmp(tmp_path, monkeypatch)
+    calls = _fake_gh(monkeypatch, datetime.now(UTC) - timedelta(minutes=5))
+
+    result = runner.invoke(cli.app, ["status"])
+
+    assert "cloud_runs: last cloud run 5m ago (success)" in result.stdout
+    assert calls and calls[0][1]["cwd"] == repo
+    # The Mac's own checks are all still there.
+    for name in ("games", "news_items", "schedule", "live_results", "log_published"):
+        assert f"] {name}:" in result.stdout
+
+
+def test_mac_status_without_gh_says_could_not_check(tmp_path, monkeypatch):
+    _point_settings_at_tmp(tmp_path, monkeypatch)
+    _point_repo_dir_at_tmp(tmp_path, monkeypatch)
+
+    def missing(args, **kwargs):
+        raise FileNotFoundError("gh")
+
+    monkeypatch.setattr(cli, "_gh_runner", missing)
+    result = runner.invoke(cli.app, ["status"])
+
+    assert "cloud_runs: could not check" in result.stdout
+    assert "gh auth status" in result.stdout
+    assert result.exit_code == 1
+
+
+def _state_checkout(tmp_path, branch="cloud-shadow"):
+    """A throwaway state checkout on `branch`, pushed to a bare remote, with
+    a few cloud state files."""
+    from predictor.cloud import state as cloud_state
+
+    repo = tmp_path / "state-repo"
+    repo.mkdir()
+    assert _git(repo, "init", "-b", branch).returncode == 0
+    state_dir = repo / "state"
+    now = datetime.now(UTC)
+    cloud_state.append_records(
+        state_dir / "schedule" / f"far_fetches-{now:%Y-%m}.jsonl",
+        [{"fetched_at": now - timedelta(minutes=30), "days": 7}],
+    )
+    assert _git(repo, "add", "state").returncode == 0
+    assert _git(repo, "commit", "-m", "state: seed").returncode == 0
+    remote = tmp_path / "state-remote.git"
+    remote.mkdir()
+    assert _git(remote, "init", "--bare", "-b", branch).returncode == 0
+    assert _git(repo, "remote", "add", "origin", str(remote)).returncode == 0
+    assert _git(repo, "push", "origin", branch).returncode == 0
+    return repo
+
+
+def test_status_from_state_skips_news(tmp_path, monkeypatch):
+    s = _point_settings_at_tmp(tmp_path / "data", monkeypatch)
+    monkeypatch.setenv("GIT_AUTHOR_NAME", "Predictor Bot")
+    monkeypatch.setenv("GIT_AUTHOR_EMAIL", "bot@example.invalid")
+    monkeypatch.setenv("GIT_COMMITTER_NAME", "Predictor Bot")
+    monkeypatch.setenv("GIT_COMMITTER_EMAIL", "bot@example.invalid")
+    monkeypatch.setenv("PREDICTOR_PUBLISH_BRANCH", "cloud-shadow")
+    repo = _state_checkout(tmp_path)
+    calls = _fake_gh(monkeypatch, datetime.now(UTC) - timedelta(minutes=12))
+
+    result = runner.invoke(cli.app, ["status", "--from-state", str(repo)])
+
+    out = result.stdout
+    assert "news_items: news is archived by the Mac (research only)" in out
+    assert "[STALE] news_items" not in out
+    assert "cloud_runs: last cloud run 12m ago (success)" in out
+    assert "player_links:" in out
+    assert "prediction_files: committed on cloud-shadow" in out
+    assert "log_published: nothing waiting to be pushed" in out
+    # Schedule freshness comes from the far-fetch record, not observed_at.
+    assert "[OK   ] schedule" in out
+    assert "launchctl" not in out and "com.predictor" not in out
+    assert calls[0][1]["cwd"] == repo
+    # The rebuilt DB is temporary: nothing written to the data dir's DB.
+    assert not s.db_path.exists()
+    # The empty tables are still problems, so the exit code follows the rule.
+    assert result.exit_code == 1
+
+
+def test_status_from_state_without_a_state_dir_is_refused(tmp_path, monkeypatch):
+    _point_settings_at_tmp(tmp_path / "data", monkeypatch)
+    _fake_gh(monkeypatch, datetime.now(UTC))
+    result = runner.invoke(cli.app, ["status", "--from-state", str(tmp_path / "nowhere")])
+    assert result.exit_code == 1
+    assert "state" in result.output

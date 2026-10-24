@@ -64,3 +64,16 @@ def _repo_dir_is_never_the_real_checkout(monkeypatch, tmp_path_factory):
 
     scratch = tmp_path_factory.mktemp("not-the-real-repo")
     monkeypatch.setattr(cli, "_repo_dir", lambda: scratch)
+
+
+@pytest.fixture(autouse=True)
+def _gh_is_never_run(monkeypatch):
+    """`status` asks GitHub about cloud runs with `gh run list`. Tests never
+    run the real gh: by default it is "not installed" (status then reports a
+    plain "could not check"); tests that need answers install a fake."""
+    from predictor import cli
+
+    def no_gh(*args, **kwargs):
+        raise FileNotFoundError("gh is not run in tests")
+
+    monkeypatch.setattr(cli, "_gh_runner", no_gh)

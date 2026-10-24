@@ -524,7 +524,7 @@ def _push_if_safe(
     (retrying an earlier failed push); ``committed`` only shapes the
     wording of the result. ``rebase=False`` (cloud runs) never rewrites a
     local commit: if the remote moved, nothing is pushed."""
-    lead = "committed, but" if committed else "earlier prediction commit(s) are waiting, but"
+    lead = "committed, but" if committed else "earlier commit(s) are waiting, but"
 
     if not _has_remote(repo_dir):
         return PublishResult(
@@ -597,7 +597,7 @@ def _push_if_safe(
     return PublishResult(
         committed=False,
         pushed=True,
-        message=f"pushed {len(shas)} earlier prediction commit(s)",
+        message=f"pushed {len(shas)} earlier commit(s)",
     )
 
 

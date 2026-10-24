@@ -550,3 +550,313 @@ def test_injury_reports_fresh_within_36_hours_is_not_stale(con):
     health = {h.name: h for h in status.check_sources(con, NOW)}
     assert health["injury_reports"].stale is False
     assert health["player_boxscores"].stale is True
+
+
+# --- Task 11 (cloud operation): status on cloud state ----------------------
+
+import json  # noqa: E402
+
+from predictor.cloud import state as cloud_state  # noqa: E402
+
+CLOUD_NOW = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
+
+
+def _run(created_at, status_="completed", conclusion="success"):
+    return {"createdAt": created_at, "status": status_, "conclusion": conclusion}
+
+
+class _FakeGh:
+    """A `subprocess.run` stand-in for `gh run list`: records every call
+    and returns the given runs as JSON (or raises / fails as told)."""
+
+    def __init__(self, runs=None, *, raises=None, returncode=0, stderr="", stdout=None):
+        self.runs = runs or []
+        self.raises = raises
+        self.returncode = returncode
+        self.stderr = stderr
+        self.stdout = stdout
+        self.calls = []
+
+    def __call__(self, args, **kwargs):
+        self.calls.append((args, kwargs))
+        if self.raises is not None:
+            raise self.raises
+        out = self.stdout if self.stdout is not None else json.dumps(self.runs)
+        return subprocess.CompletedProcess(args, self.returncode, out, self.stderr)
+
+
+def test_cloud_stale_after_two_hours():
+    gh = _FakeGh([_run("2026-10-22T10:00:00Z")])
+    fresh = status.check_cloud(CLOUD_NOW, runner=gh)
+    assert fresh.name == "cloud_runs"
+    assert fresh.stale is False
+    assert fresh.advice == ""
+    late = status.check_cloud(CLOUD_NOW + timedelta(seconds=1), runner=gh)
+    assert late.stale is True
+    assert "live.yml" in late.advice
+    assert status.CLOUD_STALE == timedelta(hours=2)
+
+
+def test_cloud_runs_gh_without_prompts_and_with_a_timeout():
+    gh = _FakeGh([_run("2026-10-22T11:23:00Z")])
+    status.check_cloud(CLOUD_NOW, runner=gh)
+    (args, kwargs), = gh.calls
+    assert args == ["gh", "run", "list", "--workflow", "live.yml", "--limit", "5",
+                    "--json", "createdAt,status,conclusion"]
+    assert kwargs["timeout"] == 20
+    assert kwargs["env"]["GH_PROMPT_DISABLED"] == "1"
+    assert kwargs["capture_output"] is True
+    assert kwargs.get("stdin") == subprocess.DEVNULL
+
+
+def test_cloud_detail_reads_minutes_ago():
+    gh = _FakeGh([_run("2026-10-22T11:23:00Z"), _run("2026-10-22T11:08:00Z")])
+    health = status.check_cloud(CLOUD_NOW, runner=gh)
+    assert health.detail == "last cloud run 37m ago (success)"
+    text = status.format_report([health])
+    assert "[OK   ] cloud_runs: last cloud run 37m ago (success)" in text
+
+
+def test_cloud_detail_for_a_run_in_progress():
+    gh = _FakeGh([_run("2026-10-22T11:53:00Z", "in_progress", ""),
+                  _run("2026-10-22T11:38:00Z")])
+    health = status.check_cloud(CLOUD_NOW, runner=gh)
+    assert health.stale is False
+    assert health.detail == "last cloud run 7m ago (in_progress)"
+
+
+def test_cloud_three_failures_is_stale():
+    gh = _FakeGh([
+        _run("2026-10-22T11:53:00Z", "in_progress", ""),
+        _run("2026-10-22T11:38:00Z", conclusion="failure"),
+        _run("2026-10-22T11:23:00Z", conclusion="failure"),
+        _run("2026-10-22T11:08:00Z", conclusion="failure"),
+        _run("2026-10-22T10:53:00Z"),
+    ])
+    health = status.check_cloud(CLOUD_NOW, runner=gh)
+    assert health.stale is True
+    assert "3" in health.detail and "fail" in health.detail
+    assert "live.yml" in health.advice
+
+
+def test_cloud_two_failures_is_not_stale():
+    gh = _FakeGh([
+        _run("2026-10-22T11:38:00Z", conclusion="failure"),
+        _run("2026-10-22T11:23:00Z", conclusion="failure"),
+        _run("2026-10-22T11:08:00Z"),
+    ])
+    assert status.check_cloud(CLOUD_NOW, runner=gh).stale is False
+
+
+def test_cloud_no_runs_is_stale():
+    health = status.check_cloud(CLOUD_NOW, runner=_FakeGh([]))
+    assert health.stale is True
+    assert "no cloud run" in health.detail
+
+
+def test_cloud_gh_missing_is_reported():
+    gh = _FakeGh(raises=FileNotFoundError("gh"))
+    health = status.check_cloud(CLOUD_NOW, runner=gh)
+    assert health.stale is True
+    assert "gh auth status" in health.advice
+    assert health.detail.startswith("could not check")
+
+
+def test_cloud_gh_timeout_is_a_plain_could_not_check():
+    gh = _FakeGh(raises=subprocess.TimeoutExpired(["gh"], 20))
+    health = status.check_cloud(CLOUD_NOW, runner=gh)
+    assert health.stale is True
+    assert health.detail.startswith("could not check")
+    assert "gh auth status" in health.advice
+
+
+def test_cloud_gh_error_never_leaks_a_token():
+    token = "ghs_" + "A1b2C3d4" * 5
+    gh = _FakeGh(returncode=1, stderr=(
+        f"error connecting to https://x-access-token:{token}@github.com/o/r "
+        f"(token {token}; github_pat_{'Z9' * 20})"
+    ))
+    health = status.check_cloud(CLOUD_NOW, runner=gh)
+    text = status.format_report([health])
+    assert health.stale is True
+    assert health.detail.startswith("could not check")
+    assert token not in text
+    assert "github_pat_Z9" not in text
+    assert "gh auth status" in health.advice
+
+
+def test_cloud_unreadable_gh_output_is_a_plain_could_not_check():
+    health = status.check_cloud(CLOUD_NOW, runner=_FakeGh(stdout="not json"))
+    assert health.stale is True
+    assert health.detail.startswith("could not check")
+
+
+# --- check_live on cloud state ----------------------------------------------
+
+
+def test_check_live_cloud_advice_names_the_workflow_and_the_secret(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    assert _git(repo, "checkout", "-b", "cloud-shadow").returncode == 0
+    assert _git(repo, "push", "origin", "cloud-shadow").returncode == 0
+    _in_season(con)
+    health = {h.name: h for h in status.check_live(con, repo, NOW, branch="cloud-shadow",
+                                                   cloud=True)}
+    assert health["prediction_files"].stale is False
+    assert health["log_published"].stale is False
+    odds = health["odds"]
+    assert odds.stale is True
+    assert "live.yml" in odds.advice
+    assert "gh secret set ODDS_API_KEY" in odds.advice
+    for h in health.values():
+        assert "launchd" not in h.advice and "com.predictor" not in h.advice
+        assert "odds_api_key" not in h.advice
+    text = status.format_report(list(health.values()))
+    assert "prediction_files: committed on cloud-shadow" in text
+
+
+def test_check_live_cloud_results_and_log_advice_name_the_run_summary(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    insert_schedule_row(con, "0022400010", (NOW - timedelta(days=1)).date(), "PHI", "NYK",
+                        NOW - timedelta(hours=20), season=SEASON)
+    health = {h.name: h for h in status.check_live(con, repo, NOW, cloud=True)}
+    for name in ("live_results", "prediction_log"):
+        assert health[name].stale is True
+        assert "live.yml" in health[name].advice
+        assert "com.predictor" not in health[name].advice
+        assert "launchd" not in health[name].advice
+
+
+def test_log_published_advice_no_longer_says_pull_by_hand(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    _commit_prediction(repo, 1)
+    advice = {h.name: h for h in status.check_live(con, repo, NOW)}["log_published"].advice
+    assert "git pull" not in advice
+    assert "automatically" in advice
+    assert "git push origin main" in advice
+
+
+def test_log_published_cloud_advice_says_the_next_run_redoes_the_work(con, tmp_path):
+    repo = _repo_with_remote(tmp_path / "repo")
+    _commit_prediction(repo, 1)
+    advice = {h.name: h for h in status.check_live(con, repo, NOW, cloud=True)}[
+        "log_published"].advice
+    assert "git pull" not in advice
+    assert "next" in advice and "live.yml" in advice
+
+
+# --- advice for the new sources ----------------------------------------------
+
+
+def test_new_sources_have_run_advice(con):
+    health = {h.name: h for h in status.check_sources(con, NOW)}
+    assert health["injury_reports"].stale is True
+    assert health["injury_reports"].advice.startswith("Run: ")
+    assert health["player_boxscores"].stale is True
+    assert health["player_boxscores"].advice.startswith("Run: ")
+
+
+# --- check_sources on cloud state ---------------------------------------------
+
+
+def _far_fetch(state_dir, at):
+    path = state_dir / "schedule" / f"far_fetches-{at:%Y-%m}.jsonl"
+    cloud_state.append_records(path, [{"fetched_at": at, "days": 7}])
+
+
+def test_cloud_schedule_freshness_uses_the_fetch_record_not_observed_at(con, tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    # The last schedule CHANGE was 5 days ago -- nothing moved since.
+    insert_schedule_row(con, "0022400561", NOW.date(), "PHI", "NYK",
+                        NOW + timedelta(hours=3), observed_at=NOW - timedelta(days=5))
+    _far_fetch(state_dir, NOW - timedelta(hours=2))
+    mac = {h.name: h for h in status.check_sources(con, NOW)}
+    assert mac["schedule"].stale is True  # the Mac's own check is unchanged
+    cloud = {h.name: h for h in status.check_sources(con, NOW, cloud_state=state_dir)}
+    assert cloud["schedule"].stale is False
+    assert cloud["schedule"].latest == NOW - timedelta(hours=2)
+    assert "schedule: 1 change rows; ESPN scoreboard last fetched 2h ago" in status.format_report(
+        list(cloud.values()))
+
+
+def test_cloud_schedule_stale_when_no_fetch_is_recorded(con, tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    insert_schedule_row(con, "0022400561", NOW.date(), "PHI", "NYK",
+                        NOW + timedelta(hours=3), observed_at=NOW - timedelta(days=5))
+    _far_fetch(state_dir, NOW - timedelta(hours=40))
+    cloud = {h.name: h for h in status.check_sources(con, NOW, cloud_state=state_dir)}
+    assert cloud["schedule"].stale is True
+    assert "live.yml" in cloud["schedule"].advice
+    assert "launchctl" not in cloud["schedule"].advice
+
+
+def test_cloud_injury_status_uses_the_latest_report_time(con, tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    _add_injury(con, NOW - timedelta(days=4))  # last change
+    seen = NOW - timedelta(hours=1)  # an unchanged report since
+    con.execute(
+        f"INSERT INTO {db.POINT_IN_TIME_TABLES['injury_reports']} (observed_at, fetched_at,"
+        " source_key, row_count, content_sha) VALUES (?,?,?,?,?)",
+        [seen, seen, "k", 1, "b" * 64],
+    )
+    assert {h.name: h for h in status.check_sources(con, NOW)}["injury_status"].stale is True
+    cloud = {h.name: h for h in status.check_sources(con, NOW, cloud_state=state_dir)}
+    assert cloud["injury_status"].stale is False
+
+
+def test_cloud_sources_skip_news(con, tmp_path):
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    cloud = {h.name: h for h in status.check_sources(con, NOW, cloud_state=state_dir)}
+    news = cloud["news_items"]
+    assert news.stale is False
+    assert news.detail == "news is archived by the Mac (research only)"
+
+
+# --- player_links --------------------------------------------------------------
+
+
+def _box(con, player_id, name, minutes, game_date, game_id="g1"):
+    con.execute(
+        f"INSERT INTO {db.POINT_IN_TIME_TABLES['player_boxscores']} (game_id, season,"
+        " game_date, team, player_id, espn_player_id, player_name, did_not_play, minutes,"
+        " source, observed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        [game_id, "2026-27", game_date, "PHI", player_id, player_id.removeprefix("espn:"),
+         name, minutes == 0, minutes, "espn", CLOUD_NOW],
+    )
+
+
+def test_player_links_unmatched_warns(tmp_path):
+    c = db.connect(tmp_path / "p.duckdb")
+    db.migrate(c)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    recent = (CLOUD_NOW - timedelta(days=2)).date()
+    _box(c, "1627732", "Linked Guy", 30.0, recent)
+    _box(c, "espn:999", "Benchwarmer Zero", 0.0, recent)
+    _box(c, "espn:998", "Old Timer", 25.0, (CLOUD_NOW - timedelta(days=9)).date())
+    for i in range(6):
+        _box(c, f"espn:90{i}", f"New Guy {i}", 5.0 + i, recent)
+    health = status.check_player_links(state_dir, c, CLOUD_NOW)
+    assert health.name == "player_links"
+    assert health.stale is True
+    assert "add them to state/players/aliases.json" in health.detail
+    named = [f"New Guy {i}" for i in range(6) if f"New Guy {i}" in health.detail]
+    assert len(named) == 5
+    assert "Benchwarmer Zero" not in health.detail
+    assert "Old Timer" not in health.detail
+    assert "Linked Guy" not in health.detail
+
+
+def test_player_links_ok_when_every_recent_player_is_linked(tmp_path):
+    c = db.connect(tmp_path / "p.duckdb")
+    db.migrate(c)
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    _box(c, "1627732", "Linked Guy", 30.0, (CLOUD_NOW - timedelta(days=1)).date())
+    _box(c, "espn:999", "Benchwarmer Zero", 0.0, (CLOUD_NOW - timedelta(days=1)).date())
+    health = status.check_player_links(state_dir, c, CLOUD_NOW)
+    assert health.stale is False
+    assert health.advice == ""

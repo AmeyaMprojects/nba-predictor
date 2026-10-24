@@ -1151,25 +1151,46 @@ def ingest_odds_history_cmd() -> None:
         raise typer.Exit(code=1)
 
 
-@app.command()
-def status() -> None:
-    """Report data freshness in plain English."""
-    from predictor import db
-    from predictor import status as status_mod
-    from predictor.config import settings
+def _gh_runner(*args, **kwargs):
+    """`subprocess.run` for `status`'s `gh run list` -- one indirection point
+    so tests replace it (tests never run the real gh)."""
+    import subprocess
 
-    settings.ensure_dirs()
-    con = db.connect()
-    db.migrate(con)
+    return subprocess.run(*args, **kwargs)
+
+
+@app.command()
+def status(
+    from_state: str = typer.Option(
+        None,
+        "--from-state",
+        help="A checkout of the cloud's publish branch: report on its state/ "
+        "(rebuilt into a temporary database) instead of this Mac's database.",
+    ),
+) -> None:
+    """Report data freshness in plain English."""
+    from predictor import status as status_mod
+
     now = _now()
-    repo_dir = _repo_dir()
-    health = status_mod.check_sources(con, now)
-    # check_live reports the live-operation pieces check_sources cannot
-    # see: whether results are actually being captured, whether today's
-    # predictions are actually being logged, whether the log is actually
-    # reaching GitHub, and whether live odds are arriving. Appended to the same report so a human sees
-    # the whole pipeline's health in one glance.
-    health = health + status_mod.check_live(con, repo_dir, now)
+    if from_state is not None:
+        health = _status_from_state(from_state, now)
+    else:
+        from predictor import db
+        from predictor.config import settings
+
+        settings.ensure_dirs()
+        con = db.connect()
+        db.migrate(con)
+        repo_dir = _repo_dir()
+        health = status_mod.check_sources(con, now)
+        # check_live reports the live-operation pieces check_sources cannot
+        # see: whether results are actually being captured, whether today's
+        # predictions are actually being logged, whether the log is actually
+        # reaching GitHub, and whether live odds are arriving. Appended to
+        # the same report so a human sees the whole pipeline's health in one
+        # glance. check_cloud adds whether the cloud's live.yml is running.
+        health = health + status_mod.check_live(con, repo_dir, now)
+        health.append(status_mod.check_cloud(now, runner=_gh_runner, cwd=repo_dir))
     typer.echo(status_mod.format_report(health))
     # I5: every OTHER command in this CLI exits 1 on a problem; `status`
     # (the one command whose whole purpose is health reporting) did not,
@@ -1178,6 +1199,42 @@ def status() -> None:
     # output text itself is unchanged; only the exit code is new.
     if any(source.stale for source in health):
         raise typer.Exit(code=1)
+
+
+def _status_from_state(from_state: str, now):
+    """`status --from-state PATH`: rebuild a throwaway DuckDB from
+    PATH/state (in a temporary directory, never the data dir), then judge
+    it by the cloud's rules."""
+    import tempfile
+    from pathlib import Path
+
+    from predictor import config, db
+    from predictor import status as status_mod
+    from predictor.cloud import state
+
+    repo = Path(from_state).expanduser()
+    state_dir = repo / state.STATE_DIRNAME
+    if not state_dir.is_dir():
+        typer.echo(f"no state/ directory in {repo}: point --from-state at a checkout "
+                   "of the cloud's publish branch.")
+        raise typer.Exit(code=1)
+    try:
+        branch = config.publish_branch()
+    except ValueError as exc:
+        typer.echo(str(exc))
+        raise typer.Exit(code=1) from None
+    with tempfile.TemporaryDirectory(prefix="predictor-status-") as tmp:
+        db_path = Path(tmp) / "state.duckdb"
+        state.rebuild_db(state_dir, db_path)
+        con = db.connect(db_path)
+        try:
+            health = status_mod.check_sources(con, now, cloud_state=state_dir)
+            health = health + status_mod.check_live(con, repo, now, branch=branch, cloud=True)
+            health.append(status_mod.check_player_links(state_dir, con, now))
+        finally:
+            con.close()
+    health.append(status_mod.check_cloud(now, runner=_gh_runner, cwd=repo))
+    return health
 
 
 @app.command()

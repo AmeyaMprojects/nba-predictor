@@ -45,13 +45,38 @@ the REAL refresh cadence of each source, not a single generic number:
   one-missed-day threshold as injury_status.
 - player_boxscores: ESPN box scores, written only on game days, so the
   games threshold and offseason reasoning apply.
+
+Cloud operation (`status --from-state PATH`, `check_cloud`): the cloud run
+(`.github/workflows/live.yml`, every 15 minutes) keeps its data as
+append-only files under `PATH/state`, and `status --from-state` rebuilds a
+throwaway DuckDB from them. Some table ages mean something different there:
+
+- schedule rows in state are CHANGE-only (a vintage is written only when a
+  game moved), so `max(observed_at)` would look stale whenever nothing
+  moved. Freshness comes from the far-fetch record instead
+  (`state/schedule/far_fetches-*.jsonl`, written hourly after a fully
+  successful far-day scoreboard fetch).
+- injury_status rows are change-only too; an unchanged report still writes
+  its `injury_reports` row, so the newer of the two is the report time.
+- news_items is not judged: the news archive is the Mac's (research only).
+- `cloud_runs` (`check_cloud`) asks GitHub, through `gh run list`, when
+  live.yml last ran and how. It never prompts, times out after 20 s, and
+  redacts tokens from anything gh prints; without gh or network it is one
+  plain "could not check" line.
+- `player_links` (`check_player_links`) names ESPN players who played in
+  the last 7 days but could not be linked to an NBA player id.
 """
 
 from __future__ import annotations
 
+import json
+import os
+import re
+import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from predictor.config import odds_api_key_path, season_label
 from predictor.db import POINT_IN_TIME_TABLES
@@ -105,6 +130,35 @@ class SourceHealth:
     detail: str | None = None
 
 
+# The cloud's "where to look": every cloud step is a row of the run summary.
+_RUN_SUMMARY = "Run: gh run list --workflow live.yml, then gh run view <id> and read the"
+
+# Which cloud step writes each table (cloud advice, and the Mac's advice for
+# the two tables only the cloud writes).
+_CLOUD_STEP = {
+    "games": "espn_scoreboard",
+    "schedule": "espn_scoreboard",
+    "injury_status": "injury_report",
+    "injury_reports": "injury_report",
+    "player_boxscores": "espn_boxscores",
+}
+
+
+def _cloud_advice(name: str, now: datetime) -> str:
+    """Advice for a stale source on cloud state: the live.yml run summary,
+    never launchd jobs or local commands."""
+    if name == "player_games":
+        return (
+            "the NBA player logs in state/ come from the Mac's snapshot -- on the "
+            f"Mac run: predictor ingest-player-logs --season {season_label(now)}, "
+            "then predictor export-state --to <state checkout>/state, and commit the state/nba/ change"
+        )
+    step = _CLOUD_STEP.get(name)
+    if step is None:
+        return ""
+    return f"{_RUN_SUMMARY} {step} step (it writes {name})."
+
+
 def _advice(name: str, latest: datetime | None, now: datetime) -> str:
     """Advice shown only when a source is stale. See module docstring."""
     if name == "games":
@@ -142,15 +196,55 @@ def _advice(name: str, latest: datetime | None, now: datetime) -> str:
             "recaptured later."
         )
 
+    if name in ("injury_reports", "player_boxscores"):
+        # Only the cloud run writes these two tables: the Mac's own database
+        # holds them only once cloud state is loaded into it.
+        return (
+            f"{_RUN_SUMMARY} {_CLOUD_STEP[name]} step -- only the cloud run "
+            f"writes {name}; check the cloud copy with: predictor status "
+            "--from-state <checkout of the publish branch>"
+        )
+
     return ""
 
 
-def check_sources(con, now: datetime | None = None) -> list[SourceHealth]:
+NEWS_ON_CLOUD = "news is archived by the Mac (research only)"
+
+
+def _far_fetched_at(state_dir: Path) -> datetime | None:
+    """The newest successful far-day scoreboard fetch recorded in state."""
+    from predictor.cloud import state as cloud_state
+    from predictor.cloud.run import FAR_FETCHES_GLOB
+
+    times = [
+        datetime.fromisoformat(str(r["fetched_at"]).replace("Z", "+00:00")).astimezone(UTC)
+        for path in sorted(state_dir.glob(FAR_FETCHES_GLOB))
+        for r in cloud_state.read_records(path)
+        if r.get("fetched_at")
+    ]
+    return max(times) if times else None
+
+
+def _newest(*times: datetime | None) -> datetime | None:
+    known = [t for t in times if t is not None]
+    return max(known) if known else None
+
+
+def check_sources(
+    con, now: datetime | None = None, *, cloud_state: Path | None = None
+) -> list[SourceHealth]:
+    """Freshness of every point-in-time table. With ``cloud_state`` (the
+    ``state/`` directory the DB was rebuilt from) the cloud rules apply:
+    news is not judged, schedule freshness is the last recorded fetch, and
+    injury_status counts unchanged reports (see the module docstring)."""
     if now is None:
         now = datetime.now(UTC)
 
     out: list[SourceHealth] = []
     for name in sorted(POINT_IN_TIME_TABLES):
+        if cloud_state is not None and name == "news_items":
+            out.append(SourceHealth(name, None, 0, None, False, "", detail=NEWS_ON_CLOUD))
+            continue
         # Resolved through POINT_IN_TIME_TABLES rather than spelled as a
         # literal here -- the physical "_raw" table names are only
         # allowed to appear as string literals in db.py/asof.py (see
@@ -181,17 +275,36 @@ def check_sources(con, now: datetime | None = None) -> list[SourceHealth]:
             )
             continue
 
+        detail = None
+        if cloud_state is not None:
+            if name == "schedule":
+                # Change-only rows: the fetch record says when it was checked.
+                fetched = _far_fetched_at(cloud_state)
+                latest = _newest(latest, fetched)
+                if fetched is not None:
+                    ago = _format_age((now - fetched).total_seconds() / 3600)
+                    when = ago if ago == "in the future" else f"{ago} ago"
+                    detail = f"{count:,} change rows; ESPN scoreboard last fetched {when}"
+            elif name == "injury_status":
+                reports = con.execute(
+                    f"SELECT max(observed_at) FROM {POINT_IN_TIME_TABLES['injury_reports']}"
+                ).fetchone()[0]
+                latest = _newest(latest, reports)
+
+        def advice_for(when: datetime | None) -> str:
+            if cloud_state is not None:
+                return _cloud_advice(name, now)
+            return _advice(name, when, now)
+
         if latest is None:
-            out.append(
-                SourceHealth(name, None, 0, None, True, _advice(name, None, now))
-            )
+            out.append(SourceHealth(name, None, 0, None, True, advice_for(None)))
             continue
 
         age = (now - latest).total_seconds() / 3600
         threshold = STALENESS_HOURS.get(name, 48)
         stale = age > threshold
-        advice = _advice(name, latest, now) if stale else ""
-        out.append(SourceHealth(name, latest, count, age, stale, advice))
+        advice = advice_for(latest) if stale else ""
+        out.append(SourceHealth(name, latest, count, age, stale, advice, detail=detail))
 
     return out
 
@@ -216,7 +329,15 @@ def _odds_advice() -> str:
     )
 
 
-def _check_live_odds(con, now: datetime) -> SourceHealth:
+def _cloud_odds_advice() -> str:
+    return (
+        f"{_RUN_SUMMARY} odds step. If it says the key is missing, set the "
+        "Actions secret: gh secret set ODDS_API_KEY. Otherwise it names the "
+        "problem (quota used up, invalid key, network failure)."
+    )
+
+
+def _check_live_odds(con, now: datetime, cloud: bool = False) -> SourceHealth:
     """Stale only while in season (`live.in_season`, as the other live
     checks use) with no live line observed in the last
     LIVE_ODDS_STALE_HOURS. Historical (Kaggle) rows never count."""
@@ -236,7 +357,9 @@ def _check_live_odds(con, now: datetime) -> SourceHealth:
     if not season_on:
         detail += " (off-season, not checked)"
     return SourceHealth(
-        "odds", latest, count, age, stale, _odds_advice() if stale else "", detail=detail
+        "odds", latest, count, age, stale,
+        (_cloud_odds_advice() if cloud else _odds_advice()) if stale else "",
+        detail=detail,
     )
 
 
@@ -246,7 +369,14 @@ def _check_live_odds(con, now: datetime) -> SourceHealth:
 PREDICTION_LOG_STALE_HOURS = 30
 
 
-def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceHealth]:
+def check_live(
+    con,
+    repo_dir: Path,
+    now: datetime | None = None,
+    *,
+    branch: str = "main",
+    cloud: bool = False,
+) -> list[SourceHealth]:
     """Health of the live-operation pieces that `check_sources` (table
     freshness) cannot see: whether results are actually being captured,
     whether today's predictions are actually being logged, whether the
@@ -263,6 +393,11 @@ def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceH
     in that case. `latest` still reports the true last capture time (via
     `last_capture`) for visibility, completely independent of the stale
     verdict.
+
+    `branch` is the branch `repo_dir` publishes to (`main` on the Mac,
+    `config.publish_branch()` for a cloud state checkout). `cloud=True`
+    gives advice for the cloud run (the live.yml run summary, the
+    ODDS_API_KEY Actions secret) instead of launchd jobs and key files.
     """
     if now is None:
         now = datetime.now(UTC)
@@ -274,12 +409,15 @@ def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceH
     missing = live.results_missing(con, now)
     stale_results = bool(missing)
     age = (now - cap).total_seconds() / 3600 if cap is not None else None
-    advice_results = (
-        "Run: predictor capture-results, and confirm the launchd agent "
-        "com.predictor.results is loaded."
-        if stale_results
-        else ""
-    )
+    if not stale_results:
+        advice_results = ""
+    elif cloud:
+        advice_results = f"{_RUN_SUMMARY} espn_scoreboard step (it records finals)."
+    else:
+        advice_results = (
+            "Run: predictor capture-results, and confirm the launchd agent "
+            "com.predictor.results is loaded."
+        )
     if cap is None:
         detail_results = "no live results captured yet"
         if missing:
@@ -336,11 +474,14 @@ def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceH
             ):
                 stale_log = True
         age_log = (now - latest_pred).total_seconds() / 3600 if latest_pred is not None else None
-        advice_log = (
-            "Run: predictor predict-today, and confirm com.predictor.predict is loaded."
-            if stale_log
-            else ""
-        )
+        if not stale_log:
+            advice_log = ""
+        elif cloud:
+            advice_log = f"{_RUN_SUMMARY} predict and state_commit steps."
+        else:
+            advice_log = (
+                "Run: predictor predict-today, and confirm com.predictor.predict is loaded."
+            )
         out.append(
             SourceHealth("prediction_log", latest_pred, len(log), age_log, stale_log, advice_log)
         )
@@ -350,7 +491,7 @@ def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceH
     # (never committed), mid-operation, or left uncommitted by a failed
     # publish -- log_published alone cannot see any of these (it only
     # counts commits that exist).
-    files_problem = publish.prediction_files_problem(repo_dir)
+    files_problem = publish.prediction_files_problem(repo_dir, branch)
     out.append(
         SourceHealth(
             "prediction_files",
@@ -362,13 +503,13 @@ def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceH
             detail=(
                 "NOT being published from this checkout"
                 if files_problem is not None
-                else "committed on main, nothing left uncommitted"
+                else f"committed on {branch}, nothing left uncommitted"
             ),
         )
     )
 
     # --- log_published -----------------------------------------------------
-    unpushed = publish.unpushed_commits(repo_dir)
+    unpushed = publish.unpushed_commits(repo_dir, branch)
     if unpushed is None:
         stale_pub = True
         # -1 is a sentinel, not a count: `unpushed_commits` returned None
@@ -388,20 +529,28 @@ def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceH
         # Same predicate predict-today's own push uses: a commit that is not
         # an automated prediction commit is never pushed automatically, and
         # a human told to "just push" would make it public.
-        foreign = publish.unpushed_non_prediction_commits(repo_dir)
+        foreign = publish.unpushed_non_prediction_commits(repo_dir, branch)
         if foreign:
             advice_pub = (
                 f"{foreign} of the unpushed commits are not prediction commits "
                 "— pushing would make them PUBLIC; review them before running "
-                "git push origin main"
+                f"git push origin {branch}"
+            )
+        elif cloud:
+            advice_pub = (
+                f"{unpushed} commit(s) in this checkout are not on origin/{branch}. "
+                "Cloud runs never rebase: when GitHub moved during a run, nothing "
+                "is pushed and the next live.yml run starts from GitHub and redoes "
+                "the work -- nothing needs pushing by hand. If this persists, "
+                "read the push step of the latest live.yml run summary."
             )
         else:
             advice_pub = (
                 f"{unpushed} commit(s) are committed locally but not pushed -- "
-                "run: git push origin main, or check the GitHub login: gh auth "
-                "status. If the push is rejected because GitHub has commits "
-                "this checkout doesn't, pull them by hand first: git pull "
-                "--ff-only origin main."
+                "the next predict-today or capture-results run pushes them, "
+                "rebasing its own safe commits over anything new on GitHub "
+                f"automatically. To push now: git push origin {branch}, or "
+                "check the GitHub login: gh auth status."
             )
     else:
         stale_pub = False
@@ -412,9 +561,176 @@ def check_live(con, repo_dir: Path, now: datetime | None = None) -> list[SourceH
     )
 
     # --- odds (live lines) ------------------------------------------------
-    out.append(_check_live_odds(con, now))
+    out.append(_check_live_odds(con, now, cloud))
 
     return out
+
+
+# --- cloud runs ------------------------------------------------------------
+
+# The live workflow runs every 15 minutes; 2h without a run is ~8 missed
+# slots, well past GitHub's usual late or skipped cron starts.
+CLOUD_STALE = timedelta(hours=2)
+CLOUD_WORKFLOW = "live.yml"
+GH_TIMEOUT = 20
+# Consecutive failed (completed) runs that count as broken.
+CLOUD_FAILURES = 3
+
+_GH_ARGS = [
+    "gh", "run", "list", "--workflow", CLOUD_WORKFLOW, "--limit", "5",
+    "--json", "createdAt,status,conclusion",
+]
+# GitHub tokens gh could echo: classic/fine-grained/app/OAuth forms.
+_GH_TOKEN = re.compile(r"\b(gh[pousr]_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,})")
+_GH_ADVICE = (
+    "check gh auth status (gh must be installed and logged in, and the "
+    "network reachable), then gh run list --workflow live.yml"
+)
+
+
+def _redact_gh(text: str) -> str:
+    return _GH_TOKEN.sub("***", publish._redact(text))
+
+
+def _could_not_check(reason: str) -> SourceHealth:
+    return SourceHealth(
+        "cloud_runs", None, 0, None, True, _GH_ADVICE,
+        detail=f"could not check cloud runs ({reason})",
+    )
+
+
+def _parse_time(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(UTC)
+
+
+def _ago(delta: timedelta) -> str:
+    minutes = delta.total_seconds() / 60
+    if minutes < 0:
+        return "in the future"
+    if minutes < 120:
+        return f"{minutes:.0f}m ago"
+    return f"{_format_age(minutes / 60)} ago"
+
+
+def check_cloud(
+    now: datetime, runner=subprocess.run, *, cwd: Path | None = None
+) -> SourceHealth:
+    """When live.yml last ran, from ``gh run list`` (run in ``cwd``, so gh
+    finds the repository from that checkout's remote). Stale with no run,
+    when the newest run is more than CLOUD_STALE old, or when the 3 newest
+    completed runs all failed. gh never prompts (GH_PROMPT_DISABLED, no
+    stdin), is given GH_TIMEOUT seconds, and anything it prints is redacted;
+    a missing gh, a timeout or an error is one plain "could not check"."""
+    env = dict(os.environ, GH_PROMPT_DISABLED="1", GIT_TERMINAL_PROMPT="0")
+    try:
+        result = runner(
+            list(_GH_ARGS), capture_output=True, text=True, timeout=GH_TIMEOUT,
+            env=env, stdin=subprocess.DEVNULL, cwd=cwd,
+        )
+    except FileNotFoundError:
+        return _could_not_check("gh is not installed")
+    except subprocess.TimeoutExpired:
+        return _could_not_check(f"gh did not answer within {GH_TIMEOUT} s")
+    except OSError as exc:
+        return _could_not_check(f"gh could not be run: {type(exc).__name__}")
+    if result.returncode != 0:
+        lines = (result.stderr or result.stdout or "").strip().splitlines()
+        first = _redact_gh(lines[0])[:160] if lines else f"exit {result.returncode}"
+        return _could_not_check(f"gh: {first}")
+    try:
+        runs = json.loads(result.stdout or "")
+        dated = sorted(
+            ((_parse_time(r["createdAt"]), r) for r in runs),
+            key=lambda pair: pair[0], reverse=True,
+        )
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return _could_not_check("gh's answer could not be read")
+
+    if not dated:
+        return SourceHealth(
+            "cloud_runs", None, 0, None, True,
+            "the live workflow has never run: check it is enabled with "
+            "gh workflow list, or start it with gh workflow run live.yml",
+            detail="no cloud run found for live.yml",
+        )
+    newest_at, newest = dated[0]
+    age = now - newest_at
+    state = newest.get("conclusion") or newest.get("status") or "unknown"
+    detail = f"last cloud run {_ago(age)} ({state})"
+    completed = [r for _, r in dated if r.get("status") == "completed"][:CLOUD_FAILURES]
+    failing = len(completed) == CLOUD_FAILURES and all(
+        r.get("conclusion") == "failure" for r in completed
+    )
+    if age > CLOUD_STALE:
+        advice = (
+            f"no live.yml run for over {CLOUD_STALE.total_seconds() / 3600:.0f}h: check "
+            "the workflow is enabled (gh workflow list) and read the latest run "
+            "(gh run list --workflow live.yml, then gh run view <id>)"
+        )
+    elif failing:
+        detail += f"; the last {CLOUD_FAILURES} completed runs all failed"
+        advice = (
+            "read the failing steps of the latest live.yml run summary "
+            "(gh run list --workflow live.yml, then gh run view <id>)"
+        )
+    else:
+        advice = ""
+    return SourceHealth(
+        "cloud_runs", newest_at, len(dated), age.total_seconds() / 3600,
+        bool(advice), advice, detail=detail,
+    )
+
+
+# --- player links (cloud state) --------------------------------------------
+
+PLAYER_LINKS_DAYS = 7
+PLAYER_LINKS_NAMED = 5
+_EASTERN = ZoneInfo("America/New_York")
+
+
+def check_player_links(state_dir: Path, con, now: datetime) -> SourceHealth:
+    """Stale when an ESPN player who played (minutes > 0) in a game of the
+    last PLAYER_LINKS_DAYS days (ET) is still unlinked (``espn:<id>``) --
+    their minutes are invisible to the player model until linked. Links
+    known in ``state_dir`` (links.jsonl, aliases.json) count as linked even
+    if the DB was built before them."""
+    from predictor.cloud.players import resolved_player_ids
+
+    since = (now.astimezone(_EASTERN) - timedelta(days=PLAYER_LINKS_DAYS)).date()
+    rows = con.execute(
+        f"SELECT espn_player_id, player_name, max(game_date) "
+        f"FROM {POINT_IN_TIME_TABLES['player_boxscores']} "
+        "WHERE player_id LIKE 'espn:%' AND minutes > 0 AND game_date >= ? "
+        "GROUP BY espn_player_id, player_name ORDER BY max(game_date) DESC, player_name",
+        [since],
+    ).fetchall()
+    resolved = resolved_player_ids(state_dir)
+    unmatched: dict[str, str] = {}
+    for espn_id, name, _ in rows:
+        if espn_id is not None and str(espn_id) in resolved:
+            continue
+        unmatched.setdefault(str(espn_id), f"{name or 'unnamed'} (ESPN {espn_id})")
+    if not unmatched:
+        return SourceHealth(
+            "player_links", None, 0, None, False, "",
+            detail=f"every ESPN player of the last {PLAYER_LINKS_DAYS} days is linked",
+        )
+    names = list(unmatched.values())
+    shown = ", ".join(names[:PLAYER_LINKS_NAMED])
+    more = len(names) - PLAYER_LINKS_NAMED
+    if more > 0:
+        shown += f" and {more} more"
+    return SourceHealth(
+        "player_links", None, len(names), None, True,
+        'in state/players/aliases.json add "<ESPN id>": <NBA player id> under '
+        '"by_espn_id" (or "<name>": <NBA player id> under "by_name") and commit '
+        "it; the next run's rebuild relinks their old rows",
+        detail=(
+            f"{len(names)} ESPN player(s) who played in the last "
+            f"{PLAYER_LINKS_DAYS} days have no NBA id: {shown} -- add them to "
+            "state/players/aliases.json"
+        ),
+    )
 
 
 def _format_age(hours: float) -> str:

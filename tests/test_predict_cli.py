@@ -966,7 +966,7 @@ def test_capture_results_with_nothing_new_retries_an_earlier_failed_push(tmp_pat
     assert "grades appended: 0" in result.output
     assert calls["push_pending"] == 1
     assert calls["commit"] == []  # nothing new to commit: push only
-    assert "pushed 1 earlier prediction commit(s)" in result.output
+    assert "pushed 1 earlier commit(s)" in result.output
     assert "predictions: 2026-11-10 slate" in _git(remote_dir, "log", "--format=%s", "main").stdout
 
 
