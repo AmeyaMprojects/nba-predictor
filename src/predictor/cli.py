@@ -624,27 +624,12 @@ def _capture_results(target: str):
 
 
 def _grade_seasons(con, repo_dir, season: str, now) -> tuple[int, set[str]]:
-    """Grade `season`'s prediction log and, when it exists, the previous
-    season's -- the one grading rule shared by `predict-today` and
-    `capture-results`. Returns (grade lines appended, seasons touched).
+    """Grade `season`'s log and the previous season's when it exists (see
+    `live.grade_seasons`, shared with `cloud-run`). Returns (grade lines
+    appended, seasons touched)."""
+    from predictor.model.live import grade_seasons
 
-    A season boundary can leave predictions from the PREVIOUS season still
-    ungraded (its games' results arrive after today's slate has already
-    rolled over to a new season label) -- grade that log too, whenever it
-    exists, so those predictions are not stranded ungraded forever. grade()
-    is a no-op (appends nothing) for every game already graded, so this is
-    always safe to run again -- whichever command ran it first."""
-    from predictor.config import previous_season_label
-    from predictor.model.live import grade, log_path
-
-    graded = 0
-    seasons_touched = {season}
-    previous_season = previous_season_label(season)
-    if log_path(repo_dir, previous_season).exists():
-        graded += grade(con, repo_dir, previous_season, now)
-        seasons_touched.add(previous_season)
-    graded += grade(con, repo_dir, season, now)
-    return graded, seasons_touched
+    return grade_seasons(con, repo_dir, season, now)
 
 
 def _prediction_paths(repo_dir, seasons) -> list:
@@ -1817,6 +1802,53 @@ def export_state_cmd(
         with path.open(encoding="utf-8") as fh:
             rows += sum(1 for _ in fh)
     typer.echo(f"wrote {rows} rows to {len(paths)} file(s)")
+
+
+def _cloud_fetchers():
+    """The real outside world for `cloud-run` -- one indirection point so
+    tests replace it with fakes (no network, no real gh)."""
+    from predictor.cloud.run import Fetchers
+
+    return Fetchers()
+
+
+def _append_env_file(var: str, text: str) -> None:
+    import os
+
+    target = os.environ.get(var, "").strip()
+    if target:
+        with open(target, "a", encoding="utf-8") as fh:
+            fh.write(text)
+
+
+@app.command("cloud-run")
+def cloud_run_cmd(
+    state_repo: str = typer.Option(..., "--state-repo", help="The checkout holding state/ and predictions/."),
+) -> None:
+    """Do whatever is due (fetch, commit state, predict, grade, archive, push)."""
+    import os
+    from pathlib import Path
+
+    from predictor import config
+    from predictor.cloud import run, summary
+
+    branch = config.publish_branch()
+    try:
+        attempt = int(os.environ.get("GITHUB_RUN_ATTEMPT", "1") or 1)
+    except ValueError:
+        attempt = 1
+    report = run.run_once(
+        Path(state_repo).expanduser(), _repo_dir(), branch=branch,
+        fetchers=_cloud_fetchers(), run_attempt=attempt,
+    )
+    text = summary.markdown(report)
+    _append_env_file("GITHUB_STEP_SUMMARY", text)
+    _append_env_file(
+        "GITHUB_OUTPUT", "".join(f"{k}={v}\n" for k, v in summary.outputs(report).items())
+    )
+    typer.echo(text, nl=False)
+    if report.unexpected or report.publish_error:
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,12 @@ Layout (paths relative to ``state/``):
   athlete id only; ``player_id`` is resolved on load).
 - ``players/links.jsonl`` -- ESPN athlete id -> NBA player id links (latest
   line wins); ``players/aliases.json`` -- hand-edited link corrections.
+- ``news/<season>/<YYYY-MM>.jsonl`` -- RSS news items first seen by a cloud
+  run (month and season from the ET date of ``observed_at``); one line per
+  ``item_key``, never rewritten. ``news/polls-<YYYY-MM>.jsonl`` records each
+  hourly poll and its per-feed failures (cloud/run.py).
+- ``schedule/far_fetches-<YYYY-MM>.jsonl`` -- when the far scoreboard days
+  were last fetched successfully (cloud/run.py).
 - ``injuries/<season>/<YYYY-MM>.jsonl`` -- cloud injury report deltas, one
   season replayed in order from empty (cloud/injuries.py).
 - ``nba/`` -- whole-file snapshots written only by the Mac:
@@ -80,6 +86,7 @@ BOXSCORE_COLUMNS = (
     "did_not_play", "minutes", "points", "rebounds", "assists", "plus_minus", "source",
     "observed_at",
 )
+NEWS_COLUMNS = ("item_key", "feed", "title", "link", "summary", "observed_at")
 INJURY_COLUMNS = (
     "report_date", "game_date", "game_time", "matchup", "team", "team_display", "player",
     "player_display", "status", "reason", "reconstructed", "observed_at",
@@ -199,6 +206,8 @@ FAMILIES: dict[str, Family] = {
                _month_path("odds", _observed_season, _observed_day), "odds/*/*.jsonl"),
         Family("boxscores", "player_boxscores", BOXSCORE_COLUMNS,
                _month_path("boxscores", _row_season, _row_game_day), "boxscores/*/*.jsonl"),
+        Family("news", "news_items", NEWS_COLUMNS,
+               _month_path("news", _observed_season, _observed_day), "news/*/*.jsonl"),
         Family("nba_games", "games", GAMES_COLUMNS,
                lambda r: f"nba/games-{_row_season(r)}.jsonl", "nba/games-*.jsonl"),
         Family("nba_schedule", "schedule", SCHEDULE_COLUMNS,
@@ -213,7 +222,7 @@ FAMILIES: dict[str, Family] = {
 
 # Load order for a rebuild: Mac snapshots first, then cloud files.
 _NBA_FAMILIES = ("nba_games", "nba_schedule", "nba_odds", "nba_player_games")
-_CLOUD_FAMILIES = ("results", "schedule", "odds", "boxscores")
+_CLOUD_FAMILIES = ("results", "schedule", "odds", "boxscores", "news")
 
 
 def _family(name: str) -> Family:

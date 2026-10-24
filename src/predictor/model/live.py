@@ -705,7 +705,9 @@ def predict_today(
     )
 
 
-def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
+def grade(
+    con, repo_dir: Path, season: str, now: datetime, *, code_dir: Path | None = None
+) -> int:
     """Grade every predicted game that now has a FINAL result.
 
     For each ``game_id``, the latest ``predicted`` line whose own
@@ -740,6 +742,10 @@ def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
     the grade line names the link in
     ``linked_game_id`` (null when there is none). A game graded under
     either id is not graded again.
+
+    ``code_version`` on each grade line is read from ``code_dir`` (default
+    ``repo_dir``): in the cloud the state checkout and the code checkout can
+    be different directories.
     """
     log = read_log(log_path(repo_dir, season))
     links = read_id_links(repo_dir, season)
@@ -776,7 +782,7 @@ def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
             already_graded.add(g["linked_game_id"])
     games_table = db.POINT_IN_TIME_TABLES["games"]
 
-    code_sha, code_dirty = publish.code_version(repo_dir)
+    code_sha, code_dirty = publish.code_version(code_dir or repo_dir)
     appended = 0
     for key in sorted(latest_predicted):
         line = latest_predicted[key]
@@ -825,3 +831,29 @@ def grade(con, repo_dir: Path, season: str, now: datetime) -> int:
         appended += 1
 
     return appended
+
+
+def grade_seasons(
+    con, repo_dir: Path, season: str, now: datetime, *, code_dir: Path | None = None
+) -> tuple[int, set[str]]:
+    """Grade ``season``'s prediction log and, when it exists, the previous
+    season's -- the one grading rule shared by ``predict-today``,
+    ``capture-results`` and ``cloud-run``. Returns (grade lines appended,
+    seasons touched).
+
+    A season boundary can leave predictions from the PREVIOUS season still
+    ungraded (its games' results arrive after today's slate has already
+    rolled over to a new season label) -- grade that log too, whenever it
+    exists, so those predictions are not stranded ungraded forever. grade()
+    is a no-op (appends nothing) for every game already graded, so this is
+    always safe to run again -- whichever command ran it first."""
+    from predictor.config import previous_season_label
+
+    graded = 0
+    seasons_touched = {season}
+    previous_season = previous_season_label(season)
+    if log_path(repo_dir, previous_season).exists():
+        graded += grade(con, repo_dir, previous_season, now, code_dir=code_dir)
+        seasons_touched.add(previous_season)
+    graded += grade(con, repo_dir, season, now, code_dir=code_dir)
+    return graded, seasons_touched
