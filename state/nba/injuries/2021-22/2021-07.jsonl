@@ -1,0 +1,75 @@
+{"format":"lines","v":1}
+{"kind":"report","observed_at":"2021-07-01T21:30:00+00:00","reconstructed":false,"report_date":"2021-07-01","v":1}
+{"game_date":"2021-07-01","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Bogdanovic,Bogdan","player_display":"Bogdanovic, Bogdan","reason":"Injury/Illness - Right Knee; Soreness","status":"Probable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-07-01","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Capela,Clint","player_display":"Capela, Clint","reason":"Injury/Illness - Right Eye; Inflammation","status":"Questionable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-07-01","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-07-01","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Meniscus; Surgery","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-07-01","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Young,Trae","player_display":"Young, Trae","reason":"Injury/Illness - Right Foot; Bone Bruise","status":"Questionable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-07-01","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Antetokounmpo,Giannis","player_display":"Antetokounmpo, Giannis","reason":"Injury/Illness - Left Knee; Hyperextension","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-07-01","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"kind":"report","observed_at":"2021-07-02T21:30:00+00:00","reconstructed":false,"report_date":"2021-07-02","v":1}
+{"game_date":"2021-07-03","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Bogdanovic,Bogdan","player_display":"Bogdanovic, Bogdan","reason":"Injury/Illness - Right Knee; Soreness","status":"Probable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-07-03","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-07-03","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Meniscus; Surgery","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-07-03","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Young,Trae","player_display":"Young, Trae","reason":"Injury/Illness - Right Foot; Bone Bruise","status":"Questionable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-07-03","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Antetokounmpo,Giannis","player_display":"Antetokounmpo, Giannis","reason":"Injury/Illness - Left Knee; Hyperextension","status":"Doubtful","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-07-03","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-07-01","kind":"drop","player":"Bogdanovic,Bogdan","team":"ATL"}
+{"game_date":"2021-07-01","kind":"drop","player":"Capela,Clint","team":"ATL"}
+{"game_date":"2021-07-01","kind":"drop","player":"Goodwin,Brandon","team":"ATL"}
+{"game_date":"2021-07-01","kind":"drop","player":"Hunter,De'Andre","team":"ATL"}
+{"game_date":"2021-07-01","kind":"drop","player":"Young,Trae","team":"ATL"}
+{"game_date":"2021-07-01","kind":"drop","player":"Antetokounmpo,Giannis","team":"MIL"}
+{"game_date":"2021-07-01","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"kind":"report","observed_at":"2021-07-03T21:30:00+00:00","reconstructed":false,"report_date":"2021-07-03","v":1}
+{"game_date":"2021-07-03","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Antetokounmpo,Giannis","player_display":"Antetokounmpo, Giannis","reason":"Injury/Illness - Left Knee; Hyperextension","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"kind":"report","observed_at":"2021-07-06T21:30:00+00:00","reconstructed":false,"report_date":"2021-07-06","v":1}
+{"game_date":"2021-07-06","game_time":"09:00 (ET)","kind":"set","matchup":"MIL@PHX","player":"Antetokounmpo,Giannis","player_display":"Antetokounmpo, Giannis","reason":"Injury/Illness - Left Knee; Hyperextension","status":"Questionable","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-07-06","game_time":"09:00 (ET)","kind":"set","matchup":"MIL@PHX","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-07-03","kind":"drop","player":"Bogdanovic,Bogdan","team":"ATL"}
+{"game_date":"2021-07-03","kind":"drop","player":"Goodwin,Brandon","team":"ATL"}
+{"game_date":"2021-07-03","kind":"drop","player":"Hunter,De'Andre","team":"ATL"}
+{"game_date":"2021-07-03","kind":"drop","player":"Young,Trae","team":"ATL"}
+{"game_date":"2021-07-03","kind":"drop","player":"Antetokounmpo,Giannis","team":"MIL"}
+{"game_date":"2021-07-03","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"kind":"report","observed_at":"2021-07-07T00:30:00+00:00","reconstructed":false,"report_date":"2021-07-06","v":1}
+{"kind":"report","observed_at":"2021-07-08T21:30:00+00:00","reconstructed":false,"report_date":"2021-07-08","v":1}
+{"game_date":"2021-07-08","game_time":"09:00 (ET)","kind":"set","matchup":"MIL@PHX","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-07-08","game_time":"09:00 (ET)","kind":"set","matchup":"MIL@PHX","player":"Saric,Dario","player_display":"Saric, Dario","reason":"Injury/Illness - Right ACL; Tear","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-07-06","kind":"drop","player":"Antetokounmpo,Giannis","team":"MIL"}
+{"game_date":"2021-07-06","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"kind":"report","observed_at":"2021-07-09T00:30:00+00:00","reconstructed":false,"report_date":"2021-07-08","v":1}
+{"kind":"report","observed_at":"2021-07-10T21:30:00+00:00","reconstructed":false,"report_date":"2021-07-10","v":1}
+{"game_date":"2021-07-11","game_time":"08:00 (ET)","kind":"set","matchup":"PHX@MIL","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-07-08","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"game_date":"2021-07-08","kind":"drop","player":"Saric,Dario","team":"PHX"}
+{"kind":"report","observed_at":"2021-07-11T21:30:00+00:00","reconstructed":false,"report_date":"2021-07-11","v":1}
+{"game_date":"2021-07-11","game_time":"08:00 (ET)","kind":"set","matchup":"PHX@MIL","player":"Craig,Torrey","player_display":"Craig, Torrey","reason":"Injury/Illness - Right Knee; Contusion","status":"Probable","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-07-11","game_time":"08:00 (ET)","kind":"set","matchup":"PHX@MIL","player":"Saric,Dario","player_display":"Saric, Dario","reason":"Injury/Illness - Right Acl; Tear","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"kind":"report","observed_at":"2021-07-14T21:30:00+00:00","reconstructed":false,"report_date":"2021-07-14","v":1}
+{"game_date":"2021-07-14","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@MIL","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-07-14","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@MIL","player":"Saric,Dario","player_display":"Saric, Dario","reason":"Injury/Illness - Right Acl; Tear","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-07-11","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"game_date":"2021-07-11","kind":"drop","player":"Craig,Torrey","team":"PHX"}
+{"game_date":"2021-07-11","kind":"drop","player":"Saric,Dario","team":"PHX"}
+{"kind":"report","observed_at":"2021-07-15T00:30:00+00:00","reconstructed":false,"report_date":"2021-07-14","v":1}
+{"game_date":"2021-07-14","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@MIL","player":"Merrill,Sam","player_display":"Merrill, Sam","reason":"Injury/Illness - Right Ankle; Sprain","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"kind":"report","observed_at":"2021-07-17T21:30:00+00:00","reconstructed":false,"report_date":"2021-07-17","v":1}
+{"game_date":"2021-07-17","game_time":"09:00 (ET)","kind":"set","matchup":"MIL@PHX","player":"Antetokounmpo,Thanasis","player_display":"Antetokounmpo, Thanasis","reason":"Health and Safety Protocols","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-07-17","game_time":"09:00 (ET)","kind":"set","matchup":"MIL@PHX","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-07-17","game_time":"09:00 (ET)","kind":"set","matchup":"MIL@PHX","player":"Merrill,Sam","player_display":"Merrill, Sam","reason":"Injury/Illness - Right Ankle; Sprain","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-07-17","game_time":"09:00 (ET)","kind":"set","matchup":"MIL@PHX","player":"Saric,Dario","player_display":"Saric, Dario","reason":"Injury/Illness - Right Acl; Tear","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-07-14","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"game_date":"2021-07-14","kind":"drop","player":"Merrill,Sam","team":"MIL"}
+{"game_date":"2021-07-14","kind":"drop","player":"Saric,Dario","team":"PHX"}
+{"kind":"report","observed_at":"2021-07-18T00:30:00+00:00","reconstructed":false,"report_date":"2021-07-17","v":1}
+{"kind":"report","observed_at":"2021-07-19T21:30:00+00:00","reconstructed":false,"report_date":"2021-07-19","v":1}
+{"game_date":"2021-07-20","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@MIL","player":"Saric,Dario","player_display":"Saric, Dario","reason":"Injury/Illness - Right Acl; Tear","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-07-17","kind":"drop","player":"Antetokounmpo,Thanasis","team":"MIL"}
+{"game_date":"2021-07-17","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"game_date":"2021-07-17","kind":"drop","player":"Merrill,Sam","team":"MIL"}
+{"game_date":"2021-07-17","kind":"drop","player":"Saric,Dario","team":"PHX"}
+{"kind":"report","observed_at":"2021-07-20T21:30:00+00:00","reconstructed":false,"report_date":"2021-07-20","v":1}
+{"game_date":"2021-07-20","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@MIL","player":"Antetokounmpo,Thanasis","player_display":"Antetokounmpo, Thanasis","reason":"Health and Safety Protocols","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-07-20","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@MIL","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"kind":"report","observed_at":"2021-07-21T00:30:00+00:00","reconstructed":false,"report_date":"2021-07-20","v":1}

@@ -1,0 +1,486 @@
+{"format":"lines","v":1}
+{"kind":"report","observed_at":"2021-06-01T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-01","v":1}
+{"game_date":"2021-06-01","game_time":"07:30 (ET)","kind":"set","matchup":"BOS@BKN","player":"Dinwiddie,Spencer","player_display":"Dinwiddie, Spencer","reason":"Injury/Illness - Right Knee; Partially Torn ACL","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-01","game_time":"07:30 (ET)","kind":"set","matchup":"BOS@BKN","player":"Green,Jeff","player_display":"Green, Jeff","reason":"Injury/Illness - Left Plantar Fascia; Strain","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-01","game_time":"07:30 (ET)","kind":"set","matchup":"BOS@BKN","player":"Johnson,Alize","player_display":"Johnson, Alize","reason":"Injury/Illness - Left Ankle; Sprain","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-01","game_time":"07:30 (ET)","kind":"set","matchup":"BOS@BKN","player":"Brown,Jaylen","player_display":"Brown, Jaylen","reason":"Injury/Illness - Left Scapholunate; Ligament Surgery","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2021-06-01","game_time":"07:30 (ET)","kind":"set","matchup":"BOS@BKN","player":"Walker,Kemba","player_display":"Walker, Kemba","reason":"Injury/Illness - Left Knee; Medial Bone Bruise","status":"Doubtful","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2021-06-01","game_time":"07:30 (ET)","kind":"set","matchup":"BOS@BKN","player":"WilliamsIII,Robert","player_display":"Williams III, Robert","reason":"Injury/Illness - Left Ankle; Sprain","status":"Doubtful","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2021-06-01","game_time":"09:00 (ET)","kind":"set","matchup":"POR@DEN","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Hamstring; Strain","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-01","game_time":"09:00 (ET)","kind":"set","matchup":"POR@DEN","player":"Dozier,PJ","player_display":"Dozier, PJ","reason":"Injury/Illness - Right Adductor; Strain","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-01","game_time":"09:00 (ET)","kind":"set","matchup":"POR@DEN","player":"Murray,Jamal","player_display":"Murray, Jamal","reason":"Injury/Illness - Left Acl; Surgery","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-01","game_time":"10:00 (ET)","kind":"set","matchup":"LAL@PHX","player":"Caldwell-Pope,Kentavious","player_display":"Caldwell-Pope, Kentavious","reason":"Injury/Illness - Left Knee; Contusion","status":"Questionable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2021-06-01","game_time":"10:00 (ET)","kind":"set","matchup":"LAL@PHX","player":"Davis,Anthony","player_display":"Davis, Anthony","reason":"Injury/Illness - Left Groin; Strain","status":"Questionable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2021-06-01","game_time":"10:00 (ET)","kind":"set","matchup":"LAL@PHX","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Arthroscopy","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-01","game_time":"10:00 (ET)","kind":"set","matchup":"LAL@PHX","player":"Paul,Chris","player_display":"Paul, Chris","reason":"Injury/Illness - Right Shoulder; Contusion","status":"Probable","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-01","game_time":"09:00 (ET)","kind":"set","matchup":"POR@DEN","player":"Collins,Zach","player_display":"Collins, Zach","reason":"Injury/Illness - Left Ankle; Stress Fracture","status":"Out","team":"POR","team_display":"Portland Trail Blazers"}
+{"game_date":"2021-06-01","game_time":"09:00 (ET)","kind":"set","matchup":"POR@DEN","player":"Nurkic,Jusuf","player_display":"Nurkic, Jusuf","reason":"Injury/Illness - Left Thumb; Contusion","status":"Available","team":"POR","team_display":"Portland Trail Blazers"}
+{"game_date":"2021-06-02","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@NYK","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-02","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@NYK","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Knee; Soreness","status":"Probable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-02","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@NYK","player":"Reddish,Cam","player_display":"Reddish, Cam","reason":"Injury/Illness - Right Achilles; Soreness","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-02","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@NYK","player":"Robinson,Mitchell","player_display":"Robinson, Mitchell","reason":"Injury/Illness - Right Foot; surgery","status":"Out","team":"NYK","team_display":"New York Knicks"}
+{"game_date":"2021-06-02","game_time":"07:00 (ET)","kind":"set","matchup":"WAS@PHI","player":"Curry,Seth","player_display":"Curry, Seth","reason":"Injury/Illness - Left Ankle; Sprain","status":"Probable","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-02","game_time":"07:00 (ET)","kind":"set","matchup":"WAS@PHI","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Soreness","status":"Doubtful","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-02","game_time":"07:00 (ET)","kind":"set","matchup":"WAS@PHI","player":"Hill,George","player_display":"Hill, George","reason":"Injury/Illness - Left Knee; Contusion","status":"Probable","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-02","game_time":"07:00 (ET)","kind":"set","matchup":"WAS@PHI","player":"Avdija,Deni","player_display":"Avdija, Deni","reason":"Injury/Illness - Right Ankle; Right ankle fracture","status":"Out","team":"WAS","team_display":"Washington Wizards"}
+{"game_date":"2021-06-02","game_time":"07:00 (ET)","kind":"set","matchup":"WAS@PHI","player":"Bertans,Davis","player_display":"Bertans, Davis","reason":"Injury/Illness - Right Calf; Right calf strain","status":"Out","team":"WAS","team_display":"Washington Wizards"}
+{"game_date":"2021-06-02","game_time":"07:00 (ET)","kind":"set","matchup":"WAS@PHI","player":"Bryant,Thomas","player_display":"Bryant, Thomas","reason":"Injury/Illness - Left Knee; Left ACL injury","status":"Out","team":"WAS","team_display":"Washington Wizards"}
+{"game_date":"2021-06-02","game_time":"07:00 (ET)","kind":"set","matchup":"WAS@PHI","player":"Westbrook,Russell","player_display":"Westbrook, Russell","reason":"Injury/Illness - Right Ankle; Right ankle sprain","status":"Available","team":"WAS","team_display":"Washington Wizards"}
+{"kind":"report","observed_at":"2021-06-02T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-01","v":1}
+{"game_date":"2021-06-01","game_time":"07:30 (ET)","kind":"set","matchup":"BOS@BKN","player":"Walker,Kemba","player_display":"Walker, Kemba","reason":"Injury/Illness - Left Knee; Medial Bone Bruise","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2021-06-01","game_time":"07:30 (ET)","kind":"set","matchup":"BOS@BKN","player":"WilliamsIII,Robert","player_display":"Williams III, Robert","reason":"Injury/Illness - Left Ankle; Sprain","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2021-06-02","game_time":"10:00 (ET)","kind":"set","matchup":"DAL@LAC","player":"Doncic,Luka","player_display":"Doncic, Luka","reason":"Injury/Illness - Cervical; Strain","status":"Probable","team":"DAL","team_display":"Dallas Mavericks"}
+{"game_date":"2021-06-02","game_time":"10:00 (ET)","kind":"set","matchup":"DAL@LAC","player":"Kleber,Maxi","player_display":"Kleber, Maxi","reason":"Injury/Illness - Right Achilles; Soreness","status":"Probable","team":"DAL","team_display":"Dallas Mavericks"}
+{"game_date":"2021-06-02","game_time":"10:00 (ET)","kind":"set","matchup":"DAL@LAC","player":"Redick,JJ","player_display":"Redick, JJ","reason":"Injury/Illness - Right Achilles; Injury","status":"Out","team":"DAL","team_display":"Dallas Mavericks"}
+{"game_date":"2021-06-02","game_time":"10:00 (ET)","kind":"set","matchup":"DAL@LAC","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Spasms","status":"Doubtful","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-02","game_time":"09:30 (ET)","kind":"set","matchup":"MEM@UTA","player":"McDermott,Sean","player_display":"McDermott, Sean","reason":"Injury/Illness - Left Foot; Soreness","status":"Out","team":"MEM","team_display":"Memphis Grizzlies"}
+{"kind":"report","observed_at":"2021-06-02T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-02","v":1}
+{"game_date":"2021-06-02","game_time":"07:00 (ET)","kind":"set","matchup":"WAS@PHI","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-01","kind":"drop","player":"Dinwiddie,Spencer","team":"BKN"}
+{"game_date":"2021-06-01","kind":"drop","player":"Green,Jeff","team":"BKN"}
+{"game_date":"2021-06-01","kind":"drop","player":"Johnson,Alize","team":"BKN"}
+{"game_date":"2021-06-01","kind":"drop","player":"Brown,Jaylen","team":"BOS"}
+{"game_date":"2021-06-01","kind":"drop","player":"Walker,Kemba","team":"BOS"}
+{"game_date":"2021-06-01","kind":"drop","player":"WilliamsIII,Robert","team":"BOS"}
+{"game_date":"2021-06-01","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2021-06-01","kind":"drop","player":"Dozier,PJ","team":"DEN"}
+{"game_date":"2021-06-01","kind":"drop","player":"Murray,Jamal","team":"DEN"}
+{"game_date":"2021-06-01","kind":"drop","player":"Caldwell-Pope,Kentavious","team":"LAL"}
+{"game_date":"2021-06-01","kind":"drop","player":"Davis,Anthony","team":"LAL"}
+{"game_date":"2021-06-01","kind":"drop","player":"Nader,Abdel","team":"PHX"}
+{"game_date":"2021-06-01","kind":"drop","player":"Paul,Chris","team":"PHX"}
+{"game_date":"2021-06-01","kind":"drop","player":"Collins,Zach","team":"POR"}
+{"game_date":"2021-06-01","kind":"drop","player":"Nurkic,Jusuf","team":"POR"}
+{"kind":"report","observed_at":"2021-06-03T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-02","v":1}
+{"game_date":"2021-06-02","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@NYK","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Knee; Soreness","status":"Available","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-02","game_time":"07:00 (ET)","kind":"set","matchup":"WAS@PHI","player":"Curry,Seth","player_display":"Curry, Seth","reason":"Injury/Illness - Left Ankle; Sprain","status":"Available","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-02","game_time":"07:00 (ET)","kind":"set","matchup":"WAS@PHI","player":"Hill,George","player_display":"Hill, George","reason":"Injury/Illness - Left Knee; Contusion","status":"Available","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-03","game_time":"08:00 (ET)","kind":"set","matchup":"DEN@POR","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Hamstring; Strain","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-03","game_time":"08:00 (ET)","kind":"set","matchup":"DEN@POR","player":"Dozier,PJ","player_display":"Dozier, PJ","reason":"Injury/Illness - Right Adductor; Strain","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-03","game_time":"08:00 (ET)","kind":"set","matchup":"DEN@POR","player":"Murray,Jamal","player_display":"Murray, Jamal","reason":"Injury/Illness - Left Acl; Surgery","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-03","game_time":"10:30 (ET)","kind":"set","matchup":"PHX@LAL","player":"Caldwell-Pope,Kentavious","player_display":"Caldwell-Pope, Kentavious","reason":"Injury/Illness - Left Knee; Contusion","status":"Questionable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2021-06-03","game_time":"10:30 (ET)","kind":"set","matchup":"PHX@LAL","player":"Davis,Anthony","player_display":"Davis, Anthony","reason":"Injury/Illness - Left Groin; Strain","status":"Questionable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2021-06-03","game_time":"10:30 (ET)","kind":"set","matchup":"PHX@LAL","player":"Alexander,Ty-Shon","player_display":"Alexander, Ty-Shon","reason":"Injury/Illness - Non-COVID; Illness","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-03","game_time":"10:30 (ET)","kind":"set","matchup":"PHX@LAL","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Arthroscopy","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-03","game_time":"10:30 (ET)","kind":"set","matchup":"PHX@LAL","player":"Paul,Chris","player_display":"Paul, Chris","reason":"Injury/Illness - Right Shoulder; Contusion","status":"Probable","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-03","game_time":"08:00 (ET)","kind":"set","matchup":"DEN@POR","player":"Collins,Zach","player_display":"Collins, Zach","reason":"Injury/Illness - Left Ankle; Stress Fracture","status":"Out","team":"POR","team_display":"Portland Trail Blazers"}
+{"kind":"report","observed_at":"2021-06-03T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-03","v":1}
+{"game_date":"2021-06-04","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@DAL","player":"Doncic,Luka","player_display":"Doncic, Luka","reason":"Injury/Illness - Cervical; Strain","status":"Probable","team":"DAL","team_display":"Dallas Mavericks"}
+{"game_date":"2021-06-04","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@DAL","player":"Kleber,Maxi","player_display":"Kleber, Maxi","reason":"Injury/Illness - Right Achilles; Soreness","status":"Probable","team":"DAL","team_display":"Dallas Mavericks"}
+{"game_date":"2021-06-04","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@DAL","player":"Redick,JJ","player_display":"Redick, JJ","reason":"Injury/Illness - Right Achilles; Injury","status":"Out","team":"DAL","team_display":"Dallas Mavericks"}
+{"game_date":"2021-06-02","kind":"drop","player":"Goodwin,Brandon","team":"ATL"}
+{"game_date":"2021-06-02","kind":"drop","player":"Hunter,De'Andre","team":"ATL"}
+{"game_date":"2021-06-02","kind":"drop","player":"Reddish,Cam","team":"ATL"}
+{"game_date":"2021-06-02","kind":"drop","player":"Doncic,Luka","team":"DAL"}
+{"game_date":"2021-06-02","kind":"drop","player":"Kleber,Maxi","team":"DAL"}
+{"game_date":"2021-06-02","kind":"drop","player":"Redick,JJ","team":"DAL"}
+{"game_date":"2021-06-02","kind":"drop","player":"Ibaka,Serge","team":"LAC"}
+{"game_date":"2021-06-02","kind":"drop","player":"McDermott,Sean","team":"MEM"}
+{"game_date":"2021-06-02","kind":"drop","player":"Robinson,Mitchell","team":"NYK"}
+{"game_date":"2021-06-02","kind":"drop","player":"Curry,Seth","team":"PHI"}
+{"game_date":"2021-06-02","kind":"drop","player":"Embiid,Joel","team":"PHI"}
+{"game_date":"2021-06-02","kind":"drop","player":"Hill,George","team":"PHI"}
+{"game_date":"2021-06-02","kind":"drop","player":"Avdija,Deni","team":"WAS"}
+{"game_date":"2021-06-02","kind":"drop","player":"Bertans,Davis","team":"WAS"}
+{"game_date":"2021-06-02","kind":"drop","player":"Bryant,Thomas","team":"WAS"}
+{"game_date":"2021-06-02","kind":"drop","player":"Westbrook,Russell","team":"WAS"}
+{"kind":"report","observed_at":"2021-06-04T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-03","v":1}
+{"game_date":"2021-06-04","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@DAL","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Spasms","status":"Doubtful","team":"LAC","team_display":"LA Clippers"}
+{"kind":"report","observed_at":"2021-06-04T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-04","v":1}
+{"game_date":"2021-06-05","game_time":"07:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"Dinwiddie,Spencer","player_display":"Dinwiddie, Spencer","reason":"Injury/Illness - Right Knee; Partially Torn ACL","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-05","game_time":"07:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"Green,Jeff","player_display":"Green, Jeff","reason":"Injury/Illness - Left Plantar Fascia; Strain","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-05","game_time":"07:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Torn Ligament","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-03","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2021-06-03","kind":"drop","player":"Dozier,PJ","team":"DEN"}
+{"game_date":"2021-06-03","kind":"drop","player":"Murray,Jamal","team":"DEN"}
+{"game_date":"2021-06-03","kind":"drop","player":"Caldwell-Pope,Kentavious","team":"LAL"}
+{"game_date":"2021-06-03","kind":"drop","player":"Davis,Anthony","team":"LAL"}
+{"game_date":"2021-06-03","kind":"drop","player":"Alexander,Ty-Shon","team":"PHX"}
+{"game_date":"2021-06-03","kind":"drop","player":"Nader,Abdel","team":"PHX"}
+{"game_date":"2021-06-03","kind":"drop","player":"Paul,Chris","team":"PHX"}
+{"game_date":"2021-06-03","kind":"drop","player":"Collins,Zach","team":"POR"}
+{"kind":"report","observed_at":"2021-06-05T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-04","v":1}
+{"game_date":"2021-06-04","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@DAL","player":"Doncic,Luka","player_display":"Doncic, Luka","reason":"Injury/Illness - Cervical; Strain","status":"Available","team":"DAL","team_display":"Dallas Mavericks"}
+{"game_date":"2021-06-04","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@DAL","player":"Kleber,Maxi","player_display":"Kleber, Maxi","reason":"Injury/Illness - Right Achilles; Soreness","status":"Available","team":"DAL","team_display":"Dallas Mavericks"}
+{"game_date":"2021-06-04","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@DAL","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Spasms","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"kind":"report","observed_at":"2021-06-05T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-05","v":1}
+{"game_date":"2021-06-06","game_time":"01:00 (ET)","kind":"set","matchup":"ATL@PHI","player":"Dunn,Kris","player_display":"Dunn, Kris","reason":"Injury/Illness - Non-Covid; Illness","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-06","game_time":"01:00 (ET)","kind":"set","matchup":"ATL@PHI","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-06","game_time":"01:00 (ET)","kind":"set","matchup":"ATL@PHI","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Knee; Soreness","status":"Questionable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-06","game_time":"01:00 (ET)","kind":"set","matchup":"ATL@PHI","player":"Reddish,Cam","player_display":"Reddish, Cam","reason":"Injury/Illness - Right Achilles; Soreness","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-06","game_time":"03:30 (ET)","kind":"set","matchup":"DAL@LAC","player":"Doncic,Luka","player_display":"Doncic, Luka","reason":"Injury/Illness - Cervical; Strain","status":"Probable","team":"DAL","team_display":"Dallas Mavericks"}
+{"game_date":"2021-06-06","game_time":"03:30 (ET)","kind":"set","matchup":"DAL@LAC","player":"Kleber,Maxi","player_display":"Kleber, Maxi","reason":"Injury/Illness - Right Achilles; Soreness","status":"Probable","team":"DAL","team_display":"Dallas Mavericks"}
+{"game_date":"2021-06-06","game_time":"03:30 (ET)","kind":"set","matchup":"DAL@LAC","player":"Redick,JJ","player_display":"Redick, JJ","reason":"Injury/Illness - Right Achilles; Injury","status":"Out","team":"DAL","team_display":"Dallas Mavericks"}
+{"game_date":"2021-06-06","game_time":"03:30 (ET)","kind":"set","matchup":"DAL@LAC","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Spasms","status":"Doubtful","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-06","game_time":"01:00 (ET)","kind":"set","matchup":"ATL@PHI","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Small Lateral Meniscus Tear","status":"Questionable","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-04","kind":"drop","player":"Doncic,Luka","team":"DAL"}
+{"game_date":"2021-06-04","kind":"drop","player":"Kleber,Maxi","team":"DAL"}
+{"game_date":"2021-06-04","kind":"drop","player":"Redick,JJ","team":"DAL"}
+{"game_date":"2021-06-04","kind":"drop","player":"Ibaka,Serge","team":"LAC"}
+{"kind":"report","observed_at":"2021-06-06T17:30:00+00:00","reconstructed":false,"report_date":"2021-06-06","v":1}
+{"game_date":"2021-06-06","game_time":"01:00 (ET)","kind":"set","matchup":"ATL@PHI","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-06","game_time":"01:00 (ET)","kind":"set","matchup":"ATL@PHI","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Small Lateral Meniscus Tear","status":"Available","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-05","kind":"drop","player":"Dinwiddie,Spencer","team":"BKN"}
+{"game_date":"2021-06-05","kind":"drop","player":"Green,Jeff","team":"BKN"}
+{"game_date":"2021-06-05","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"kind":"report","observed_at":"2021-06-06T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-06","v":1}
+{"game_date":"2021-06-06","game_time":"03:30 (ET)","kind":"set","matchup":"DAL@LAC","player":"Doncic,Luka","player_display":"Doncic, Luka","reason":"Injury/Illness - Cervical; Strain","status":"Available","team":"DAL","team_display":"Dallas Mavericks"}
+{"game_date":"2021-06-06","game_time":"03:30 (ET)","kind":"set","matchup":"DAL@LAC","player":"Kleber,Maxi","player_display":"Kleber, Maxi","reason":"Injury/Illness - Right Achilles; Soreness","status":"Available","team":"DAL","team_display":"Dallas Mavericks"}
+{"game_date":"2021-06-06","game_time":"03:30 (ET)","kind":"set","matchup":"DAL@LAC","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Spasms","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-07","game_time":"07:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"Dinwiddie,Spencer","player_display":"Dinwiddie, Spencer","reason":"Injury/Illness - Right Knee; Partially Torn ACL","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-07","game_time":"07:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"Green,Jeff","player_display":"Green, Jeff","reason":"Injury/Illness - Left Plantar Fascia; Strain","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-07","game_time":"07:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"Harden,James","player_display":"Harden, James","reason":"Injury/Illness - Right Hamstring; Tightness","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-07","game_time":"10:00 (ET)","kind":"set","matchup":"DEN@PHX","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Hamstring; Strain","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-07","game_time":"10:00 (ET)","kind":"set","matchup":"DEN@PHX","player":"Dozier,PJ","player_display":"Dozier, PJ","reason":"Injury/Illness - Right Adductor; Strain","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-07","game_time":"10:00 (ET)","kind":"set","matchup":"DEN@PHX","player":"Murray,Jamal","player_display":"Murray, Jamal","reason":"Injury/Illness - Left Acl; Surgery","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-07","game_time":"07:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Torn Ligament","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-07","game_time":"10:00 (ET)","kind":"set","matchup":"DEN@PHX","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Rehab","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"kind":"report","observed_at":"2021-06-07T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-07","v":1}
+{"game_date":"2021-06-07","game_time":"07:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"Nwora,Jordan","player_display":"Nwora, Jordan","reason":"Injury/Illness - Left Thigh; Contusion","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-08","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Dunn,Kris","player_display":"Dunn, Kris","reason":"Injury/Illness - Non-covid; Illness","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-08","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-08","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Knee; Soreness","status":"Questionable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-08","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Reddish,Cam","player_display":"Reddish, Cam","reason":"Injury/Illness - Right Achilles; Soreness","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-08","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Small Lateral Meniscus Tear","status":"Questionable","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-06","kind":"drop","player":"Dunn,Kris","team":"ATL"}
+{"game_date":"2021-06-06","kind":"drop","player":"Goodwin,Brandon","team":"ATL"}
+{"game_date":"2021-06-06","kind":"drop","player":"Hunter,De'Andre","team":"ATL"}
+{"game_date":"2021-06-06","kind":"drop","player":"Reddish,Cam","team":"ATL"}
+{"game_date":"2021-06-06","kind":"drop","player":"Doncic,Luka","team":"DAL"}
+{"game_date":"2021-06-06","kind":"drop","player":"Kleber,Maxi","team":"DAL"}
+{"game_date":"2021-06-06","kind":"drop","player":"Redick,JJ","team":"DAL"}
+{"game_date":"2021-06-06","kind":"drop","player":"Ibaka,Serge","team":"LAC"}
+{"game_date":"2021-06-06","kind":"drop","player":"Embiid,Joel","team":"PHI"}
+{"kind":"report","observed_at":"2021-06-08T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-07","v":1}
+{"game_date":"2021-06-08","game_time":"10:00 (ET)","kind":"set","matchup":"LAC@UTA","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Spasms","status":"Doubtful","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-08","game_time":"10:00 (ET)","kind":"set","matchup":"LAC@UTA","player":"Conley,Mike","player_display":"Conley, Mike","reason":"Injury/Illness - Right Hamstring; Mild strain","status":"Questionable","team":"UTA","team_display":"Utah Jazz"}
+{"kind":"report","observed_at":"2021-06-08T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-08","v":1}
+{"game_date":"2021-06-08","game_time":"10:00 (ET)","kind":"set","matchup":"LAC@UTA","player":"Conley,Mike","player_display":"Conley, Mike","reason":"Injury/Illness - Right Hamstring; Mild strain","status":"Out","team":"UTA","team_display":"Utah Jazz"}
+{"game_date":"2021-06-07","kind":"drop","player":"Dinwiddie,Spencer","team":"BKN"}
+{"game_date":"2021-06-07","kind":"drop","player":"Green,Jeff","team":"BKN"}
+{"game_date":"2021-06-07","kind":"drop","player":"Harden,James","team":"BKN"}
+{"game_date":"2021-06-07","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2021-06-07","kind":"drop","player":"Dozier,PJ","team":"DEN"}
+{"game_date":"2021-06-07","kind":"drop","player":"Murray,Jamal","team":"DEN"}
+{"game_date":"2021-06-07","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"game_date":"2021-06-07","kind":"drop","player":"Nwora,Jordan","team":"MIL"}
+{"game_date":"2021-06-07","kind":"drop","player":"Nader,Abdel","team":"PHX"}
+{"kind":"report","observed_at":"2021-06-09T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-08","v":1}
+{"game_date":"2021-06-08","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-08","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Small Lateral Meniscus Tear","status":"Available","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-09","game_time":"09:30 (ET)","kind":"set","matchup":"DEN@PHX","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Rehab","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"kind":"report","observed_at":"2021-06-09T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-09","v":1}
+{"game_date":"2021-06-09","game_time":"09:30 (ET)","kind":"set","matchup":"DEN@PHX","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Hamstring; Strain","status":"Questionable","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-09","game_time":"09:30 (ET)","kind":"set","matchup":"DEN@PHX","player":"Dozier,PJ","player_display":"Dozier, PJ","reason":"Injury/Illness - Right Adductor; Strain","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-09","game_time":"09:30 (ET)","kind":"set","matchup":"DEN@PHX","player":"Murray,Jamal","player_display":"Murray, Jamal","reason":"Injury/Illness - Left Acl; Surgery","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-09","game_time":"09:30 (ET)","kind":"set","matchup":"DEN@PHX","player":"PorterJr.,Michael","player_display":"Porter Jr., Michael","reason":"Injury/Illness - low back; Tightness","status":"Questionable","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-10","game_time":"07:30 (ET)","kind":"set","matchup":"BKN@MIL","player":"Dinwiddie,Spencer","player_display":"Dinwiddie, Spencer","reason":"Injury/Illness - Right Knee; Partially Torn ACL","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-10","game_time":"07:30 (ET)","kind":"set","matchup":"BKN@MIL","player":"Green,Jeff","player_display":"Green, Jeff","reason":"Injury/Illness - Left Plantar Fascia; Strain","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-10","game_time":"07:30 (ET)","kind":"set","matchup":"BKN@MIL","player":"Harden,James","player_display":"Harden, James","reason":"Injury/Illness - Right Hamstring; Tightness","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-10","game_time":"07:30 (ET)","kind":"set","matchup":"BKN@MIL","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-10","game_time":"07:30 (ET)","kind":"set","matchup":"BKN@MIL","player":"Merrill,Sam","player_display":"Merrill, Sam","reason":"Injury/Illness - Right Ankle; Sprain","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-10","game_time":"07:30 (ET)","kind":"set","matchup":"BKN@MIL","player":"Nwora,Jordan","player_display":"Nwora, Jordan","reason":"Injury/Illness - Left Thigh; Contusion","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-08","kind":"drop","player":"Dunn,Kris","team":"ATL"}
+{"game_date":"2021-06-08","kind":"drop","player":"Goodwin,Brandon","team":"ATL"}
+{"game_date":"2021-06-08","kind":"drop","player":"Hunter,De'Andre","team":"ATL"}
+{"game_date":"2021-06-08","kind":"drop","player":"Reddish,Cam","team":"ATL"}
+{"game_date":"2021-06-08","kind":"drop","player":"Ibaka,Serge","team":"LAC"}
+{"game_date":"2021-06-08","kind":"drop","player":"Embiid,Joel","team":"PHI"}
+{"game_date":"2021-06-08","kind":"drop","player":"Conley,Mike","team":"UTA"}
+{"kind":"report","observed_at":"2021-06-10T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-09","v":1}
+{"game_date":"2021-06-09","game_time":"09:30 (ET)","kind":"set","matchup":"DEN@PHX","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Hamstring; Strain","status":"Available","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-09","game_time":"09:30 (ET)","kind":"set","matchup":"DEN@PHX","player":"PorterJr.,Michael","player_display":"Porter Jr., Michael","reason":"Injury/Illness - low back; Tightness","status":"Available","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-10","game_time":"10:00 (ET)","kind":"set","matchup":"LAC@UTA","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Spasms","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-10","game_time":"10:00 (ET)","kind":"set","matchup":"LAC@UTA","player":"Conley,Mike","player_display":"Conley, Mike","reason":"Injury/Illness - Right Hamstring; Mild strain","status":"Questionable","team":"UTA","team_display":"Utah Jazz"}
+{"kind":"report","observed_at":"2021-06-10T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-10","v":1}
+{"game_date":"2021-06-10","game_time":"10:00 (ET)","kind":"set","matchup":"LAC@UTA","player":"Conley,Mike","player_display":"Conley, Mike","reason":"Injury/Illness - Right Hamstring; Mild strain","status":"Out","team":"UTA","team_display":"Utah Jazz"}
+{"game_date":"2021-06-11","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-11","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Meniscus; Tear","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-11","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Reddish,Cam","player_display":"Reddish, Cam","reason":"Injury/Illness - Right Achilles; Soreness","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-11","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Small Lateral Meniscus Tear","status":"Questionable","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-09","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2021-06-09","kind":"drop","player":"Dozier,PJ","team":"DEN"}
+{"game_date":"2021-06-09","kind":"drop","player":"Murray,Jamal","team":"DEN"}
+{"game_date":"2021-06-09","kind":"drop","player":"PorterJr.,Michael","team":"DEN"}
+{"game_date":"2021-06-09","kind":"drop","player":"Nader,Abdel","team":"PHX"}
+{"kind":"report","observed_at":"2021-06-11T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-10","v":1}
+{"game_date":"2021-06-11","game_time":"10:00 (ET)","kind":"set","matchup":"PHX@DEN","player":"Dozier,PJ","player_display":"Dozier, PJ","reason":"Injury/Illness - Right Adductor; Strain","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-11","game_time":"10:00 (ET)","kind":"set","matchup":"PHX@DEN","player":"Murray,Jamal","player_display":"Murray, Jamal","reason":"Injury/Illness - Left Acl; Surgery","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-11","game_time":"10:00 (ET)","kind":"set","matchup":"PHX@DEN","player":"PorterJr.,Michael","player_display":"Porter Jr., Michael","reason":"Injury/Illness - Low Back; Tightness","status":"Probable","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-11","game_time":"10:00 (ET)","kind":"set","matchup":"PHX@DEN","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Rehab","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"kind":"report","observed_at":"2021-06-11T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-11","v":1}
+{"game_date":"2021-06-10","kind":"drop","player":"Dinwiddie,Spencer","team":"BKN"}
+{"game_date":"2021-06-10","kind":"drop","player":"Green,Jeff","team":"BKN"}
+{"game_date":"2021-06-10","kind":"drop","player":"Harden,James","team":"BKN"}
+{"game_date":"2021-06-10","kind":"drop","player":"Ibaka,Serge","team":"LAC"}
+{"game_date":"2021-06-10","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"game_date":"2021-06-10","kind":"drop","player":"Merrill,Sam","team":"MIL"}
+{"game_date":"2021-06-10","kind":"drop","player":"Nwora,Jordan","team":"MIL"}
+{"game_date":"2021-06-10","kind":"drop","player":"Conley,Mike","team":"UTA"}
+{"kind":"report","observed_at":"2021-06-12T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-11","v":1}
+{"game_date":"2021-06-11","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Small Lateral Meniscus Tear","status":"Available","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-12","game_time":"08:30 (ET)","kind":"set","matchup":"UTA@LAC","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Surgery","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-12","game_time":"08:30 (ET)","kind":"set","matchup":"UTA@LAC","player":"Conley,Mike","player_display":"Conley, Mike","reason":"Injury/Illness - Right Hamstring; Mild strain","status":"Questionable","team":"UTA","team_display":"Utah Jazz"}
+{"kind":"report","observed_at":"2021-06-12T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-12","v":1}
+{"game_date":"2021-06-12","game_time":"08:30 (ET)","kind":"set","matchup":"UTA@LAC","player":"Conley,Mike","player_display":"Conley, Mike","reason":"Injury/Illness - Right Hamstring; Mild strain","status":"Out","team":"UTA","team_display":"Utah Jazz"}
+{"game_date":"2021-06-13","game_time":"03:00 (ET)","kind":"set","matchup":"BKN@MIL","player":"Dinwiddie,Spencer","player_display":"Dinwiddie, Spencer","reason":"Injury/Illness - Right Knee; Partially Torn ACL","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-13","game_time":"03:00 (ET)","kind":"set","matchup":"BKN@MIL","player":"Green,Jeff","player_display":"Green, Jeff","reason":"Injury/Illness - Left Plantar Fascia; Strain","status":"Questionable","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-13","game_time":"03:00 (ET)","kind":"set","matchup":"BKN@MIL","player":"Harden,James","player_display":"Harden, James","reason":"Injury/Illness - Right Hamstring; Tightness","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-13","game_time":"03:00 (ET)","kind":"set","matchup":"BKN@MIL","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-13","game_time":"03:00 (ET)","kind":"set","matchup":"BKN@MIL","player":"Nwora,Jordan","player_display":"Nwora, Jordan","reason":"Injury/Illness - Left Thigh; Contusion","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-13","game_time":"08:00 (ET)","kind":"set","matchup":"PHX@DEN","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Rehab","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-11","kind":"drop","player":"Goodwin,Brandon","team":"ATL"}
+{"game_date":"2021-06-11","kind":"drop","player":"Hunter,De'Andre","team":"ATL"}
+{"game_date":"2021-06-11","kind":"drop","player":"Reddish,Cam","team":"ATL"}
+{"game_date":"2021-06-11","kind":"drop","player":"Dozier,PJ","team":"DEN"}
+{"game_date":"2021-06-11","kind":"drop","player":"Murray,Jamal","team":"DEN"}
+{"game_date":"2021-06-11","kind":"drop","player":"PorterJr.,Michael","team":"DEN"}
+{"game_date":"2021-06-11","kind":"drop","player":"Embiid,Joel","team":"PHI"}
+{"game_date":"2021-06-11","kind":"drop","player":"Nader,Abdel","team":"PHX"}
+{"kind":"report","observed_at":"2021-06-13T17:30:00+00:00","reconstructed":false,"report_date":"2021-06-13","v":1}
+{"game_date":"2021-06-13","game_time":"08:00 (ET)","kind":"set","matchup":"PHX@DEN","player":"Dozier,PJ","player_display":"Dozier, PJ","reason":"Injury/Illness - Right Adductor; Strain","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-13","game_time":"08:00 (ET)","kind":"set","matchup":"PHX@DEN","player":"Murray,Jamal","player_display":"Murray, Jamal","reason":"Injury/Illness - Left Acl; Surgery","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2021-06-12","kind":"drop","player":"Ibaka,Serge","team":"LAC"}
+{"game_date":"2021-06-12","kind":"drop","player":"Conley,Mike","team":"UTA"}
+{"kind":"report","observed_at":"2021-06-13T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-13","v":1}
+{"game_date":"2021-06-13","game_time":"03:00 (ET)","kind":"set","matchup":"BKN@MIL","player":"Green,Jeff","player_display":"Green, Jeff","reason":"Injury/Illness - Left Plantar Fascia; Strain","status":"Available","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-14","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-14","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Meniscus; Tear","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-14","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Reddish,Cam","player_display":"Reddish, Cam","reason":"Injury/Illness - Right Achilles; Soreness","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-14","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Small Lateral Meniscus Tear","status":"Questionable","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-14","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Green,Danny","player_display":"Green, Danny","reason":"Injury/Illness - Right Calf; Strain","status":"Out","team":"PHI","team_display":"Philadelphia 76ers"}
+{"kind":"report","observed_at":"2021-06-14T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-14","v":1}
+{"game_date":"2021-06-14","game_time":"10:00 (ET)","kind":"set","matchup":"UTA@LAC","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Surgery","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-14","game_time":"10:00 (ET)","kind":"set","matchup":"UTA@LAC","player":"Conley,Mike","player_display":"Conley, Mike","reason":"Injury/Illness - Right Hamstring; Mild strain","status":"Out","team":"UTA","team_display":"Utah Jazz"}
+{"game_date":"2021-06-15","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"Dinwiddie,Spencer","player_display":"Dinwiddie, Spencer","reason":"Injury/Illness - Right Knee; Partially Torn ACL","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-15","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"Harden,James","player_display":"Harden, James","reason":"Injury/Illness - Right Hamstring; Tightness","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-15","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"Irving,Kyrie","player_display":"Irving, Kyrie","reason":"Injury/Illness - Right Ankle; Sprain","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-15","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-15","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"Nwora,Jordan","player_display":"Nwora, Jordan","reason":"Injury/Illness - Left Thigh; Contusion","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-13","kind":"drop","player":"Dinwiddie,Spencer","team":"BKN"}
+{"game_date":"2021-06-13","kind":"drop","player":"Green,Jeff","team":"BKN"}
+{"game_date":"2021-06-13","kind":"drop","player":"Harden,James","team":"BKN"}
+{"game_date":"2021-06-13","kind":"drop","player":"Dozier,PJ","team":"DEN"}
+{"game_date":"2021-06-13","kind":"drop","player":"Murray,Jamal","team":"DEN"}
+{"game_date":"2021-06-13","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"game_date":"2021-06-13","kind":"drop","player":"Nwora,Jordan","team":"MIL"}
+{"game_date":"2021-06-13","kind":"drop","player":"Nader,Abdel","team":"PHX"}
+{"kind":"report","observed_at":"2021-06-15T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-14","v":1}
+{"game_date":"2021-06-14","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Small Lateral Meniscus Tear","status":"Available","team":"PHI","team_display":"Philadelphia 76ers"}
+{"kind":"report","observed_at":"2021-06-15T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-15","v":1}
+{"game_date":"2021-06-15","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"Harden,James","player_display":"Harden, James","reason":"Injury/Illness - Right Hamstring; Tightness","status":"Questionable","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-16","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-16","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Meniscus; Tear","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-16","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Reddish,Cam","player_display":"Reddish, Cam","reason":"Injury/Illness - Right Achilles; Soreness","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-16","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Young,Trae","player_display":"Young, Trae","reason":"Injury/Illness - Right Shoulder; Soreness","status":"Probable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-16","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Small lateral meniscus tear","status":"Questionable","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-16","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Green,Danny","player_display":"Green, Danny","reason":"Injury/Illness - Right Calf; Strain","status":"Out","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-14","kind":"drop","player":"Goodwin,Brandon","team":"ATL"}
+{"game_date":"2021-06-14","kind":"drop","player":"Hunter,De'Andre","team":"ATL"}
+{"game_date":"2021-06-14","kind":"drop","player":"Reddish,Cam","team":"ATL"}
+{"game_date":"2021-06-14","kind":"drop","player":"Ibaka,Serge","team":"LAC"}
+{"game_date":"2021-06-14","kind":"drop","player":"Embiid,Joel","team":"PHI"}
+{"game_date":"2021-06-14","kind":"drop","player":"Green,Danny","team":"PHI"}
+{"game_date":"2021-06-14","kind":"drop","player":"Conley,Mike","team":"UTA"}
+{"kind":"report","observed_at":"2021-06-16T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-16","v":1}
+{"game_date":"2021-06-16","game_time":"10:00 (ET)","kind":"set","matchup":"LAC@UTA","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Surgery","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-16","game_time":"10:00 (ET)","kind":"set","matchup":"LAC@UTA","player":"Leonard,Kawhi","player_display":"Leonard, Kawhi","reason":"Injury/Illness - Right Knee; Sprain","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-16","game_time":"10:00 (ET)","kind":"set","matchup":"LAC@UTA","player":"Conley,Mike","player_display":"Conley, Mike","reason":"Injury/Illness - Right Hamstring; Mild Strain","status":"Out","team":"UTA","team_display":"Utah Jazz"}
+{"game_date":"2021-06-17","game_time":"08:30 (ET)","kind":"set","matchup":"BKN@MIL","player":"Dinwiddie,Spencer","player_display":"Dinwiddie, Spencer","reason":"Injury/Illness - Right Knee; Partially Torn ACL","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-17","game_time":"08:30 (ET)","kind":"set","matchup":"BKN@MIL","player":"Irving,Kyrie","player_display":"Irving, Kyrie","reason":"Injury/Illness - Right Ankle; Sprain","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-15","kind":"drop","player":"Dinwiddie,Spencer","team":"BKN"}
+{"game_date":"2021-06-15","kind":"drop","player":"Harden,James","team":"BKN"}
+{"game_date":"2021-06-15","kind":"drop","player":"Irving,Kyrie","team":"BKN"}
+{"game_date":"2021-06-15","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"game_date":"2021-06-15","kind":"drop","player":"Nwora,Jordan","team":"MIL"}
+{"kind":"report","observed_at":"2021-06-17T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-16","v":1}
+{"game_date":"2021-06-16","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Young,Trae","player_display":"Young, Trae","reason":"Injury/Illness - Right Shoulder; Soreness","status":"Available","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-16","game_time":"07:30 (ET)","kind":"set","matchup":"ATL@PHI","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Small lateral meniscus tear","status":"Available","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-16","game_time":"10:00 (ET)","kind":"set","matchup":"LAC@UTA","player":"Hughes,Elijah","player_display":"Hughes, Elijah","reason":"Injury/Illness - N/A; Non-COVID illness","status":"Out","team":"UTA","team_display":"Utah Jazz"}
+{"game_date":"2021-06-17","game_time":"08:30 (ET)","kind":"set","matchup":"BKN@MIL","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-17","game_time":"08:30 (ET)","kind":"set","matchup":"BKN@MIL","player":"Nwora,Jordan","player_display":"Nwora, Jordan","reason":"Injury/Illness - Left Thigh; Contusion","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"kind":"report","observed_at":"2021-06-17T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-17","v":1}
+{"game_date":"2021-06-18","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-18","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Meniscus; Surgery","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-18","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Reddish,Cam","player_display":"Reddish, Cam","reason":"Injury/Illness - Right Achilles; Soreness","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-18","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Young,Trae","player_display":"Young, Trae","reason":"Injury/Illness - Right Shoulder; Soreness","status":"Probable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-18","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Small lateral meniscus tear","status":"Questionable","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-18","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Green,Danny","player_display":"Green, Danny","reason":"Injury/Illness - Right Calf; Strain","status":"Out","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-16","kind":"drop","player":"Goodwin,Brandon","team":"ATL"}
+{"game_date":"2021-06-16","kind":"drop","player":"Hunter,De'Andre","team":"ATL"}
+{"game_date":"2021-06-16","kind":"drop","player":"Reddish,Cam","team":"ATL"}
+{"game_date":"2021-06-16","kind":"drop","player":"Young,Trae","team":"ATL"}
+{"game_date":"2021-06-16","kind":"drop","player":"Ibaka,Serge","team":"LAC"}
+{"game_date":"2021-06-16","kind":"drop","player":"Leonard,Kawhi","team":"LAC"}
+{"game_date":"2021-06-16","kind":"drop","player":"Embiid,Joel","team":"PHI"}
+{"game_date":"2021-06-16","kind":"drop","player":"Green,Danny","team":"PHI"}
+{"game_date":"2021-06-16","kind":"drop","player":"Conley,Mike","team":"UTA"}
+{"game_date":"2021-06-16","kind":"drop","player":"Hughes,Elijah","team":"UTA"}
+{"kind":"report","observed_at":"2021-06-18T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-18","v":1}
+{"game_date":"2021-06-18","game_time":"10:00 (ET)","kind":"set","matchup":"UTA@LAC","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Surgery","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-18","game_time":"10:00 (ET)","kind":"set","matchup":"UTA@LAC","player":"Leonard,Kawhi","player_display":"Leonard, Kawhi","reason":"Injury/Illness - Right Knee; Sprain","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-18","game_time":"10:00 (ET)","kind":"set","matchup":"UTA@LAC","player":"Conley,Mike","player_display":"Conley, Mike","reason":"Injury/Illness - Right Hamstring; Mild strain","status":"Questionable","team":"UTA","team_display":"Utah Jazz"}
+{"game_date":"2021-06-18","game_time":"10:00 (ET)","kind":"set","matchup":"UTA@LAC","player":"Mitchell,Donovan","player_display":"Mitchell, Donovan","reason":"Injury/Illness - Right Ankle; Soreness","status":"Questionable","team":"UTA","team_display":"Utah Jazz"}
+{"game_date":"2021-06-19","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"Dinwiddie,Spencer","player_display":"Dinwiddie, Spencer","reason":"Injury/Illness - Right Knee; Partially Torn ACL","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-19","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"Irving,Kyrie","player_display":"Irving, Kyrie","reason":"Injury/Illness - Right Ankle; Sprain","status":"Out","team":"BKN","team_display":"Brooklyn Nets"}
+{"game_date":"2021-06-19","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-19","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@BKN","player":"Nwora,Jordan","player_display":"Nwora, Jordan","reason":"Injury/Illness - Left Thigh; Contusion","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-17","kind":"drop","player":"Dinwiddie,Spencer","team":"BKN"}
+{"game_date":"2021-06-17","kind":"drop","player":"Irving,Kyrie","team":"BKN"}
+{"game_date":"2021-06-17","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"game_date":"2021-06-17","kind":"drop","player":"Nwora,Jordan","team":"MIL"}
+{"kind":"report","observed_at":"2021-06-19T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-18","v":1}
+{"game_date":"2021-06-18","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Young,Trae","player_display":"Young, Trae","reason":"Injury/Illness - Right Shoulder; Soreness","status":"Available","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-18","game_time":"07:30 (ET)","kind":"set","matchup":"PHI@ATL","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Small lateral meniscus tear","status":"Available","team":"PHI","team_display":"Philadelphia 76ers"}
+{"kind":"report","observed_at":"2021-06-19T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-19","v":1}
+{"game_date":"2021-06-20","game_time":"08:00 (ET)","kind":"set","matchup":"ATL@PHI","player":"Bogdanovic,Bogdan","player_display":"Bogdanovic, Bogdan","reason":"Injury/Illness - Right Knee; Soreness","status":"Questionable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-20","game_time":"08:00 (ET)","kind":"set","matchup":"ATL@PHI","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-20","game_time":"08:00 (ET)","kind":"set","matchup":"ATL@PHI","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Meniscus; Surgery","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-20","game_time":"08:00 (ET)","kind":"set","matchup":"ATL@PHI","player":"Reddish,Cam","player_display":"Reddish, Cam","reason":"Injury/Illness - Right Achilles; Soreness","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-20","game_time":"08:00 (ET)","kind":"set","matchup":"ATL@PHI","player":"Young,Trae","player_display":"Young, Trae","reason":"Injury/Illness - Right Shoulder; Soreness","status":"Probable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-20","game_time":"08:00 (ET)","kind":"set","matchup":"ATL@PHI","player":"Embiid,Joel","player_display":"Embiid, Joel","reason":"Injury/Illness - Right Knee; Small lateral meniscus tear","status":"Questionable","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-20","game_time":"08:00 (ET)","kind":"set","matchup":"ATL@PHI","player":"Green,Danny","player_display":"Green, Danny","reason":"Injury/Illness - Right Calf; Strain","status":"Out","team":"PHI","team_display":"Philadelphia 76ers"}
+{"game_date":"2021-06-18","kind":"drop","player":"Goodwin,Brandon","team":"ATL"}
+{"game_date":"2021-06-18","kind":"drop","player":"Hunter,De'Andre","team":"ATL"}
+{"game_date":"2021-06-18","kind":"drop","player":"Reddish,Cam","team":"ATL"}
+{"game_date":"2021-06-18","kind":"drop","player":"Young,Trae","team":"ATL"}
+{"game_date":"2021-06-18","kind":"drop","player":"Ibaka,Serge","team":"LAC"}
+{"game_date":"2021-06-18","kind":"drop","player":"Leonard,Kawhi","team":"LAC"}
+{"game_date":"2021-06-18","kind":"drop","player":"Embiid,Joel","team":"PHI"}
+{"game_date":"2021-06-18","kind":"drop","player":"Green,Danny","team":"PHI"}
+{"game_date":"2021-06-18","kind":"drop","player":"Conley,Mike","team":"UTA"}
+{"game_date":"2021-06-18","kind":"drop","player":"Mitchell,Donovan","team":"UTA"}
+{"kind":"report","observed_at":"2021-06-20T17:30:00+00:00","reconstructed":false,"report_date":"2021-06-20","v":1}
+{"game_date":"2021-06-20","game_time":"03:30 (ET)","kind":"set","matchup":"LAC@PHX","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Surgery","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-20","game_time":"03:30 (ET)","kind":"set","matchup":"LAC@PHX","player":"Leonard,Kawhi","player_display":"Leonard, Kawhi","reason":"Injury/Illness - Right Knee; Sprain","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-20","game_time":"03:30 (ET)","kind":"set","matchup":"LAC@PHX","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Rehab","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-20","game_time":"03:30 (ET)","kind":"set","matchup":"LAC@PHX","player":"Paul,Chris","player_display":"Paul, Chris","reason":"Health and Safety Protocols","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-19","kind":"drop","player":"Dinwiddie,Spencer","team":"BKN"}
+{"game_date":"2021-06-19","kind":"drop","player":"Irving,Kyrie","team":"BKN"}
+{"game_date":"2021-06-19","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"game_date":"2021-06-19","kind":"drop","player":"Nwora,Jordan","team":"MIL"}
+{"kind":"report","observed_at":"2021-06-20T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-20","v":1}
+{"kind":"report","observed_at":"2021-06-22T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-22","v":1}
+{"game_date":"2021-06-22","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@PHX","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Surgery","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-22","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@PHX","player":"Leonard,Kawhi","player_display":"Leonard, Kawhi","reason":"Injury/Illness - Right Knee; Sprain","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-22","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@PHX","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Rehab","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-22","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@PHX","player":"Paul,Chris","player_display":"Paul, Chris","reason":"Health and Safety Protocols","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-23","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-23","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Nwora,Jordan","player_display":"Nwora, Jordan","reason":"Injury/Illness - Left Thigh; Contusion","status":"Probable","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-20","kind":"drop","player":"Bogdanovic,Bogdan","team":"ATL"}
+{"game_date":"2021-06-20","kind":"drop","player":"Goodwin,Brandon","team":"ATL"}
+{"game_date":"2021-06-20","kind":"drop","player":"Hunter,De'Andre","team":"ATL"}
+{"game_date":"2021-06-20","kind":"drop","player":"Reddish,Cam","team":"ATL"}
+{"game_date":"2021-06-20","kind":"drop","player":"Young,Trae","team":"ATL"}
+{"game_date":"2021-06-20","kind":"drop","player":"Ibaka,Serge","team":"LAC"}
+{"game_date":"2021-06-20","kind":"drop","player":"Leonard,Kawhi","team":"LAC"}
+{"game_date":"2021-06-20","kind":"drop","player":"Embiid,Joel","team":"PHI"}
+{"game_date":"2021-06-20","kind":"drop","player":"Green,Danny","team":"PHI"}
+{"game_date":"2021-06-20","kind":"drop","player":"Nader,Abdel","team":"PHX"}
+{"game_date":"2021-06-20","kind":"drop","player":"Paul,Chris","team":"PHX"}
+{"kind":"report","observed_at":"2021-06-23T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-22","v":1}
+{"game_date":"2021-06-23","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Bogdanovic,Bogdan","player_display":"Bogdanovic, Bogdan","reason":"Injury/Illness - Right Knee; Soreness","status":"Questionable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-23","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-23","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Huerter,Kevin","player_display":"Huerter, Kevin","reason":"Injury/Illness - Left Ankle; Soreness","status":"Probable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-23","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Meniscus; Surgery","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-23","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Reddish,Cam","player_display":"Reddish, Cam","reason":"Injury/Illness - Right Achilles; Soreness","status":"Questionable","team":"ATL","team_display":"Atlanta Hawks"}
+{"kind":"report","observed_at":"2021-06-23T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-23","v":1}
+{"game_date":"2021-06-22","kind":"drop","player":"Ibaka,Serge","team":"LAC"}
+{"game_date":"2021-06-22","kind":"drop","player":"Leonard,Kawhi","team":"LAC"}
+{"game_date":"2021-06-22","kind":"drop","player":"Nader,Abdel","team":"PHX"}
+{"game_date":"2021-06-22","kind":"drop","player":"Paul,Chris","team":"PHX"}
+{"kind":"report","observed_at":"2021-06-24T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-24","v":1}
+{"game_date":"2021-06-24","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Surgery","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-24","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Leonard,Kawhi","player_display":"Leonard, Kawhi","reason":"Injury/Illness - Right Knee; Sprain","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-24","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Rehab","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-24","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Paul,Chris","player_display":"Paul, Chris","reason":"Health and Safety Protocols","status":"Available","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-23","kind":"drop","player":"Bogdanovic,Bogdan","team":"ATL"}
+{"game_date":"2021-06-23","kind":"drop","player":"Goodwin,Brandon","team":"ATL"}
+{"game_date":"2021-06-23","kind":"drop","player":"Huerter,Kevin","team":"ATL"}
+{"game_date":"2021-06-23","kind":"drop","player":"Hunter,De'Andre","team":"ATL"}
+{"game_date":"2021-06-23","kind":"drop","player":"Reddish,Cam","team":"ATL"}
+{"game_date":"2021-06-23","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"game_date":"2021-06-23","kind":"drop","player":"Nwora,Jordan","team":"MIL"}
+{"kind":"report","observed_at":"2021-06-25T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-24","v":1}
+{"game_date":"2021-06-25","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Bogdanovic,Bogdan","player_display":"Bogdanovic, Bogdan","reason":"Injury/Illness - Right Knee; Soreness","status":"Questionable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-25","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-25","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Meniscus; Surgery","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-25","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"kind":"report","observed_at":"2021-06-25T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-25","v":1}
+{"game_date":"2021-06-24","kind":"drop","player":"Ibaka,Serge","team":"LAC"}
+{"game_date":"2021-06-24","kind":"drop","player":"Leonard,Kawhi","team":"LAC"}
+{"game_date":"2021-06-24","kind":"drop","player":"Nader,Abdel","team":"PHX"}
+{"game_date":"2021-06-24","kind":"drop","player":"Paul,Chris","team":"PHX"}
+{"kind":"report","observed_at":"2021-06-26T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-26","v":1}
+{"game_date":"2021-06-26","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Surgery","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-26","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Leonard,Kawhi","player_display":"Leonard, Kawhi","reason":"Injury/Illness - Right Knee; Sprain","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-26","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Booker,Devin","player_display":"Booker, Devin","reason":"Injury/Illness - Nasal; Fracture","status":"Available","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-26","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Rehab","status":"Questionable","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-26","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Payne,Cameron","player_display":"Payne, Cameron","reason":"Injury/Illness - Left Ankle; Sprain","status":"Probable","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-27","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Bogdanovic,Bogdan","player_display":"Bogdanovic, Bogdan","reason":"Injury/Illness - Right Knee; Soreness","status":"Questionable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-27","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-27","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Meniscus; Surgery","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-27","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Antetokounmpo,Giannis","player_display":"Antetokounmpo, Giannis","reason":"Injury/Illness - Left Calf; Tightness","status":"Probable","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-27","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-25","kind":"drop","player":"Bogdanovic,Bogdan","team":"ATL"}
+{"game_date":"2021-06-25","kind":"drop","player":"Goodwin,Brandon","team":"ATL"}
+{"game_date":"2021-06-25","kind":"drop","player":"Hunter,De'Andre","team":"ATL"}
+{"game_date":"2021-06-25","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"kind":"report","observed_at":"2021-06-27T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-26","v":1}
+{"game_date":"2021-06-26","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Rehab","status":"Available","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-26","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Payne,Cameron","player_display":"Payne, Cameron","reason":"Injury/Illness - Left Ankle; Sprain","status":"Available","team":"PHX","team_display":"Phoenix Suns"}
+{"kind":"report","observed_at":"2021-06-27T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-27","v":1}
+{"game_date":"2021-06-26","kind":"drop","player":"Ibaka,Serge","team":"LAC"}
+{"game_date":"2021-06-26","kind":"drop","player":"Leonard,Kawhi","team":"LAC"}
+{"game_date":"2021-06-26","kind":"drop","player":"Booker,Devin","team":"PHX"}
+{"game_date":"2021-06-26","kind":"drop","player":"Nader,Abdel","team":"PHX"}
+{"game_date":"2021-06-26","kind":"drop","player":"Payne,Cameron","team":"PHX"}
+{"kind":"report","observed_at":"2021-06-28T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-28","v":1}
+{"game_date":"2021-06-28","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@PHX","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Surgery","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-28","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@PHX","player":"Leonard,Kawhi","player_display":"Leonard, Kawhi","reason":"Injury/Illness - Right Knee; Sprain","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-28","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@PHX","player":"Zubac,Ivica","player_display":"Zubac, Ivica","reason":"Injury/Illness - Right Knee; MCL Sprain","status":"Questionable","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-28","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@PHX","player":"Booker,Devin","player_display":"Booker, Devin","reason":"Injury/Illness - Nasal; Fracture","status":"Available","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-28","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@PHX","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Rehab","status":"Probable","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-29","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Bogdanovic,Bogdan","player_display":"Bogdanovic, Bogdan","reason":"Injury/Illness - Right Knee; Soreness","status":"Probable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-29","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-29","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Meniscus; Surgery","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-29","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Young,Trae","player_display":"Young, Trae","reason":"Injury/Illness - Right Foot; Bone Bruise","status":"Questionable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-06-29","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"Antetokounmpo,Giannis","player_display":"Antetokounmpo, Giannis","reason":"Injury/Illness - Left Calf; Tightness","status":"Probable","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-29","game_time":"08:30 (ET)","kind":"set","matchup":"MIL@ATL","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-27","kind":"drop","player":"Bogdanovic,Bogdan","team":"ATL"}
+{"game_date":"2021-06-27","kind":"drop","player":"Goodwin,Brandon","team":"ATL"}
+{"game_date":"2021-06-27","kind":"drop","player":"Hunter,De'Andre","team":"ATL"}
+{"game_date":"2021-06-27","kind":"drop","player":"Antetokounmpo,Giannis","team":"MIL"}
+{"game_date":"2021-06-27","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"kind":"report","observed_at":"2021-06-29T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-28","v":1}
+{"game_date":"2021-06-28","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@PHX","player":"Zubac,Ivica","player_display":"Zubac, Ivica","reason":"Injury/Illness - Right Knee; MCL Sprain","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-28","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@PHX","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Rehab","status":"Available","team":"PHX","team_display":"Phoenix Suns"}
+{"kind":"report","observed_at":"2021-06-29T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-29","v":1}
+{"game_date":"2021-06-28","kind":"drop","player":"Ibaka,Serge","team":"LAC"}
+{"game_date":"2021-06-28","kind":"drop","player":"Leonard,Kawhi","team":"LAC"}
+{"game_date":"2021-06-28","kind":"drop","player":"Zubac,Ivica","team":"LAC"}
+{"game_date":"2021-06-28","kind":"drop","player":"Booker,Devin","team":"PHX"}
+{"game_date":"2021-06-28","kind":"drop","player":"Nader,Abdel","team":"PHX"}
+{"kind":"report","observed_at":"2021-06-30T21:30:00+00:00","reconstructed":false,"report_date":"2021-06-30","v":1}
+{"game_date":"2021-06-30","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Back; Surgery","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-30","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Leonard,Kawhi","player_display":"Leonard, Kawhi","reason":"Injury/Illness - Right Knee; Sprain","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-30","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Zubac,Ivica","player_display":"Zubac, Ivica","reason":"Injury/Illness - Right Knee; MCL Sprain","status":"Questionable","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-30","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Booker,Devin","player_display":"Booker, Devin","reason":"Injury/Illness - Nasal; Fracture","status":"Available","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-30","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Rehab","status":"Probable","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-07-01","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Antetokounmpo,Giannis","player_display":"Antetokounmpo, Giannis","reason":"Injury/Illness - Left Knee; Hyperextension","status":"Doubtful","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-07-01","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"DiVincenzo,Donte","player_display":"DiVincenzo, Donte","reason":"Injury/Illness - Left Ankle; Surgery","status":"Out","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2021-06-29","kind":"drop","player":"Bogdanovic,Bogdan","team":"ATL"}
+{"game_date":"2021-06-29","kind":"drop","player":"Goodwin,Brandon","team":"ATL"}
+{"game_date":"2021-06-29","kind":"drop","player":"Hunter,De'Andre","team":"ATL"}
+{"game_date":"2021-06-29","kind":"drop","player":"Young,Trae","team":"ATL"}
+{"game_date":"2021-06-29","kind":"drop","player":"Antetokounmpo,Giannis","team":"MIL"}
+{"game_date":"2021-06-29","kind":"drop","player":"DiVincenzo,Donte","team":"MIL"}
+{"kind":"report","observed_at":"2021-07-01T00:30:00+00:00","reconstructed":false,"report_date":"2021-06-30","v":1}
+{"game_date":"2021-06-30","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Zubac,Ivica","player_display":"Zubac, Ivica","reason":"Injury/Illness - Right Knee; MCL Sprain","status":"Out","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2021-06-30","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Johnson,Cameron","player_display":"Johnson, Cameron","reason":"Injury/Illness - Non-covid; Illness","status":"Out","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-06-30","game_time":"09:00 (ET)","kind":"set","matchup":"PHX@LAC","player":"Nader,Abdel","player_display":"Nader, Abdel","reason":"Injury/Illness - Right Knee; Rehab","status":"Available","team":"PHX","team_display":"Phoenix Suns"}
+{"game_date":"2021-07-01","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Bogdanovic,Bogdan","player_display":"Bogdanovic, Bogdan","reason":"Injury/Illness - Right Knee; Soreness","status":"Probable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-07-01","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Capela,Clint","player_display":"Capela, Clint","reason":"Injury/Illness - Right Eye; Inflammation","status":"Questionable","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-07-01","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Goodwin,Brandon","player_display":"Goodwin, Brandon","reason":"Injury/Illness - Respiratory; Condition","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-07-01","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Hunter,De'Andre","player_display":"Hunter, De'Andre","reason":"Injury/Illness - Right Meniscus; Surgery","status":"Out","team":"ATL","team_display":"Atlanta Hawks"}
+{"game_date":"2021-07-01","game_time":"08:30 (ET)","kind":"set","matchup":"ATL@MIL","player":"Young,Trae","player_display":"Young, Trae","reason":"Injury/Illness - Right Foot; Bone Bruise","status":"Questionable","team":"ATL","team_display":"Atlanta Hawks"}
