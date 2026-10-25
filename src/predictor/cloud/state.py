@@ -32,6 +32,8 @@ Layout (paths relative to ``state/``):
   (cloud/macsync.py). ``nba/player_games`` is also the index ESPN players
   are linked against (cloud/players.py). The flat ``nba/`` tables are in table form (a
   ``{"columns":[...],"format":"table"}`` header, then one array per row).
+- ``mac_history/synced.jsonl`` -- each ``mac-history`` tip the cloud copied
+  in (last line wins; cloud/macsync.py).
 - ``settings/stage1_settings.json`` -- optional settings override.
 
 Every line is ``json.dumps(obj, sort_keys=True, separators=(",", ":"))``

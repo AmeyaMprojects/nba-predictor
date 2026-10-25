@@ -127,6 +127,7 @@ def test_mac_history_with_a_commit_outside_state_nba_is_skipped(repos):
 
     assert result.copied == []
     assert "tweak the readme" in result.skipped_reason
+    assert macsync.last_synced(cloud / "state") is None
     assert (cloud / f"state/nba/games-{SEASON}.jsonl").read_text(encoding="utf-8") == before
     assert _git(cloud, "status", "--porcelain").strip() == ""
 
@@ -159,7 +160,8 @@ def test_unchanged_files_are_not_copied_again(repos):
     _mac_commit(mac, "state: nba history refresh 2026-10-26",
                 {f"state/nba/games-{SEASON}.jsonl": _snapshot_text(repos["tmp"], _games(2))})
     assert macsync.sync_mac_history(cloud).copied == [f"state/nba/games-{SEASON}.jsonl"]
-    _git(cloud, "commit", "-qam", "state: cloud run 2026-10-26T06:07Z")
+    _git(cloud, "add", "-A")
+    _git(cloud, "commit", "-qm", "state: cloud run 2026-10-26T06:07Z")
 
     again = macsync.sync_mac_history(cloud)
 
@@ -167,9 +169,42 @@ def test_unchanged_files_are_not_copied_again(repos):
     assert _git(cloud, "status", "--porcelain").strip() == ""
 
 
-def test_shallow_cloud_checkout_still_sees_only_the_mac_commits(repos):
-    """live.yml checks out with fetch-depth 1: the older main history must
-    not count as unsafe mac-history commits."""
+class _Recorder:
+    """subprocess.run, recording each git command line."""
+
+    def __init__(self):
+        self.calls: list[list[str]] = []
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append(list(argv))
+        return subprocess.run(argv, **kwargs)
+
+    def git_verbs(self) -> list[str]:
+        return [c[1] for c in self.calls]
+
+
+def test_unchanged_mac_history_tip_is_a_quiet_noop_without_a_fetch(repos):
+    mac, cloud = repos["mac"], repos["cloud"]
+    _mac_commit(mac, "state: nba history refresh 2026-10-26",
+                {f"state/nba/games-{SEASON}.jsonl": _snapshot_text(repos["tmp"], _games(2))})
+    first = macsync.sync_mac_history(cloud)
+    assert first.copied == [f"state/nba/games-{SEASON}.jsonl"]
+    tip = _git(repos["remote"], "rev-parse", "mac-history").strip()
+    assert macsync.last_synced(cloud / "state") == tip
+    _git(cloud, "add", "-A")
+    _git(cloud, "commit", "-qm", "state: cloud run 2026-10-26T06:07Z")
+    runner = _Recorder()
+
+    again = macsync.sync_mac_history(cloud, runner=runner)
+
+    assert again == macsync.MacSync(copied=[], skipped_reason=None)
+    assert runner.git_verbs() == ["ls-remote"]
+    assert _git(cloud, "status", "--porcelain").strip() == ""
+
+
+def test_changed_tip_on_a_shallow_checkout_unshallows_and_copies_in(repos):
+    """live.yml checks out with fetch-depth 1: the full history is fetched
+    once the tip moves, so main's older commits are not in the range."""
     remote, mac, seed, tmp = repos["remote"], repos["mac"], repos["seed"], repos["tmp"]
     (seed / "code.py").write_text("x = 1\n", encoding="utf-8")
     _git(seed, "add", ".")
@@ -180,16 +215,24 @@ def test_shallow_cloud_checkout_still_sees_only_the_mac_commits(repos):
     shallow = tmp / "shallow"
     _git(tmp, "clone", "-q", "--depth", "1", "-b", "cloud-shadow", f"file://{remote}",
          str(shallow))
+    assert _git(shallow, "rev-parse", "--is-shallow-repository").strip() == "true"
+    runner = _Recorder()
 
-    result = macsync.sync_mac_history(shallow)
+    result = macsync.sync_mac_history(shallow, runner=runner)
 
     assert result.skipped_reason is None
     assert result.copied == [f"state/nba/games-{SEASON}.jsonl"]
+    fetches = [c for c in runner.calls if c[1] == "fetch"]
+    assert len(fetches) == 1 and "--unshallow" in fetches[0]
+    assert not any("--shallow-exclude" in a for c in runner.calls for a in c)
+    assert _git(shallow, "rev-parse", "--is-shallow-repository").strip() == "false"
+    assert macsync.last_synced(shallow / "state") == \
+        _git(remote, "rev-parse", "mac-history").strip()
 
 
 def test_shallow_checkout_with_no_mac_commits_yet_is_a_quiet_noop(repos):
     """Right after `git push origin main:mac-history` (Task 14) the branch
-    holds nothing main lacks; a shallow exclude-fetch then selects nothing."""
+    holds nothing main lacks: nothing is copied from its (older) tree."""
     remote, seed, tmp = repos["remote"], repos["seed"], repos["tmp"]
     (seed / "code.py").write_text("x = 1\n", encoding="utf-8")
     _git(seed, "add", ".")
@@ -202,6 +245,20 @@ def test_shallow_checkout_with_no_mac_commits_yet_is_a_quiet_noop(repos):
     result = macsync.sync_mac_history(shallow)
 
     assert result == macsync.MacSync(copied=[], skipped_reason=None)
+    assert _git(shallow, "status", "--porcelain", "-uall").split() == \
+        ["??", f"state/{macsync.SYNCED_PATH}"]
+
+
+def test_unsafe_commit_is_skipped_every_run_until_fixed(repos):
+    mac, cloud = repos["mac"], repos["cloud"]
+    _mac_commit(mac, "oops", {"README.md": "x\n"})
+
+    first = macsync.sync_mac_history(cloud)
+    second = macsync.sync_mac_history(cloud)
+
+    assert "oops" in first.skipped_reason and "oops" in second.skipped_reason
+    assert macsync.last_synced(cloud / "state") is None
+    assert _git(cloud, "status", "--porcelain").strip() == ""
 
 
 def test_mac_news_history_is_appended_once_without_duplicates(repos):

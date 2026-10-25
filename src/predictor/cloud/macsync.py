@@ -10,18 +10,23 @@ never touches ``main`` or ``cloud-shadow``.
 
 Every cloud run starts with `sync_mac_history` (before ``rebuild``):
 
-- ``git fetch origin mac-history``; no such branch is a quiet no-op.
-- Every commit in ``HEAD..origin/mac-history`` must pass publish's commit-
-  safety rule (subject ``state: ``, paths under ``state/`` only), narrowed to
+- ``git ls-remote origin refs/heads/mac-history``: no such branch, or the
+  same tip as the last one recorded in ``state/mac_history/synced.jsonl``,
+  is a quiet no-op with no fetch.
+- Otherwise fetch main and mac-history (``--unshallow`` first on a shallow
+  checkout; GitHub refuses ``--shallow-exclude``). Every commit in
+  ``origin/main..origin/mac-history`` must pass publish's commit-safety
+  rule (subject ``state: ``, paths under ``state/`` only), narrowed to
   ``state/nba/`` and ``state/news/``. One commit that does not means nothing
-  is copied and the reason is reported.
+  is copied, the tip is not recorded, and the reason is reported.
 - Every ``state/nba/`` file whose content differs is copied into the working
   tree (whole-file snapshots, written only by the Mac). News items are
   never copied as files: the ``item_key`` s the cloud's ``state/news`` lacks
   are appended to it, so cloud lines are never rewritten and nothing is
   loaded twice.
 
-The copies are committed by the run's own ``state:`` commit.
+The new tip is recorded only after a successful copy-in. The copies and the
+record are committed by the run's own ``state:`` commit.
 """
 
 from __future__ import annotations
@@ -44,10 +49,16 @@ MAC_BRANCH = "mac-history"
 # Paths a mac-history commit may touch.
 MAC_PATHS = ("state/nba/", "state/news/")
 _REMOTE_REF = f"refs/remotes/origin/{MAC_BRANCH}"
+# Append-only record of each mac-history tip copied in (the last line wins);
+# committed with the run's state commit.
+SYNCED_PATH = "mac_history/synced.jsonl"
+# --unshallow fetches the whole history once a week on a fresh runner.
+_UNSHALLOW_TIMEOUT = 300.0
 _NEWS_FILE = re.compile(r"^state/news/[^/]+/[^/]+\.jsonl$")
-# The branch mac-history was cut from. On a shallow checkout its history is
-# excluded from the fetch, so only the Mac's own commits are in the range.
+# The branch mac-history was cut from: the Mac's commits are
+# origin/main..origin/mac-history.
 _BASE_BRANCH = "main"
+_BASE_REF = f"refs/remotes/origin/{_BASE_BRANCH}"
 
 PLAYERS_SOURCE = "players"
 PLAYERS_COLUMNS = (
@@ -99,6 +110,15 @@ def _names(result) -> list[str]:
 # --- the cloud side --------------------------------------------------------------
 
 
+def last_synced(state_dir: Path) -> str | None:
+    """The mac-history tip most recently copied in, or None."""
+    path = Path(state_dir) / SYNCED_PATH
+    if not path.exists():
+        return None
+    shas = [r["sha"] for r in state.read_records(path) if r.get("sha")]
+    return shas[-1] if shas else None
+
+
 def sync_mac_history(state_repo: Path, runner=subprocess.run) -> MacSync:
     """Copy the Mac's ``state/nba/`` files (and news items) from
     ``origin/mac-history`` into ``state_repo``'s working tree; see the module
@@ -108,39 +128,34 @@ def sync_mac_history(state_repo: Path, runner=subprocess.run) -> MacSync:
                  timeout=publish._PUSH_TIMEOUT)
     if probe.returncode == 2:  # --exit-code: no such ref
         return MacSync([], None)
-    if probe.returncode != 0:
+    if probe.returncode != 0 or not probe.stdout.split():
         return MacSync([], f"could not look for {MAC_BRANCH} on origin ({_err(probe)})")
+    tip = probe.stdout.split()[0]
+    state_dir = repo / state.STATE_DIRNAME
+    if last_synced(state_dir) == tip:
+        return MacSync([], None)  # nothing new since the last copy-in: no fetch
 
-    refspec = f"+refs/heads/{MAC_BRANCH}:{_REMOTE_REF}"
-    fetch = ["fetch", "--quiet", "origin", refspec]
-    probe_shallow = _git(runner, repo, ["rev-parse", "--is-shallow-repository"])
-    shallow = probe_shallow.returncode == 0 and probe_shallow.stdout.strip() == "true"
-    if shallow:
-        # A depth-1 checkout has no history below HEAD, so a plain fetch would
-        # put all of main's history into HEAD..mac-history. Excluding main
-        # fetches only the commits the Mac added.
-        fetch.insert(2, f"--shallow-exclude={_BASE_BRANCH}")
-    fetched = _git(runner, repo, fetch, timeout=publish._PUSH_TIMEOUT)
+    # Only when mac-history moved (about weekly). A depth-1 checkout (live.yml)
+    # has no history below HEAD, so the range would be wrong: get the full
+    # history first. (--shallow-exclude is not used: GitHub refuses it.)
+    fetch = ["fetch", "--quiet", "origin", f"+refs/heads/{_BASE_BRANCH}:{_BASE_REF}",
+             f"+refs/heads/{MAC_BRANCH}:{_REMOTE_REF}"]
+    shallow = _git(runner, repo, ["rev-parse", "--is-shallow-repository"])
+    if shallow.returncode == 0 and shallow.stdout.strip() == "true":
+        fetch.insert(2, "--unshallow")
+    fetched = _git(runner, repo, fetch, timeout=_UNSHALLOW_TIMEOUT)
     if fetched.returncode != 0:
-        if "no commits selected for shallow requests" in _err(fetched):
-            return MacSync([], None)  # mac-history holds nothing that main lacks
         return MacSync([], f"fetching {MAC_BRANCH} failed ({_err(fetched)})")
 
-    listed = _git(runner, repo, ["rev-list", f"HEAD..{_REMOTE_REF}"])
+    listed = _git(runner, repo, ["rev-list", f"{_BASE_REF}..{_REMOTE_REF}"])
     if listed.returncode != 0:
         return MacSync([], f"could not list the {MAC_BRANCH} commits ({_err(listed)})")
     shas = [s for s in listed.stdout.split() if s]
     if not shas:
-        # Its tip is already in HEAD's history: anything newer is in HEAD.
+        # mac-history holds nothing main lacks (e.g. just pushed from main by
+        # hand): nothing to copy, and copying from an old tree could regress.
+        state.append_records(state_dir / SYNCED_PATH, [{"sha": tip}])
         return MacSync([], None)
-    if shallow:
-        # The oldest Mac commit's parent was cut off by the exclude, so its
-        # diff (what it touched) cannot be read yet. One more commit of
-        # history fixes that; the range above was listed before it.
-        deepen = _git(runner, repo, ["fetch", "--quiet", "--deepen=1", "origin", refspec],
-                      timeout=publish._PUSH_TIMEOUT)
-        if deepen.returncode != 0:
-            return MacSync([], f"fetching {MAC_BRANCH} history failed ({_err(deepen)})")
     unsafe = [publish.commit_subject(repo, sha) for sha in shas
               if not publish.is_safe_commit(repo, sha, only_under=MAC_PATHS)]
     if unsafe:
@@ -178,8 +193,9 @@ def sync_mac_history(state_repo: Path, runner=subprocess.run) -> MacSync:
     # Read and checked everything first; now write.
     for rel, content in sorted(copies.items()):
         _write_atomic(repo / rel, content)
-    state_dir = repo / state.STATE_DIRNAME
     news_files, added = append_new_news(state_dir, news_rows)
+    # Last: a run that fails before here copies everything again next time.
+    state.append_records(state_dir / SYNCED_PATH, [{"sha": tip}])
     return MacSync(
         copied=sorted(copies), skipped_reason=None, news_items=added,
         news_files=[str(p.relative_to(repo)) for p in news_files],
