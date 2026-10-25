@@ -34,6 +34,8 @@ Layout (paths relative to ``state/``):
   ``{"columns":[...],"format":"table"}`` header, then one array per row).
 - ``mac_history/synced.jsonl`` -- each ``mac-history`` tip the cloud copied
   in (last line wins; cloud/macsync.py).
+- ``mac_history/rejected.jsonl`` -- each ``mac-history`` tip refused as
+  unsafe, with the reason (last line wins; cloud/macsync.py).
 - ``settings/stage1_settings.json`` -- optional settings override.
 
 Every line is ``json.dumps(obj, sort_keys=True, separators=(",", ":"))``

@@ -18,7 +18,10 @@ Every cloud run starts with `sync_mac_history` (before ``rebuild``):
   ``origin/main..origin/mac-history`` must pass publish's commit-safety
   rule (subject ``state: ``, paths under ``state/`` only), narrowed to
   ``state/nba/`` and ``state/news/``. One commit that does not means nothing
-  is copied, the tip is not recorded, and the reason is reported.
+  is copied, the tip is not recorded as synced, and the reason is reported.
+  The rejected tip and reason go to ``state/mac_history/rejected.jsonl``;
+  while origin's tip still equals the last rejected tip, later runs skip the
+  (unshallow) fetch entirely but still report the same skip every run.
 - Every ``state/nba/`` file whose content differs is copied into the working
   tree (whole-file snapshots, written only by the Mac). News items are
   never copied as files: the ``item_key`` s the cloud's ``state/news`` lacks
@@ -52,6 +55,9 @@ _REMOTE_REF = f"refs/remotes/origin/{MAC_BRANCH}"
 # Append-only record of each mac-history tip copied in (the last line wins);
 # committed with the run's state commit.
 SYNCED_PATH = "mac_history/synced.jsonl"
+# Append-only record of each mac-history tip refused as unsafe (the last line
+# wins), so an unsafe branch is not re-fetched (--unshallow) every run.
+REJECTED_PATH = "mac_history/rejected.jsonl"
 # --unshallow fetches the whole history once a week on a fresh runner.
 _UNSHALLOW_TIMEOUT = 300.0
 _NEWS_FILE = re.compile(r"^state/news/[^/]+/[^/]+\.jsonl$")
@@ -119,6 +125,16 @@ def last_synced(state_dir: Path) -> str | None:
     return shas[-1] if shas else None
 
 
+def last_rejected(state_dir: Path) -> dict | None:
+    """The last ``{"sha", "reason"}`` record of a refused mac-history tip, or
+    None."""
+    path = Path(state_dir) / REJECTED_PATH
+    if not path.exists():
+        return None
+    records = [r for r in state.read_records(path) if r.get("sha")]
+    return records[-1] if records else None
+
+
 def sync_mac_history(state_repo: Path, runner=subprocess.run) -> MacSync:
     """Copy the Mac's ``state/nba/`` files (and news items) from
     ``origin/mac-history`` into ``state_repo``'s working tree; see the module
@@ -134,6 +150,13 @@ def sync_mac_history(state_repo: Path, runner=subprocess.run) -> MacSync:
     state_dir = repo / state.STATE_DIRNAME
     if last_synced(state_dir) == tip:
         return MacSync([], None)  # nothing new since the last copy-in: no fetch
+    rejected = last_rejected(state_dir)
+    if rejected is not None and rejected["sha"] == tip:
+        # Still the tip refused earlier: report it again, but do not fetch
+        # (--unshallow on every fresh runner) until mac-history moves.
+        return MacSync([], (
+            f"{rejected.get('reason') or 'refused earlier'} [tip {tip[:12]} was already "
+            f"rejected; not fetched again until {MAC_BRANCH} moves]"))
 
     # Only when mac-history moved (about weekly). A depth-1 checkout (live.yml)
     # has no history below HEAD, so the range would be wrong: get the full
@@ -159,10 +182,12 @@ def sync_mac_history(state_repo: Path, runner=subprocess.run) -> MacSync:
     unsafe = [publish.commit_subject(repo, sha) for sha in shas
               if not publish.is_safe_commit(repo, sha, only_under=MAC_PATHS)]
     if unsafe:
-        return MacSync([], (
+        reason = (
             f"{MAC_BRANCH} has commit(s) that are not state: commits touching only "
             f"{' and '.join(MAC_PATHS)} ({'; '.join(unsafe)}); nothing copied -- "
-            "fix the branch by hand"))
+            "fix the branch by hand")
+        state.append_records(state_dir / REJECTED_PATH, [{"sha": tip, "reason": reason}])
+        return MacSync([], reason)
 
     changed = _git(runner, repo, ["diff", "--name-only", "-z", "--no-renames",
                                   "--diff-filter=AM", "HEAD", _REMOTE_REF, "--", "state/nba"])

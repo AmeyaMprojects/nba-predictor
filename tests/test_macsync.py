@@ -129,7 +129,9 @@ def test_mac_history_with_a_commit_outside_state_nba_is_skipped(repos):
     assert "tweak the readme" in result.skipped_reason
     assert macsync.last_synced(cloud / "state") is None
     assert (cloud / f"state/nba/games-{SEASON}.jsonl").read_text(encoding="utf-8") == before
-    assert _git(cloud, "status", "--porcelain").strip() == ""
+    # Only the record of the rejected tip is written.
+    assert _git(cloud, "status", "--porcelain", "-uall").strip() == (
+        "?? state/mac_history/rejected.jsonl")
 
 
 def test_a_state_commit_outside_state_nba_is_skipped_too(repos):
@@ -142,7 +144,8 @@ def test_a_state_commit_outside_state_nba_is_skipped_too(repos):
 
     assert result.copied == []
     assert "state: nba history refresh 2026-10-26" in result.skipped_reason
-    assert _git(cloud, "status", "--porcelain").strip() == ""
+    assert _git(cloud, "status", "--porcelain", "-uall").strip() == (
+        "?? state/mac_history/rejected.jsonl")
 
 
 def test_missing_mac_history_branch_is_a_quiet_noop(repos):
@@ -258,7 +261,8 @@ def test_unsafe_commit_is_skipped_every_run_until_fixed(repos):
 
     assert "oops" in first.skipped_reason and "oops" in second.skipped_reason
     assert macsync.last_synced(cloud / "state") is None
-    assert _git(cloud, "status", "--porcelain").strip() == ""
+    assert _git(cloud, "status", "--porcelain", "-uall").strip() == (
+        "?? state/mac_history/rejected.jsonl")
 
 
 def test_mac_news_history_is_appended_once_without_duplicates(repos):
@@ -512,3 +516,79 @@ def test_refresh_history_reports_a_failed_download_and_still_exports(repos, monk
     assert "results" in result.output and "no route to host" in result.output
     assert _git(remote, "log", "-1", "--format=%s", "mac-history").strip() == \
         "state: nba history refresh 2026-10-26"
+
+
+# --- pre-merge fix: remember a rejected tip, do not refetch it hourly ----------
+
+
+class _Spy:
+    def __init__(self):
+        self.calls: list[list[str]] = []
+
+    def __call__(self, args, **kwargs):
+        self.calls.append(list(args))
+        return subprocess.run(args, **kwargs)
+
+    def fetches(self) -> list[list[str]]:
+        return [c for c in self.calls if c[1:2] == ["fetch"]]
+
+
+def test_rejected_tip_is_recorded_and_not_fetched_again_until_it_moves(repos):
+    mac, cloud = repos["mac"], repos["cloud"]
+    _mac_commit(mac, "oops", {"README.md": "x\n"})
+    tip = _git(repos["remote"], "rev-parse", "mac-history").strip()
+
+    first_spy = _Spy()
+    first = macsync.sync_mac_history(cloud, runner=first_spy)
+    assert "oops" in first.skipped_reason
+    assert len(first_spy.fetches()) == 1
+    records = list(state.read_records(cloud / "state" / macsync.REJECTED_PATH))
+    assert [r["sha"] for r in records] == [tip]
+    assert "oops" in records[0]["reason"]
+
+    # Same tip next run: still reported, but no (unshallow) fetch at all, and
+    # the record is not appended again.
+    second_spy = _Spy()
+    second = macsync.sync_mac_history(cloud, runner=second_spy)
+    assert second.copied == []
+    assert "oops" in second.skipped_reason
+    assert tip[:12] in second.skipped_reason
+    assert second_spy.fetches() == []
+    assert len(list(state.read_records(cloud / "state" / macsync.REJECTED_PATH))) == 1
+
+    # The branch is fixed (moved): fetched and copied again.
+    _git(mac, "reset", "-q", "--hard", "HEAD~1")
+    text = _snapshot_text(repos["tmp"], _games(2))
+    path = mac / f"state/nba/games-{SEASON}.jsonl"
+    path.write_text(text, encoding="utf-8")
+    _git(mac, "add", "-A")
+    _git(mac, "commit", "-m", "state: nba history refresh 2026-10-26")
+    _git(mac, "push", "-q", "--force", "origin", "mac-history")
+    third_spy = _Spy()
+    third = macsync.sync_mac_history(cloud, runner=third_spy)
+    assert third.skipped_reason is None
+    assert third.copied == [f"state/nba/games-{SEASON}.jsonl"]
+    assert len(third_spy.fetches()) == 1
+
+
+def test_cloud_run_reports_a_rejected_tip_every_run(repos, monkeypatch):
+    mac, cloud, seed = repos["mac"], repos["cloud"], repos["seed"]
+    _point_data_dir(repos["tmp"] / "data", monkeypatch)
+    monkeypatch.setenv("ODDS_API_KEY", "0123456789abcdef" * 2)
+    _mac_commit(mac, "oops", {"README.md": "x\n"})
+
+    def offline(*_a, **_k):
+        raise OSError("offline in tests")
+
+    def fetchers(minute):
+        return Fetchers(scoreboard=offline, summary=offline, injury_latest=lambda now: None,
+                        odds_download=offline, gh_runner=offline,
+                        clock=lambda: datetime(2026, 10, 26, 6, minute, tzinfo=UTC),
+                        news=lambda now: {})
+
+    for minute in (7, 22):
+        report = run_once(cloud, seed, branch="cloud-shadow", fetchers=fetchers(minute))
+        step = next(s for s in report.steps if s.name == "mac_history")
+        assert step.due and not step.ok and "oops" in step.detail
+    # The record went out with the run's state commit.
+    assert _git(cloud, "ls-files", "state/mac_history/rejected.jsonl").strip()
