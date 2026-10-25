@@ -20,7 +20,6 @@ jobs:
     env:
       # Shadow by default: set the repository variable to `main` at cut-over.
       PREDICTOR_PUBLISH_BRANCH: ${{ vars.PREDICTOR_PUBLISH_BRANCH || 'cloud-shadow' }}
-      PREDICTOR_DATA_DIR: ${{ runner.temp }}/predictor-data
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       GH_PROMPT_DISABLED: '1'
@@ -42,6 +41,8 @@ jobs:
 
       - name: Git identity
         run: |
+          # runner.temp is not available in job-level env, so the data dir is set here.
+          echo "PREDICTOR_DATA_DIR=$RUNNER_TEMP/predictor-data" >> "$GITHUB_ENV"
           git config --global user.name "nba-predictor-bot"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 

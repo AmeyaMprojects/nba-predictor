@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
@@ -126,7 +127,9 @@ def test_raw_kept_as_artifact_only_when_the_release_upload_failed():
     keep = next(s for s in _steps() if s.get("uses", "").startswith("actions/upload-artifact@"))
     assert keep["if"] == "always() && steps.cloud.outputs.raw_upload_failed == 'true'"
     assert keep["with"]["path"] == "${{ runner.temp }}/predictor-data/raw"
-    assert _job()["env"]["PREDICTOR_DATA_DIR"] == "${{ runner.temp }}/predictor-data"
+    assert "PREDICTOR_DATA_DIR" not in _job()["env"]  # runner.temp is not allowed in job env
+    set_dir = [s for s in _steps() if "PREDICTOR_DATA_DIR=$RUNNER_TEMP/predictor-data" in s.get("run", "")]
+    assert len(set_dir) == 1
     assert keep["with"]["name"] == "raw-${{ github.run_id }}-${{ github.run_attempt }}"
     assert int(keep["with"]["retention-days"]) <= 7
 
@@ -138,3 +141,25 @@ def test_site_yml_still_has_workflow_dispatch():
         s for s in site["jobs"]["build"]["steps"] if s.get("uses", "").startswith("actions/checkout@")
     )
     assert checkout["with"]["fetch-depth"] == "0"  # git blame needs full history
+
+
+def test_workflows_pass_actionlint():
+    """GitHub rejects some files that are valid YAML (e.g. runner.* in job env).
+
+    actionlint checks GitHub's own rules; skipped only when it cannot be run.
+    """
+    import shutil
+    import subprocess
+
+    uvx = shutil.which("uvx")
+    if uvx is None:
+        pytest.skip("uvx not available to run actionlint")
+    for name in ("live.yml", "site.yml"):
+        path = WORKFLOWS / name
+        result = subprocess.run(
+            [uvx, "--quiet", "--from", "actionlint-py", "actionlint", str(path)],
+            capture_output=True, text=True, timeout=180,
+        )
+        if result.returncode != 0 and "Failed to" in (result.stderr or ""):
+            pytest.skip(f"actionlint could not be installed: {result.stderr.strip()[:200]}")
+        assert result.returncode == 0, result.stdout + result.stderr
