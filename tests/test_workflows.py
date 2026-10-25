@@ -88,9 +88,19 @@ def test_no_shell_tracing():
 
 def test_gh_uses_the_job_token_without_prompts():
     env = _job()["env"]
-    assert env["GH_TOKEN"] == "${{ github.token }}"
     assert env["GH_REPO"] == "${{ github.repository }}"
     assert env["GH_PROMPT_DISABLED"] == "1"
+
+
+def test_gh_token_only_on_the_steps_that_call_gh():
+    # Not at job level: setup, `uv sync` and the state checkout never see it.
+    assert "GH_TOKEN" not in _job()["env"]
+    assert "env" not in _live()
+    with_token = [s for s in _steps() if "GH_TOKEN" in s.get("env", {})]
+    assert {s.get("id") or s.get("name") for s in with_token} == {"cloud", "Rebuild site"}
+    for step in with_token:
+        assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert (WORKFLOWS / "live.yml").read_text().count("github.token") == 2
 
 
 def test_job_has_a_timeout_and_python_314_via_cached_uv():
