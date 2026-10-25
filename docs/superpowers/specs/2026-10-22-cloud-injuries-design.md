@@ -221,3 +221,12 @@ Grade lines refer to the graded call. A secondary early-call grade is either sto
    - Both are kept, with the time each row was seen.
    - Ratings read NBA rows when present, otherwise ESPN rows, but always only rows seen before the call's time. So a later Mac correction changes future calls, never the inputs of a call already sealed.
    - Every sealed call records the `state:` commit it was computed from, so it can be reproduced exactly.
+
+## Owner decision 2026-10-25: home court per team
+
+Home-court advantage must not be one flat league-wide value; it differs by team.
+
+- **Model:** each team's home edge is estimated separately, point-in-time, from its own home and away results. It is pulled toward the league-wide value in proportion to how little evidence the team has, so a lucky stretch cannot swing it.
+- **Shrinkage strength:** chosen walk-forward on earlier seasons only, like every other setting. Infinite strength means the flat value, so per-team can only ship if it scores at least as well.
+- **Altitude:** stays a separate term, so it is not counted twice.
+- **Where it ships:** part of plan 3's model upgrade. It is evaluated with the same replay and switch-over bar, and the report shows each team's estimated home edge.
