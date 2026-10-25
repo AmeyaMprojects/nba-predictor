@@ -41,3 +41,4 @@
 {"game_date":"2026-10-25","game_time":"05:00(ET)","kind":"set","matchup":"LAL@UTA","player":"Alexander,Trey","player_display":"Alexander,Trey","reason":"GLeague-Two-Way","status":"Out","team":"UTA","team_display":"UtahJazz"}
 {"game_date":"2026-10-25","game_time":"05:00(ET)","kind":"set","matchup":"LAL@UTA","player":"Ingram,Harrison","player_display":"Ingram,Harrison","reason":"GLeague-Two-Way","status":"Out","team":"UTA","team_display":"UtahJazz"}
 {"game_date":"2026-10-25","game_time":"05:00(ET)","kind":"set","matchup":"LAL@UTA","player":"Nurkic,Jusuf","player_display":"Nurkic,Jusuf","reason":"Injury/Illness-Right2ndPlantarPlateTear","status":"Out","team":"UTA","team_display":"UtahJazz"}
+{"content_sha":"5ca73427c84bb95a5a796814c5bc0fcb77909b150224b3c59bdd429a00297b60","fetched_at":"2026-10-25T13:41:01.604271+00:00","kind":"report","report_at":"2026-10-25T13:30:00+00:00","rows":41,"source_key":"Injury-Report_2026-10-25_09_30AM.pdf","v":1}
