@@ -57,3 +57,34 @@ def test_publish_branch_rejects_other_values(monkeypatch):
     monkeypatch.setenv("PREDICTOR_PUBLISH_BRANCH", "dev")
     with pytest.raises(ValueError, match="PREDICTOR_PUBLISH_BRANCH must be main or cloud-shadow, not 'dev'"):
         publish_branch()
+
+
+def test_publish_branch_required_refuses_when_unset(monkeypatch):
+    import pytest
+
+    from predictor.config import publish_branch
+
+    monkeypatch.delenv("PREDICTOR_PUBLISH_BRANCH", raising=False)
+    with pytest.raises(ValueError, match="cloud-shadow or main"):
+        publish_branch(required=True)
+    monkeypatch.setenv("PREDICTOR_PUBLISH_BRANCH", "  ")
+    with pytest.raises(ValueError, match="not set"):
+        publish_branch(required=True)
+    monkeypatch.setenv("PREDICTOR_PUBLISH_BRANCH", "main")
+    assert publish_branch(required=True) == "main"
+
+
+def test_mac_default_is_still_main_when_unset(monkeypatch):
+    # predict-today / capture-results never read the variable and publish to
+    # main; the non-required reader also keeps defaulting to main.
+    import inspect
+
+    from predictor import cli
+    from predictor.config import publish_branch
+
+    monkeypatch.delenv("PREDICTOR_PUBLISH_BRANCH", raising=False)
+    assert publish_branch() == "main"
+    for name in ("predict_today_cmd", "capture_results_cmd"):
+        source = inspect.getsource(getattr(cli, name))
+        assert "publish_branch" not in source
+        assert "branch=" not in source

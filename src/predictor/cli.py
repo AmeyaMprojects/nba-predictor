@@ -2043,7 +2043,11 @@ def cloud_run_cmd(
     from predictor import config
     from predictor.cloud import run, summary
 
-    branch = config.publish_branch()
+    try:
+        branch = config.publish_branch(required=True)
+    except ValueError as exc:
+        typer.echo(f"cloud-run: {exc}")
+        raise typer.Exit(code=1) from None
     try:
         attempt = int(os.environ.get("GITHUB_RUN_ATTEMPT", "1") or 1)
     except ValueError:

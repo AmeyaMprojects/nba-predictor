@@ -36,12 +36,25 @@ settings = Settings(data_dir=_default_data_dir())
 _PUBLISH_BRANCHES = ("main", "cloud-shadow")
 
 
-def publish_branch() -> str:
+def publish_branch(*, required: bool = False) -> str:
     """The branch the cloud run commits to and pushes: env
-    ``PREDICTOR_PUBLISH_BRANCH`` (stripped), default ``"main"``. Only
-    ``main`` and ``cloud-shadow`` are allowed -- anything else raises, so a
-    typo can never publish to an unexpected branch."""
-    value = os.environ.get("PREDICTOR_PUBLISH_BRANCH", "").strip() or "main"
+    ``PREDICTOR_PUBLISH_BRANCH`` (stripped). Only ``main`` and
+    ``cloud-shadow`` are allowed -- anything else raises, so a typo can never
+    publish to an unexpected branch.
+
+    Unset (or blank) means ``"main"`` for readers that only inspect a
+    checkout (``status --from-state``); the Mac's own commands never read it
+    and always publish to main. With ``required=True`` -- ``cloud-run`` --
+    unset is refused instead: the cloud must be told its branch explicitly,
+    so a run outside the workflow can never default onto public ``main``."""
+    value = os.environ.get("PREDICTOR_PUBLISH_BRANCH", "").strip()
+    if not value:
+        if required:
+            raise ValueError(
+                "PREDICTOR_PUBLISH_BRANCH is not set: cloud-run needs an explicit "
+                "branch -- set it to cloud-shadow or main"
+            )
+        value = "main"
     if value not in _PUBLISH_BRANCHES:
         raise ValueError(f"PREDICTOR_PUBLISH_BRANCH must be main or cloud-shadow, not '{value}'")
     return value

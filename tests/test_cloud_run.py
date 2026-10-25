@@ -775,3 +775,35 @@ def test_start_fetch_fast_forwards_a_shallow_single_branch_clone(world):
     assert _git(shallow, "rev-parse", "HEAD~2").strip() == theirs
     assert _git(world["remote"], "rev-parse", "cloud-shadow").strip() == (
         _git(shallow, "rev-parse", "HEAD").strip())
+
+
+# --- pre-merge fix: cloud-run needs an explicit publish branch ---------------
+
+
+def test_cloud_run_refuses_when_the_publish_branch_is_unset(world, monkeypatch):
+    called = []
+    monkeypatch.delenv("PREDICTOR_PUBLISH_BRANCH", raising=False)
+    monkeypatch.setattr(cloud_run, "run_once", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(cli, "_cloud_fetchers", lambda: fetchers())
+    monkeypatch.setattr(cli, "_repo_dir", lambda: world["seed"])
+
+    result = CliRunner().invoke(cli.app, ["cloud-run", "--state-repo", str(world["work"])])
+
+    assert result.exit_code == 1
+    assert "PREDICTOR_PUBLISH_BRANCH" in result.output
+    assert "cloud-shadow" in result.output and "main" in result.output
+    assert called == []
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+
+def test_cloud_run_refuses_an_invalid_publish_branch_plainly(world, monkeypatch):
+    called = []
+    monkeypatch.setenv("PREDICTOR_PUBLISH_BRANCH", "dev")
+    monkeypatch.setattr(cloud_run, "run_once", lambda *a, **k: called.append(1))
+    monkeypatch.setattr(cli, "_repo_dir", lambda: world["seed"])
+
+    result = CliRunner().invoke(cli.app, ["cloud-run", "--state-repo", str(world["work"])])
+
+    assert result.exit_code == 1
+    assert "must be main or cloud-shadow" in result.output
+    assert called == []
