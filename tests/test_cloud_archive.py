@@ -461,3 +461,42 @@ def test_scrub_is_case_insensitive(tmp_path, monkeypatch):
     err = f"bad key {FAKE_KEY.upper()}"
     r = upload("t", asset, secret=FAKE_KEY, runner=FakeRunner(upload=(1, "", err)))
     assert FAKE_KEY not in r.message.lower()
+
+
+# --- pre-merge fix: odds responses are never archived (licensing) ------------
+
+
+def _make_odds_raw(raw_dir: Path) -> None:
+    src = raw_dir / "odds"
+    (src / "blobs").mkdir(parents=True)
+    (src / "blobs" / "odds_20261022T123700Z.json").write_bytes(b'[{"id":"oddsevent1"}]')
+    (src / "_manifest.jsonl").write_text(json.dumps({"key": "odds"}) + "\n")
+
+
+def test_bundle_leaves_out_odds_responses(tmp_path):
+    raw = tmp_path / "data" / "raw"
+    make_raw(raw, {"20261022": b'{"events":[]}'})
+    _make_odds_raw(raw)
+    out = bundle(raw, tmp_path / "out" / "a.tar.gz")
+    with tarfile.open(out, "r:gz") as tar:
+        names = tar.getnames()
+    assert "raw/espn_scoreboard/blobs/20261022" in names
+    assert not [n for n in names if n.startswith("raw/odds")]
+    assert (raw / "odds" / "_manifest.jsonl").exists()  # left in the temp dir
+
+
+def test_excluded_sources_are_the_odds_raw_sources():
+    from predictor.sources import odds, odds_history
+
+    assert archive.EXCLUDED_SOURCES == {odds.RAW_SOURCE, odds_history.RAW_SOURCE}
+
+
+def test_a_raw_dir_holding_only_odds_archives_nothing(tmp_path):
+    raw = tmp_path / "data" / "raw"
+    _make_odds_raw(raw)
+    gh = []
+    result = archive.archive_run(raw, tmp_path / "out", datetime(2026, 10, 22, 13, 7, tzinfo=UTC),
+                                 1, secret="", runner=lambda *a, **k: gh.append(a))
+    assert result.ok and "nothing archived" in result.message
+    assert gh == []
+    assert bundle(raw, tmp_path / "b.tar.gz") is None

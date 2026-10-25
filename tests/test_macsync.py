@@ -592,3 +592,18 @@ def test_cloud_run_reports_a_rejected_tip_every_run(repos, monkeypatch):
         assert step.due and not step.ok and "oops" in step.detail
     # The record went out with the run's state commit.
     assert _git(cloud, "ls-files", "state/mac_history/rejected.jsonl").strip()
+
+
+def test_mac_odds_snapshot_is_never_copied_in(repos):
+    # Licensing: odds are not republished, even if an old Mac export pushed
+    # an nba/odds file to mac-history.
+    mac, cloud = repos["mac"], repos["cloud"]
+    _mac_commit(mac, "state: nba history refresh 2026-10-26",
+                {f"state/nba/games-{SEASON}.jsonl": _snapshot_text(repos["tmp"], _games(2)),
+                 f"state/nba/odds-{SEASON}.jsonl": '{"format":"lines","v":1}\n'})
+
+    result = macsync.sync_mac_history(cloud)
+
+    assert result.skipped_reason is None
+    assert result.copied == [f"state/nba/games-{SEASON}.jsonl"]
+    assert not (cloud / f"state/nba/odds-{SEASON}.jsonl").exists()

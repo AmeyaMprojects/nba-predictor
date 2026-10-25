@@ -136,7 +136,12 @@ def test_site_dispatched_only_when_predictions_changed():
 def test_raw_kept_as_artifact_only_when_the_release_upload_failed():
     keep = next(s for s in _steps() if s.get("uses", "").startswith("actions/upload-artifact@"))
     assert keep["if"] == "always() && steps.cloud.outputs.raw_upload_failed == 'true'"
-    assert keep["with"]["path"] == "${{ runner.temp }}/predictor-data/raw"
+    # Odds responses stay in the runner's temp dir: never kept as an artifact.
+    assert keep["with"]["path"].splitlines() == [
+        "${{ runner.temp }}/predictor-data/raw",
+        "!${{ runner.temp }}/predictor-data/raw/odds",
+        "!${{ runner.temp }}/predictor-data/raw/odds_history",
+    ]
     assert "PREDICTOR_DATA_DIR" not in _job()["env"]  # runner.temp is not allowed in job env
     set_dir = [s for s in _steps() if "PREDICTOR_DATA_DIR=$RUNNER_TEMP/predictor-data" in s.get("run", "")]
     assert len(set_dir) == 1

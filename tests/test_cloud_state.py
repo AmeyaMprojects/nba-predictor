@@ -260,8 +260,11 @@ def test_snapshot_table_form_reads_back_as_dicts(tmp_path):
 
 
 def test_families_have_the_planned_keys():
-    for name in ("results", "schedule", "odds", "boxscores", "nba_games", "nba_schedule"):
+    for name in ("results", "schedule", "boxscores", "nba_games", "nba_schedule"):
         assert state.FAMILIES[name].name == name
+    # Licensing: odds are never republished, so no state family holds them.
+    assert "odds" not in state.FAMILIES and "nba_odds" not in state.FAMILIES
+    assert all(f.table != "odds_snapshots" for f in state.FAMILIES.values())
 
 
 # --- export / rebuild ----------------------------------------------------------
@@ -290,13 +293,34 @@ def test_roundtrip_player_games_is_exact(tmp_path):
     assert report.rows["player_games"] == 3
 
 
-def test_roundtrip_odds_is_exact(tmp_path):
+def test_export_writes_no_odds_and_removes_an_old_odds_snapshot(tmp_path):
     src = _make_source_db(tmp_path / "src.duckdb")
+    assert _rows(src, "odds_snapshots")  # the Mac's DB does hold odds...
     state_dir = tmp_path / "state"
-    state.export_from_db(src, state_dir, ["2025-26", "2026-27"])
+    stale = state_dir / "nba" / "odds-2026-27.jsonl"  # from an older export
+    stale.parent.mkdir(parents=True)
+    stale.write_text('{"format":"lines","v":1}\n', encoding="utf-8")
+
+    written = state.export_from_db(src, state_dir, ["2025-26", "2026-27"])
+
+    # ...but none of them are exported.
+    assert not list(state_dir.rglob("odds*"))
+    assert all("odds" not in p.name for p in written)
     state.rebuild_db(state_dir, tmp_path / "work.duckdb")
     out = db.connect(tmp_path / "work.duckdb", read_only=True)
-    assert _rows(out, "odds_snapshots") == _rows(src, "odds_snapshots")
+    assert _rows(out, "odds_snapshots") == set()
+
+
+def test_rebuild_ignores_old_odds_files_in_state(tmp_path):
+    state_dir = tmp_path / "state"
+    old = state_dir / "odds" / "2026-27" / "2026-10.jsonl"
+    old.parent.mkdir(parents=True)
+    old.write_text('{"format":"lines","v":1}\n{"book":"draftkings","game_key":"e1"}\n',
+                   encoding="utf-8")
+    state.append_rows(state_dir, "schedule", [_sched_row()])
+    report = state.rebuild_db(state_dir, tmp_path / "work.duckdb")
+    assert report.rows.get("odds_snapshots", 0) == 0
+    assert report.rows["schedule"] == 1
 
 
 def test_roundtrip_injury_status_is_exact(tmp_path):
@@ -465,6 +489,8 @@ def test_cloud_families_roundtrip(tmp_path):
         "observed_at": dt("2026-10-24T13:00:01.25Z"), "game_id": "0022600003",
         "source": "theoddsapi", "reconstructed": False,
     }
+    with pytest.raises(ValueError, match="unknown state family"):
+        state.append_rows(state_dir, "odds", [odds])  # never republished
     box = {
         "game_id": "espn:401700001", "season": "2026-27", "game_date": date(2026, 10, 24),
         "team": "NYK", "espn_player_id": "3945274", "player_name": "Somebody",
@@ -473,18 +499,15 @@ def test_cloud_families_roundtrip(tmp_path):
         "observed_at": dt("2026-10-25T04:00Z"),
     }
     state.append_rows(state_dir, "results", [result])
-    state.append_rows(state_dir, "odds", [odds])
     state.append_rows(state_dir, "boxscores", [box])
     state.append_rows(state_dir, "schedule", [_sched_row()])
     report = state.rebuild_db(state_dir, tmp_path / "work.duckdb")
-    assert report.rows["games"] == 1 and report.rows["odds_snapshots"] == 1
+    assert report.rows["games"] == 1 and report.rows.get("odds_snapshots", 0) == 0
     assert report.rows["player_boxscores"] == 1 and report.rows["schedule"] == 1
     out = db.connect(tmp_path / "work.duckdb", read_only=True)
     (g,) = out.execute(f"SELECT * FROM {_table(out, 'games')}").fetchall()
     assert g[0] == "0022600003" and g[5:9] == (99, 101, "FINAL", False)
     assert g[9] == dt("2026-10-25T03:00Z")
-    (o,) = out.execute(f"SELECT observed_at, spread FROM {_table(out, 'odds_snapshots')}").fetchall()
-    assert o == (dt("2026-10-24T13:00:01.25Z"), -1.0)
     (b,) = out.execute(
         f"SELECT player_id, espn_player_id, plus_minus FROM {_table(out, 'player_boxscores')}"
     ).fetchall()

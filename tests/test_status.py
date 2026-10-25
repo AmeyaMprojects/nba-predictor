@@ -891,3 +891,28 @@ def test_player_links_ok_when_every_recent_player_is_linked(tmp_path):
     health = status.check_player_links(state_dir, c, CLOUD_NOW)
     assert health.stale is False
     assert health.advice == ""
+
+
+def test_cloud_live_odds_judged_from_attempt_lines(con, tmp_path):
+    # The cloud keeps no odds rows in state (licensing); its odds entry is
+    # judged from the attempt lines instead.
+    from predictor.cloud import state as cloud_state
+
+    _in_season(con)
+    repo = _repo_with_remote(tmp_path / "repo")
+    health = {h.name: h for h in status.check_live(con, repo, NOW, cloud=True)}
+    assert health["odds"].stale is True
+    assert "no successful odds download" in health["odds"].detail
+
+    got = NOW - timedelta(hours=3)
+    cloud_state.append_records(
+        repo / "state" / "odds" / f"attempts-{NOW:%Y-%m}.jsonl",
+        [{"attempted_at": NOW - timedelta(hours=1), "window": "pre_tip", "ok": False,
+          "downloaded": False, "remaining": None},
+         {"attempted_at": got, "window": "early", "ok": True, "downloaded": True,
+          "remaining": 400}],
+    )
+    health = {h.name: h for h in status.check_live(con, repo, NOW, cloud=True)}
+    assert health["odds"].stale is False
+    assert health["odds"].latest == got
+    assert "newest successful odds download 3h ago" in health["odds"].detail

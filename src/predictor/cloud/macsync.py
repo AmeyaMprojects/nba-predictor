@@ -23,7 +23,9 @@ Every cloud run starts with `sync_mac_history` (before ``rebuild``):
   while origin's tip still equals the last rejected tip, later runs skip the
   (unshallow) fetch entirely but still report the same skip every run.
 - Every ``state/nba/`` file whose content differs is copied into the working
-  tree (whole-file snapshots, written only by the Mac). News items are
+  tree (whole-file snapshots, written only by the Mac) -- except
+  ``state/nba/odds-*``: odds are never republished (licensing), even if an
+  older Mac export pushed one. News items are
   never copied as files: the ``item_key`` s the cloud's ``state/news`` lacks
   are appended to it, so cloud lines are never rewritten and nothing is
   loaded twice.
@@ -61,6 +63,8 @@ REJECTED_PATH = "mac_history/rejected.jsonl"
 # --unshallow fetches the whole history once a week on a fresh runner.
 _UNSHALLOW_TIMEOUT = 300.0
 _NEWS_FILE = re.compile(r"^state/news/[^/]+/[^/]+\.jsonl$")
+# Never copied in: odds may not be republished.
+_ODDS_FILE = re.compile(r"^state/nba/odds")
 # The branch mac-history was cut from: the Mac's commits are
 # origin/main..origin/mac-history.
 _BASE_BRANCH = "main"
@@ -195,6 +199,8 @@ def sync_mac_history(state_repo: Path, runner=subprocess.run) -> MacSync:
         return MacSync([], f"could not compare {MAC_BRANCH} ({_err(changed)})")
     copies: dict[str, bytes] = {}
     for rel in _names(changed):
+        if _ODDS_FILE.match(rel):
+            continue
         blob = _git(runner, repo, ["show", f"{_REMOTE_REF}:{rel}"], text=False)
         if blob.returncode != 0:
             return MacSync([], f"could not read {rel} from {MAC_BRANCH} ({_err(blob)})")

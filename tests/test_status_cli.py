@@ -238,6 +238,7 @@ def test_status_from_state_skips_news(tmp_path, monkeypatch):
 
     out = result.stdout
     assert "news_items: news is archived by the Mac (research only)" in out
+    assert "odds are not kept in cloud state" in out
     assert "[STALE] news_items" not in out
     assert "cloud_runs: last cloud run 12m ago (success)" in out
     assert "player_links:" in out

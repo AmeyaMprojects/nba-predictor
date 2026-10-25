@@ -7,8 +7,11 @@ Layout (paths relative to ``state/``):
   is kept in state only, never loaded).
 - ``schedule/<season>/<YYYY-MM>.jsonl`` -- schedule change rows; plus
   ``schedule/espn_links.jsonl`` and ``schedule/id_links.jsonl``.
-- ``odds/<season>/<YYYY-MM>.jsonl`` -- live odds rows (month and season from
-  the ET date of ``observed_at``); attempts in ``odds/attempts-<YYYY-MM>.jsonl``.
+- ``odds/attempts-<YYYY-MM>.jsonl`` -- each odds fetch attempt (time,
+  window, ok, downloaded, quota left) and nothing else. Licensing: odds
+  content is NEVER republished in this public repo -- no odds rows (cloud or
+  Mac) are written to state, and no state family loads ``odds_snapshots``.
+  The odds a run downloads live only in that run's temp DB and raw dir.
 - ``boxscores/<season>/<YYYY-MM>.jsonl`` -- ESPN box-score rows (ESPN
   athlete id only; ``player_id`` is resolved on load).
 - ``players/links.jsonl`` -- ESPN athlete id -> NBA player id links (latest
@@ -23,7 +26,7 @@ Layout (paths relative to ``state/``):
   season replayed in order from empty (cloud/injuries.py).
 - ``nba/`` -- whole-file snapshots written only by the Mac:
   ``games-<season>.jsonl``, ``schedule-<season>.jsonl`` (changed vintages
-  only), ``odds-<season>.jsonl``, ``player_games/<season>/<YYYY-MM>.jsonl``
+  only), ``player_games/<season>/<YYYY-MM>.jsonl``
   and ``injuries/<season>/<YYYY-MM>.jsonl`` (the injury_status history as
   per-report deltas; each month file starts from an empty report, so it
   rebuilds on its own), plus ``players-<season>.jsonl`` (the season's
@@ -209,8 +212,6 @@ FAMILIES: dict[str, Family] = {
                lambda r: f"results/{_row_season(r)}.jsonl", "results/*.jsonl"),
         Family("schedule", "schedule", SCHEDULE_COLUMNS,
                _month_path("schedule", _row_season, _row_game_day), "schedule/*/*.jsonl"),
-        Family("odds", "odds_snapshots", ODDS_COLUMNS,
-               _month_path("odds", _observed_season, _observed_day), "odds/*/*.jsonl"),
         Family("boxscores", "player_boxscores", BOXSCORE_COLUMNS,
                _month_path("boxscores", _row_season, _row_game_day), "boxscores/*/*.jsonl"),
         Family("news", "news_items", NEWS_COLUMNS,
@@ -219,8 +220,6 @@ FAMILIES: dict[str, Family] = {
                lambda r: f"nba/games-{_row_season(r)}.jsonl", "nba/games-*.jsonl"),
         Family("nba_schedule", "schedule", SCHEDULE_COLUMNS,
                lambda r: f"nba/schedule-{_row_season(r)}.jsonl", "nba/schedule-*.jsonl"),
-        Family("nba_odds", "odds_snapshots", ODDS_COLUMNS,
-               lambda r: f"nba/odds-{_observed_season(r)}.jsonl", "nba/odds-*.jsonl"),
         Family("nba_player_games", "player_games", PLAYER_GAMES_COLUMNS,
                _month_path("nba/player_games", _row_season, _row_game_day),
                "nba/player_games/*/*.jsonl"),
@@ -228,8 +227,9 @@ FAMILIES: dict[str, Family] = {
 }
 
 # Load order for a rebuild: Mac snapshots first, then cloud files.
-_NBA_FAMILIES = ("nba_games", "nba_schedule", "nba_odds", "nba_player_games")
-_CLOUD_FAMILIES = ("results", "schedule", "odds", "boxscores", "news")
+# No odds family: odds are never republished (licensing).
+_NBA_FAMILIES = ("nba_games", "nba_schedule", "nba_player_games")
+_CLOUD_FAMILIES = ("results", "schedule", "boxscores", "news")
 
 
 def _family(name: str) -> Family:
@@ -646,11 +646,9 @@ def export_from_db(con, state_dir: Path, seasons: list[str]) -> list[Path]:
     games = _fetch(con, "games", GAMES_COLUMNS, in_seasons, sorted(wanted))
     sched = _changed_vintages(_fetch(con, "schedule", SCHEDULE_COLUMNS, in_seasons, sorted(wanted)))
     players = _fetch(con, "player_games", PLAYER_GAMES_COLUMNS, in_seasons, sorted(wanted))
-    odds = [r for r in _fetch(con, "odds_snapshots", ODDS_COLUMNS) if _observed_season(r) in wanted]
     for family, rows, order in (
         ("nba_games", games, ("game_id", "observed_at")),
         ("nba_schedule", sched, ("game_id", "observed_at")),
-        ("nba_odds", odds, ("observed_at", "game_key", "book")),
         ("nba_player_games", players, ("game_id", "player_id", "observed_at")),
     ):
         fam = FAMILIES[family]
@@ -668,7 +666,9 @@ def export_from_db(con, state_dir: Path, seasons: list[str]) -> list[Path]:
 
 
 def _season_snapshot_files(state_dir: Path, season: str) -> list[Path]:
-    """Every nba/ file this export owns for one season (not players-*)."""
+    """Every nba/ file this export owns for one season (not players-*).
+    ``odds-<season>.jsonl`` is listed (never written any more) so an older
+    export's odds file is removed by the next export."""
     nba = state_dir / "nba"
     files = [nba / f"{kind}-{season}.jsonl" for kind in ("games", "schedule", "odds")]
     files += sorted((nba / "player_games" / season).glob("*.jsonl"))

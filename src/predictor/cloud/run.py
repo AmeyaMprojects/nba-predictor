@@ -413,9 +413,10 @@ def _odds(run: _Run) -> tuple[bool, bool, str]:
         downloaded = run.fetchers.odds_download(key, attempted_at)
         attempt["downloaded"] = True
         attempt["remaining"] = _to_int(downloaded.requests_remaining)
+        # Into this run's temp DB only (the predictions' market fields read
+        # it). Licensing: odds rows are never written to state/, which is
+        # public; the attempt line below records no odds content.
         summary = odds.load(run.con, downloaded)
-        rows = _odds_rows(run.con, downloaded.observed_at)
-        state.append_rows(run.state_dir, "odds", rows)
         attempt["ok"] = True
     except odds.OddsQuotaExceeded as exc:
         attempt["remaining"] = _to_int(exc.requests_remaining)
@@ -426,17 +427,6 @@ def _odds(run: _Run) -> tuple[bool, bool, str]:
     left = f", {attempt['remaining']} requests left" if attempt["remaining"] is not None else ""
     return True, True, (f"{window.name} window: {summary.rows} row(s), "
                         f"{summary.linked}/{summary.events} event(s) linked{left}")
-
-
-def _odds_rows(con, observed_at: datetime) -> list[dict]:
-    table = db.POINT_IN_TIME_TABLES["odds_snapshots"]
-    cols = state.ODDS_COLUMNS
-    found = con.execute(
-        f"SELECT {', '.join(cols)} FROM {table} WHERE source = ? AND observed_at = ? "
-        "ORDER BY game_key, book",
-        [odds.SOURCE, observed_at],
-    ).fetchall()
-    return [dict(zip(cols, r, strict=True)) for r in found]
 
 
 def _news(run: _Run) -> None:

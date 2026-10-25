@@ -71,18 +71,34 @@ def test_early_call_on_dst_change_day():
     assert early_call_at(date(2026, 11, 1)) == datetime(2026, 11, 1, 12, 30, tzinfo=UTC)
 
 
+def _downloaded(at: str, window: str = "early", **extra) -> dict:
+    """An odds attempt line as the cloud run records it: no odds content."""
+    return {"attempted_at": at, "window": window, "ok": True, "downloaded": True,
+            "remaining": 400, **extra}
+
+
 def test_odds_early_window_due_once(tmp_path):
     con = _slate(tmp_path)
     w = odds_window_due(con, dt("2026-11-10T12:37Z"), [], None)
     assert w == OddsWindow("early", dt("2026-11-10T12:30Z"), dt("2026-11-10T14:30Z"))
-    _odds_row(con, dt("2026-11-10T12:38Z"))
-    assert odds_window_due(con, dt("2026-11-10T12:52Z"), [], None) is None
+    done = [_downloaded("2026-11-10T12:38:00+00:00")]
+    assert odds_window_due(con, dt("2026-11-10T12:52Z"), done, 400) is None
 
 
-def test_odds_early_window_ignores_historical_rows(tmp_path):
+def test_odds_window_is_judged_from_attempt_lines_not_stored_odds(tmp_path):
+    # Odds are not republished in state, so stored rows (live or historical)
+    # never decide the window: only the attempt lines do.
     con = _slate(tmp_path)
     _odds_row(con, dt("2026-11-10T12:38Z"), source="kaggle_sbr")
+    _odds_row(con, dt("2026-11-10T12:39Z"))
     assert odds_window_due(con, dt("2026-11-10T12:52Z"), [], None).name == "early"
+
+
+def test_an_ok_attempt_without_the_downloaded_field_closes_the_window(tmp_path):
+    con = _slate(tmp_path)
+    old_style = {"attempted_at": "2026-11-10T12:38:00+00:00", "window": "early", "ok": True,
+                 "remaining": 400}
+    assert odds_window_due(con, dt("2026-11-10T12:52Z"), [old_style], 400) is None
 
 
 def test_odds_not_due_before_the_early_call(tmp_path):
@@ -92,12 +108,15 @@ def test_odds_not_due_before_the_early_call(tmp_path):
 
 def test_odds_pre_tip_window(tmp_path):
     con = _slate(tmp_path)
-    # an early-window line does not satisfy the pre-tip window
-    _odds_row(con, dt("2026-11-10T12:38Z"))
-    w = odds_window_due(con, dt("2026-11-10T21:50Z"), [], None)
+    # an early-window download does not satisfy the pre-tip window
+    early = [_downloaded("2026-11-10T12:38:00+00:00")]
+    w = odds_window_due(con, dt("2026-11-10T21:50Z"), early, 400)
     assert w == OddsWindow("pre_tip", dt("2026-11-10T21:45Z"), TIP)
-    assert odds_window_due(con, dt("2026-11-10T21:40Z"), [], None) is None
-    assert odds_window_due(con, dt("2026-11-10T23:00Z"), [], None) is None
+    assert odds_window_due(con, dt("2026-11-10T21:40Z"), early, 400) is None
+    assert odds_window_due(con, dt("2026-11-10T23:00Z"), early, 400) is None
+    # ...and a pre-tip download closes it.
+    both = early + [_downloaded("2026-11-10T21:50:00+00:00", "pre_tip")]
+    assert odds_window_due(con, dt("2026-11-10T22:05Z"), both, 400) is None
 
 
 def test_odds_pre_tip_window_needs_a_game_still_to_predict(tmp_path):

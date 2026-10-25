@@ -265,7 +265,10 @@ def check_sources(
                 SourceHealth(
                     name, latest, count, age, False, "",
                     detail=(
-                        "no odds stored yet (live odds are checked under 'odds')"
+                        "odds are not kept in cloud state (they may not be "
+                        "republished); downloads are checked under 'odds'"
+                        if cloud_state is not None
+                        else "no odds stored yet (live odds are checked under 'odds')"
                         if latest is None
                         else None
                     ),
@@ -353,23 +356,47 @@ def _cloud_odds_advice() -> str:
     )
 
 
-def _check_live_odds(con, now: datetime, cloud: bool = False) -> SourceHealth:
+def _cloud_odds_downloads(state_dir: Path) -> tuple[int, datetime | None]:
+    """(successful odds downloads, newest one) from the cloud's attempt lines
+    ``state/odds/attempts-*.jsonl`` -- the cloud keeps no odds rows in state
+    (licensing), so these lines are its only odds record."""
+    from predictor.cloud import state as cloud_state
+
+    times = []
+    for path in sorted(Path(state_dir).glob("odds/attempts-*.jsonl")):
+        for rec in cloud_state.read_records(path):
+            if rec.get("ok") or rec.get("downloaded"):
+                at = datetime.fromisoformat(str(rec["attempted_at"]))
+                times.append(at if at.tzinfo else at.replace(tzinfo=UTC))
+    return len(times), max(times, default=None)
+
+
+def _check_live_odds(
+    con, now: datetime, cloud: bool = False, state_dir: Path | None = None
+) -> SourceHealth:
     """Stale only while in season (`live.in_season`, as the other live
     checks use) with no live line observed in the last
-    LIVE_ODDS_STALE_HOURS. Historical (Kaggle) rows never count."""
-    count, latest = con.execute(
-        f"SELECT count(*), max(observed_at) FROM {POINT_IN_TIME_TABLES['odds_snapshots']} "
-        "WHERE source = ?",
-        [LIVE_SOURCE],
-    ).fetchone()
+    LIVE_ODDS_STALE_HOURS. Historical (Kaggle) rows never count. For the
+    cloud (``state_dir`` given) the newest successful download in the
+    attempt lines stands in for the newest live line."""
+    if state_dir is not None:
+        count, latest = _cloud_odds_downloads(state_dir)
+        noun, none = "newest successful odds download", "no successful odds download recorded yet"
+    else:
+        count, latest = con.execute(
+            f"SELECT count(*), max(observed_at) FROM {POINT_IN_TIME_TABLES['odds_snapshots']} "
+            "WHERE source = ?",
+            [LIVE_SOURCE],
+        ).fetchone()
+        noun, none = "newest live line", "no live odds collected yet"
     age = (now - latest).total_seconds() / 3600 if latest is not None else None
     season_on = live.in_season(con, now)
     stale = season_on and (age is None or age > LIVE_ODDS_STALE_HOURS)
     if latest is None:
-        detail = "no live odds collected yet"
+        detail = none
     else:
         when = "in the future" if age < 0 else f"{_format_age(age)} ago"
-        detail = f"newest live line {when}"
+        detail = f"{noun} {when}"
     if not season_on:
         detail += " (off-season, not checked)"
     return SourceHealth(
@@ -577,7 +604,7 @@ def check_live(
     )
 
     # --- odds (live lines) ------------------------------------------------
-    out.append(_check_live_odds(con, now, cloud))
+    out.append(_check_live_odds(con, now, cloud, Path(repo_dir) / "state" if cloud else None))
 
     return out
 

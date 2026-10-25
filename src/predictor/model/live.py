@@ -150,14 +150,17 @@ def odds_window_due(
 
     ``first_tip`` is the earliest tip of ``slate_for(con, now)``; an empty
     slate is never due. A window is due when ``opens <= now < closes``, a
-    slate game still tips more than ``START_BUFFER`` after ``now``, no live
-    (``theoddsapi``) row was observed at or after ``opens``, fewer than
-    ``ODDS_MAX_ATTEMPTS`` attempts are recorded at or after ``opens``, and
-    ``remaining`` (the last ``x-requests-remaining``) is unknown or at
-    least ``ODDS_MIN_REMAINING``; an attempt in the window marked
-    ``downloaded`` (its body was archived, so its credits were spent) also
-    closes the window. ``attempts`` are the records of
+    slate game still tips more than ``START_BUFFER`` after ``now``, fewer
+    than ``ODDS_MAX_ATTEMPTS`` attempts are recorded at or after ``opens``,
+    no attempt in the window is marked ``downloaded`` (its body was
+    archived, so its credits were spent) or ``ok``, and ``remaining`` (the
+    last ``x-requests-remaining``) is unknown or at least
+    ``ODDS_MIN_REMAINING``. ``attempts`` are the records of
     ``state/odds/attempts-*.jsonl`` (``attempted_at`` as text or datetime).
+
+    Judged from the attempt lines alone, never from stored odds rows: odds
+    are not republished in state (licensing), so a fresh runner's DB holds
+    none. ``con`` is only read for the slate.
     """
     db.require_utc(now, "now")
     if remaining is not None and remaining < ODDS_MIN_REMAINING:
@@ -181,19 +184,11 @@ def odds_window_due(
     if len(in_window) >= ODDS_MAX_ATTEMPTS:
         return None
     # A response that reached the archive spent the credits, even if it then
-    # failed to load: the window is done.
-    if any(a.get("downloaded") for a in in_window):
+    # failed to load: the window is done. (`ok` covers attempt lines written
+    # before `downloaded` existed.)
+    if any(a.get("downloaded") or a.get("ok") for a in in_window):
         return None
-    table = db.POINT_IN_TIME_TABLES["odds_snapshots"]
-    (seen,) = con.execute(
-        f"""
-        SELECT count(*) FROM {table}
-        WHERE source = '{market.LIVE_SOURCE}'
-          AND observed_at >= ? AND observed_at <= ?
-        """,
-        [window.opens, now],
-    ).fetchone()
-    return window if seen == 0 else None
+    return window
 
 
 class LogError(Exception):

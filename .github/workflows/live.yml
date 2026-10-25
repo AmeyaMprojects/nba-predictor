@@ -80,10 +80,14 @@ jobs:
 
       # cloud-run keeps raw_upload_failed false when it found the odds key in
       # the run's files, so a raw dir holding a secret is never uploaded.
+      # Odds responses may not be republished: they stay in the temp dir.
       - name: Keep raw responses if the release upload failed
         if: always() && steps.cloud.outputs.raw_upload_failed == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: 'raw-${{ github.run_id }}-${{ github.run_attempt }}'
-          path: '${{ runner.temp }}/predictor-data/raw'
+          path: |
+            ${{ runner.temp }}/predictor-data/raw
+            !${{ runner.temp }}/predictor-data/raw/odds
+            !${{ runner.temp }}/predictor-data/raw/odds_history
           retention-days: 7

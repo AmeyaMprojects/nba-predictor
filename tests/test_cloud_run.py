@@ -272,7 +272,7 @@ def test_first_run_after_1800_ist_commits_state_then_predictions(world):
     assert list(sd.glob("schedule/far_fetches-*.jsonl"))
     attempts = cloud_run.odds_attempts(sd)
     assert [(a["window"], a["ok"], a["remaining"]) for a in attempts] == [("early", True, 480)]
-    assert list(sd.glob("odds/*/*.jsonl"))
+    assert not list(sd.glob("odds/*/*.jsonl"))  # odds are never republished
     assert [r["item_key"] for r in state.read_rows(sd, "news")]
     assert "far days included" in step(report, "espn_scoreboard").detail
     assert "1/1 game(s)" in step(report, "espn_boxscores").detail
@@ -428,7 +428,7 @@ def test_odds_key_never_written_anywhere(world, monkeypatch, capsys):
     assert gh.assets, "the raw archive was uploaded"
     with tarfile.open(gh.assets[0]) as tar:
         names = tar.getnames()
-        assert any("odds" in n for n in names)
+        assert not any(n.startswith("raw/odds") for n in names)  # odds never archived
         for member in tar.getmembers():
             if member.isfile():
                 assert key.encode() not in tar.extractfile(member).read().lower()
@@ -807,3 +807,70 @@ def test_cloud_run_refuses_an_invalid_publish_branch_plainly(world, monkeypatch)
     assert result.exit_code == 1
     assert "must be main or cloud-shadow" in result.output
     assert called == []
+
+
+
+# --- pre-merge fix: odds data is never republished (licensing) ---------------
+
+# Strings that only occur in the fake Odds API response body.
+_ODDS_MARKERS = ("oddsevent1", "draftkings", "theoddsapi")
+
+
+def test_no_odds_content_in_any_state_file_or_archive_member(world):
+    gh = FakeGh()
+    work = world["work"]
+
+    report = run_once(work, world["seed"], branch="cloud-shadow", fetchers=fetchers(gh_runner=gh))
+
+    assert step(report, "odds").ok, report.steps
+    sd = work / "state"
+    files = [p for p in sd.rglob("*") if p.is_file()]
+    assert files
+    for path in files:
+        text = path.read_text(encoding="utf-8").lower()
+        for marker in _ODDS_MARKERS:
+            assert marker not in text, (path, marker)
+    # Only the attempt lines (no odds content) live under state/odds.
+    assert [p.name for p in sd.glob("odds/**/*") if p.is_file()] == ["attempts-2026-10.jsonl"]
+    tracked = _git(work, "ls-files", "state").splitlines()
+    assert not [t for t in tracked if t.startswith("state/odds/") and "attempts-" not in t]
+    assert not [t for t in tracked if t.startswith("state/nba/odds")]
+
+    assert gh.assets, "the raw archive was uploaded"
+    with tarfile.open(gh.assets[0]) as tar:
+        members = tar.getmembers()
+        assert members
+        for member in members:
+            assert not member.name.startswith("raw/odds")
+            if member.isfile():
+                body = tar.extractfile(member).read()
+                if body[:2] == b"\x1f\x8b":
+                    import gzip
+                    body = gzip.decompress(body)
+                for marker in ("oddsevent1", "draftkings"):
+                    assert marker.encode() not in body.lower(), (member.name, marker)
+    # The raw odds bytes stay only in this run's temp data dir.
+    assert any((config.settings.raw_dir / "odds").rglob("*"))
+
+    # Market fields on the prediction lines are unchanged.
+    lines = read_log(work / "predictions" / f"{SEASON}.jsonl")
+    bos = next(ln for ln in lines if ln["game_id"] == "0022600002")
+    assert bos["market_p_home"] is not None and bos["market_books"] == 1
+
+
+def test_odds_window_stops_after_a_download_without_stored_odds(world):
+    calls = []
+
+    def download(key, now):
+        calls.append(now)
+        return odds.download(key, now=now, session=_OddsSession())
+
+    work = world["work"]
+    first = run_once(work, world["seed"], branch="cloud-shadow",
+                     fetchers=fetchers(odds_download=download))
+    assert step(first, "odds").ok
+    later = datetime(2026, 10, 22, 12, 52, tzinfo=UTC)
+    second = run_once(work, world["seed"], branch="cloud-shadow",
+                      fetchers=fetchers(odds_download=download, clock=lambda: later))
+    assert step(second, "odds").due is False
+    assert len(calls) == 1

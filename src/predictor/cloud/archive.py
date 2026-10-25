@@ -13,6 +13,9 @@ survive across runs.
 - Append-only. ``gh release upload`` is never given ``--clobber``; a name
   already on the release gets a ``-2``, ``-3``, ... suffix instead, so an
   existing asset is never replaced.
+- No odds. Odds responses (raw source dirs ``odds`` and ``odds_history``) are never
+  bundled: their terms do not allow republishing them, and the release is
+  public. They stay only in the run's temp raw dir.
 - Secret guard. The release is on a public repo, so every file path and
   file content is searched for the odds key, in any letter case, before
   anything is bundled or uploaded (`assert_no_secret`), and the tarball's
@@ -47,6 +50,11 @@ from predictor.model.publish import _redact
 GH_TIMEOUT = 120
 # GitHub allows 1,000 assets per release; stop short of it.
 MAX_ASSETS = 1000
+
+# Raw source dirs never archived: odds data may not be republished (the
+# release is public). `sources.odds.RAW_SOURCE` and
+# `sources.odds_history.RAW_SOURCE` (pinned by a test).
+EXCLUDED_SOURCES = frozenset({"odds", "odds_history"})
 
 RELEASE_NOTES = "Append-only raw source responses, one asset per cloud run."
 
@@ -197,14 +205,23 @@ _NO_SECRET = (
 )
 
 
+def _archivable(raw_dir: Path) -> list[Path]:
+    """Every raw file that may be published: all but `EXCLUDED_SOURCES`."""
+    if not raw_dir.is_dir():
+        return []
+    return [p for p in _files([raw_dir])
+            if p.relative_to(raw_dir).parts[0] not in EXCLUDED_SOURCES]
+
+
 def bundle(raw_dir: Path, out: Path) -> Path | None:
-    """Write a tar.gz of the whole raw dir (members under ``raw/``) to
-    ``out``. None, and no file, when the raw dir has no files."""
+    """Write a tar.gz of the raw dir (members under ``raw/``), leaving out
+    `EXCLUDED_SOURCES`, to ``out``. None, and no file, when nothing is left
+    to bundle."""
     raw_dir = Path(raw_dir)
     out = Path(out)
     if out.resolve().is_relative_to(raw_dir.resolve()):
         raise ValueError("archive: the bundle cannot be written inside the raw dir")
-    files = list(_files([raw_dir])) if raw_dir.is_dir() else []
+    files = _archivable(raw_dir)
     if not files:
         return None
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -323,7 +340,7 @@ def archive_run(
     `upload`. Raises `SecretLeak` (before writing or uploading anything)
     if the key is in any raw file or file name."""
     raw_dir = Path(raw_dir)
-    if not (raw_dir.is_dir() and any(_files([raw_dir]))):
+    if not _archivable(raw_dir):
         return ArchiveResult(True, "no raw responses this run; nothing archived")
     key = _resolve_secret(secret)
     if key is None:
