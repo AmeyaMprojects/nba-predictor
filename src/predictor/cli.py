@@ -2062,5 +2062,135 @@ def cloud_run_cmd(
         raise typer.Exit(code=1)
 
 
+def _compare_git(repo, *args: str):
+    """git for `compare-shadow` -- one indirection point so tests can prove
+    git is not needed when every input is given as a path."""
+    import subprocess
+
+    return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True,
+                          timeout=120, stdin=subprocess.DEVNULL)
+
+
+def _parse_jsonl(text: str) -> list[dict]:
+    import json
+
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+def _parse_links(name: str, text: str) -> dict[str, str]:
+    from predictor.cloud import state
+
+    return {r["provisional_id"]: r["game_id"]
+            for r in state._parse_lines(name, text.splitlines())}
+
+
+@app.command("compare-shadow")
+def compare_shadow_cmd(
+    since: str = typer.Option(
+        None, "--since",
+        help="First slate date to compare (YYYY-MM-DD). Default: the ET date of the "
+        "commit where cloud-shadow branched from main.",
+    ),
+    mac_log: str = typer.Option(None, "--mac-log", help="Read the Mac's log from this file "
+                                "instead of origin/main."),
+    cloud_log: str = typer.Option(None, "--cloud-log", help="Read the cloud's log from this "
+                                  "file instead of origin/cloud-shadow (links are read from "
+                                  "id-links/<same name> beside it)."),
+) -> None:
+    """Check the cloud's calls on cloud-shadow against the Mac's on main."""
+    from datetime import date, datetime
+    from pathlib import Path
+
+    from predictor.cloud import compare, state
+    from predictor.config import season_label
+
+    repo = _repo_dir()
+    now = _now()
+    need_git = since is None or mac_log is None or cloud_log is None
+
+    def fail(message: str):
+        typer.echo(message)
+        raise typer.Exit(code=1)
+
+    if need_git:
+        fetched = _compare_git(repo, "fetch", "--quiet", "origin", "main", "cloud-shadow")
+        if fetched.returncode != 0:
+            fail("could not fetch main and cloud-shadow from origin -- nothing compared: "
+                 + (fetched.stderr.strip() or "git fetch failed"))
+        for branch in ("main", "cloud-shadow"):
+            if _compare_git(repo, "rev-parse", "--verify", "--quiet",
+                            f"origin/{branch}").returncode != 0:
+                fail(f"origin/{branch} does not exist -- nothing compared.")
+
+    if since is not None:
+        try:
+            since_day = date.fromisoformat(since)
+        except ValueError:
+            typer.echo(f"--since must be YYYY-MM-DD, not '{since}'.")
+            raise typer.Exit(code=2) from None
+    else:
+        base = _compare_git(repo, "merge-base", "origin/main", "origin/cloud-shadow")
+        if base.returncode != 0:
+            fail("main and cloud-shadow share no commit -- pass --since.")
+        shown = _compare_git(repo, "show", "-s", "--format=%cI", base.stdout.strip())
+        if shown.returncode != 0:
+            fail("could not read the branch point's time -- pass --since.")
+        since_day = datetime.fromisoformat(shown.stdout.strip()).astimezone(state.EASTERN).date()
+
+    # Every season from the one `since` falls in to the current one.
+    seasons = [season_label(datetime(since_day.year, since_day.month, since_day.day))]
+    while seasons[-1] < season_label(now):
+        y = int(seasons[-1][:4]) + 1
+        seasons.append(f"{y}-{str(y + 1)[-2:]}")
+
+    def from_git(branch: str, path: str) -> str:
+        shown = _compare_git(repo, "show", f"origin/{branch}:{path}")
+        if shown.returncode == 0:
+            return shown.stdout
+        if "does not exist" in shown.stderr or "exists on disk" in shown.stderr:
+            return ""
+        fail(f"could not read {path} from origin/{branch}: {shown.stderr.strip()}")
+
+    def from_file(path: Path) -> str:
+        try:
+            return path.read_text(encoding="utf-8")
+        except OSError as exc:
+            fail(f"could not read {path}: {exc}")
+
+    mac_lines: list[dict] = []
+    cloud_lines: list[dict] = []
+    links: dict[str, str] = {}
+    try:
+        if mac_log is not None:
+            mac_lines = _parse_jsonl(from_file(Path(mac_log).expanduser()))
+        else:
+            for season in seasons:
+                mac_lines += _parse_jsonl(from_git("main", f"predictions/{season}.jsonl"))
+        if cloud_log is not None:
+            path = Path(cloud_log).expanduser()
+            cloud_lines = _parse_jsonl(from_file(path))
+            link_file = path.parent / "id-links" / path.name
+            if link_file.exists():
+                links.update(_parse_links(str(link_file), from_file(link_file)))
+        else:
+            # The state's links first, then the prediction log's own links
+            # (written before each predict), which win.
+            text = from_git("cloud-shadow", f"{state.STATE_DIRNAME}/{state.ID_LINKS_PATH}")
+            if text:
+                links.update(_parse_links(state.ID_LINKS_PATH, text))
+            for season in seasons:
+                cloud_lines += _parse_jsonl(from_git("cloud-shadow", f"predictions/{season}.jsonl"))
+                text = from_git("cloud-shadow", f"predictions/id-links/{season}.jsonl")
+                if text:
+                    links.update(_parse_links(f"id-links/{season}.jsonl", text))
+    except (ValueError, KeyError) as exc:  # bad JSON, header or link record
+        fail(f"a prediction log could not be read: {exc}")
+
+    report = compare.compare_logs(mac_lines, cloud_lines, since_day, links)
+    typer.echo(compare.format_report(report), nl=False)
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     app()
