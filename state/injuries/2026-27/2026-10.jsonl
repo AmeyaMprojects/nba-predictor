@@ -287,3 +287,4 @@
 {"game_date":"2026-10-26","game_time":"08:00(ET)","kind":"set","matchup":"IND@MIL","player":"Brown,Kobe","player_display":"Brown,Kobe","reason":"GLeague-Two-Way","status":"Available","team":"IND","team_display":"IndianaPacers"}
 {"game_date":"2026-10-26","game_time":"08:00(ET)","kind":"set","matchup":"IND@MIL","player":"Slawson,Jalen","player_display":"Slawson,Jalen","reason":"GLeague-Two-Way","status":"Available","team":"IND","team_display":"IndianaPacers"}
 {"game_date":"2026-10-26","game_time":"08:00(ET)","kind":"set","matchup":"IND@MIL","player":"Smith,Braden","player_display":"Smith,Braden","reason":"GLeague-Two-Way","status":"Available","team":"IND","team_display":"IndianaPacers"}
+{"content_sha":"f5f0a1517465ecf2ac6ea0f725186b7d18bf60de76c7d261a10b4704a1a68434","fetched_at":"2026-10-26T23:37:00.442812+00:00","kind":"report","report_at":"2026-10-26T23:30:00+00:00","rows":87,"source_key":"Injury-Report_2026-10-26_07_30PM.pdf","v":1}
