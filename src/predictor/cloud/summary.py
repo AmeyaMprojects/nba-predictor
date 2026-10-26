@@ -62,7 +62,8 @@ def markdown(report: RunReport) -> str:
 
 
 def outputs(report: RunReport) -> dict[str, str]:
-    """``site_changed`` and ``raw_upload_failed`` as "true"/"false".
+    """``site_changed``, ``raw_upload_failed`` and ``secret_leak`` as
+    "true"/"false" (cloud-loop reads them from each child's file).
 
     The raw upload counts as failed only when the raw_archive step ran and
     failed -- never after a secret was found, so a raw dir holding a secret
@@ -72,4 +73,5 @@ def outputs(report: RunReport) -> dict[str, str]:
     return {
         "site_changed": "true" if report.site_changed else "false",
         "raw_upload_failed": "true" if failed else "false",
+        "secret_leak": "true" if report.secret_leak else "false",
     }

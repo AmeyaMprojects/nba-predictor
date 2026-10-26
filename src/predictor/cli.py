@@ -2052,9 +2052,13 @@ def cloud_run_cmd(
         attempt = int(os.environ.get("GITHUB_RUN_ATTEMPT", "1") or 1)
     except ValueError:
         attempt = 1
+    # cloud-loop pins the code version its children record (see cloud/loop.py).
+    pinned = os.environ.get("PREDICTOR_CODE_VERSION", "").strip()
+    code_version = (pinned, os.environ.get("PREDICTOR_CODE_DIRTY", "").strip() == "true") \
+        if pinned else None
     report = run.run_once(
         Path(state_repo).expanduser(), _repo_dir(), branch=branch,
-        fetchers=_cloud_fetchers(), run_attempt=attempt,
+        fetchers=_cloud_fetchers(), run_attempt=attempt, code_version=code_version,
     )
     text = summary.markdown(report)
     _append_env_file("GITHUB_STEP_SUMMARY", text)
@@ -2074,8 +2078,8 @@ def cloud_loop_cmd(
     interval: int = typer.Option(15, "--interval", help="Minutes between iteration marks "
                                  "(from minute 7 of the hour; must divide 60)."),
 ) -> None:
-    """Run cloud-run again and again on the :07/:22/:37/:52 marks (one long job)."""
-    import os
+    """Run cloud-run again and again on the :07/:22/:37/:52 marks (one long job),
+    each time in a child process killed after 15 minutes."""
     from pathlib import Path
 
     from predictor import config
@@ -2086,10 +2090,6 @@ def cloud_loop_cmd(
     except ValueError as exc:
         typer.echo(f"cloud-loop: {exc}")
         raise typer.Exit(code=1) from None
-    try:
-        attempt = int(os.environ.get("GITHUB_RUN_ATTEMPT", "1") or 1)
-    except ValueError:
-        attempt = 1
 
     def emit(text: str) -> None:
         _append_env_file("GITHUB_STEP_SUMMARY", text)
@@ -2098,7 +2098,7 @@ def cloud_loop_cmd(
     try:
         result = loop.run_loop(
             Path(state_repo).expanduser(), _repo_dir(), branch=branch,
-            base_dir=config.settings.data_dir, fetchers=_cloud_fetchers(), run_attempt=attempt,
+            base_dir=config.settings.data_dir, fetchers=_cloud_fetchers(),
             max_minutes=max_minutes, interval=interval, emit=emit,
             set_output=lambda key, value: _append_env_file("GITHUB_OUTPUT", f"{key}={value}\n"),
         )

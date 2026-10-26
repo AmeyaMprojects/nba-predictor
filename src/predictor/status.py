@@ -623,8 +623,10 @@ GH_TIMEOUT = 20
 CLOUD_FAILURES = 3
 
 _GH_ARGS = [
-    "gh", "run", "list", "--workflow", CLOUD_WORKFLOW, "--limit", "5",
-    "--json", "createdAt,updatedAt,status,conclusion",
+    # 20: enough completed runs for the failure streak even among the
+    # cancelled starts a queued loop leaves behind.
+    "gh", "run", "list", "--workflow", CLOUD_WORKFLOW, "--limit", "20",
+    "--json", "createdAt,startedAt,updatedAt,status,conclusion",
 ]
 # GitHub tokens gh could echo: classic/fine-grained/app/OAuth forms.
 _GH_TOKEN = re.compile(r"\b(gh[pousr]_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,})")
@@ -665,9 +667,10 @@ def check_cloud(
 ) -> SourceHealth:
     """When live.yml last ran, from ``gh run list`` (run in ``cwd``, so gh
     finds the repository from that checkout's remote). Fresh while a run is
-    in progress that started under CLOUD_RUNNING ago, or when the newest
-    completed run finished (its ``updatedAt``) within CLOUD_STALE; stale
-    otherwise, and whenever the 3 newest completed runs all failed. gh never prompts (GH_PROMPT_DISABLED, no
+    in progress that started (``startedAt``, else ``createdAt``) under
+    CLOUD_RUNNING ago, or when the newest completed run finished (its
+    ``updatedAt``) within CLOUD_STALE; stale otherwise, and whenever the 3
+    newest completed runs all failed. Cancelled runs count for neither. gh never prompts (GH_PROMPT_DISABLED, no
     stdin), is given GH_TIMEOUT seconds, and anything it prints is redacted;
     a missing gh, a timeout or an error is one plain "could not check"."""
     env = dict(os.environ, GH_PROMPT_DISABLED="1", GIT_TERMINAL_PROMPT="0")
@@ -693,11 +696,21 @@ def check_cloud(
             key=lambda pair: pair[0], reverse=True,
         )
         # A completed run's age counts from when it finished (a loop job
-        # finishes hours after it was created).
+        # finishes hours after it was created). A cancelled run says nothing
+        # about the loop (a queued start replaced in the concurrency group,
+        # or cancelled by hand): it is not counted as finished at all.
         finished = sorted(
             ((_parse_time(r.get("updatedAt") or r["createdAt"]), r)
-             for _, r in dated if r.get("status") == "completed"),
+             for _, r in dated
+             if r.get("status") == "completed" and r.get("conclusion") != "cancelled"),
             key=lambda pair: pair[0], reverse=True,
+        )
+        # A run in progress counts from when it started (it may have queued
+        # behind the previous loop for hours).
+        running = any(
+            r.get("status") == "in_progress"
+            and now - _parse_time(r.get("startedAt") or r["createdAt"]) < CLOUD_RUNNING
+            for _, r in dated
         )
     except (ValueError, TypeError, KeyError, AttributeError):
         return _could_not_check("gh's answer could not be read")
@@ -714,9 +727,7 @@ def check_cloud(
     # keeps the check fresh whatever that age is.
     newest_at, newest = finished[0] if finished else dated[0]
     age = now - newest_at
-    running = any(
-        r.get("status") == "in_progress" and now - at < CLOUD_RUNNING for at, r in dated
-    )
+    fresh = running or (bool(finished) and age <= CLOUD_STALE)
     state = newest.get("conclusion") or newest.get("status") or "unknown"
     detail = f"last cloud run {_ago(age)} ({state})"
     if finished and dated[0][1].get("status") != "completed":
@@ -725,7 +736,7 @@ def check_cloud(
     failing = len(completed) == CLOUD_FAILURES and all(
         r.get("conclusion") == "failure" for r in completed
     )
-    if age > CLOUD_STALE and not running:
+    if not fresh:
         advice = (
             f"no live.yml run completed or running within "
             f"{CLOUD_STALE.total_seconds() / 3600:g}h: check "

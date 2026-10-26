@@ -563,9 +563,10 @@ from predictor.cloud import state as cloud_state  # noqa: E402
 CLOUD_NOW = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
 
 
-def _run(created_at, status_="completed", conclusion="success", updated_at=None):
-    return {"createdAt": created_at, "updatedAt": updated_at or created_at,
-            "status": status_, "conclusion": conclusion}
+def _run(created_at, status_="completed", conclusion="success", updated_at=None,
+         started_at=None):
+    return {"createdAt": created_at, "startedAt": started_at or created_at,
+            "updatedAt": updated_at or created_at, "status": status_, "conclusion": conclusion}
 
 
 class _FakeGh:
@@ -636,12 +637,44 @@ def test_cloud_a_queued_run_alone_is_not_fresh():
     assert status.check_cloud(CLOUD_NOW, runner=gh).stale is True
 
 
+def test_cloud_in_progress_age_is_from_when_it_started():
+    # Queued 7 h ago behind the previous loop, started 1 h ago: fresh.
+    gh = _FakeGh([_run("2026-10-22T05:00:00Z", "in_progress", "",
+                       started_at="2026-10-22T11:00:00Z"),
+                  _run("2026-10-21T20:00:00Z", updated_at="2026-10-22T01:30:00Z")])
+    assert status.check_cloud(CLOUD_NOW, runner=gh).stale is False
+    # Without startedAt, createdAt counts.
+    run = _run("2026-10-22T05:00:00Z", "in_progress", "")
+    del run["startedAt"]
+    gh = _FakeGh([run, _run("2026-10-21T20:00:00Z", updated_at="2026-10-22T01:30:00Z")])
+    assert status.check_cloud(CLOUD_NOW, runner=gh).stale is True
+
+
+def test_cloud_cancelled_runs_do_not_count_as_finished():
+    # A cancelled run (e.g. a queued start replaced in the concurrency
+    # group) says nothing about the loop: not fresh...
+    gh = _FakeGh([_run("2026-10-22T11:37:00Z", conclusion="cancelled"),
+                  _run("2026-10-21T20:00:00Z", updated_at="2026-10-22T01:30:00Z")])
+    assert status.check_cloud(CLOUD_NOW, runner=gh).stale is True
+    # ...and does not break a failure streak.
+    gh = _FakeGh([
+        _run("2026-10-22T11:50:00Z", conclusion="failure"),
+        _run("2026-10-22T11:40:00Z", conclusion="cancelled"),
+        _run("2026-10-22T11:30:00Z", conclusion="failure"),
+        _run("2026-10-22T11:20:00Z", conclusion="cancelled"),
+        _run("2026-10-22T11:10:00Z", conclusion="failure"),
+    ])
+    health = status.check_cloud(CLOUD_NOW, runner=gh)
+    assert health.stale is True
+    assert "3" in health.detail and "fail" in health.detail
+
+
 def test_cloud_runs_gh_without_prompts_and_with_a_timeout():
     gh = _FakeGh([_run("2026-10-22T11:23:00Z")])
     status.check_cloud(CLOUD_NOW, runner=gh)
     (args, kwargs), = gh.calls
-    assert args == ["gh", "run", "list", "--workflow", "live.yml", "--limit", "5",
-                    "--json", "createdAt,updatedAt,status,conclusion"]
+    assert args == ["gh", "run", "list", "--workflow", "live.yml", "--limit", "20",
+                    "--json", "createdAt,startedAt,updatedAt,status,conclusion"]
     assert kwargs["timeout"] == 20
     assert kwargs["env"]["GH_PROMPT_DISABLED"] == "1"
     assert kwargs["capture_output"] is True

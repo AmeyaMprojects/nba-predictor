@@ -397,7 +397,8 @@ def test_summary_heading_format():
     assert text.splitlines()[0] == \
         "## Cloud run 2026-10-22 13:07 UTC (18:37 IST) — branch cloud-shadow"
     assert "| push | yes | ok | a \\| b |" in text
-    assert summary.outputs(report) == {"site_changed": "false", "raw_upload_failed": "false"}
+    assert summary.outputs(report) == {"site_changed": "false", "raw_upload_failed": "false",
+                                       "secret_leak": "false"}
 
 
 def test_odds_key_never_written_anywhere(world, monkeypatch, capsys):
@@ -422,7 +423,8 @@ def test_odds_key_never_written_anywhere(world, monkeypatch, capsys):
             assert key not in path.read_text(encoding="utf-8").lower(), path
     assert key not in result.output.lower()
     assert key not in summary_file.read_text().lower()
-    assert out_file.read_text() == "site_changed=false\nraw_upload_failed=false\n"
+    assert out_file.read_text() == \
+        "site_changed=false\nraw_upload_failed=false\nsecret_leak=false\n"
     captured = capsys.readouterr()
     assert key not in (captured.out + captured.err).lower()
     assert gh.assets, "the raw archive was uploaded"
@@ -734,6 +736,7 @@ def test_secret_leak_flag_drives_the_outputs(world, monkeypatch):
     assert report.secret_leak and report.unexpected
     assert "SECRET FOUND" in summary.markdown(report)
     assert summary.outputs(report)["raw_upload_failed"] == "false"
+    assert summary.outputs(report)["secret_leak"] == "true"
 
 
 @pytest.mark.parametrize("refspec", ["absent", "single-branch-main"])
@@ -879,7 +882,45 @@ def test_odds_window_stops_after_a_download_without_stored_odds(world):
 # --- cloud-loop: real runs in their own data dirs ------------------------------
 
 
-def test_loop_runs_real_iterations_each_in_a_fresh_data_dir(world):
+def test_cloud_run_records_a_pinned_code_version_from_the_env(world, monkeypatch):
+    monkeypatch.setenv("PREDICTOR_CODE_VERSION", "abc1234")
+    monkeypatch.setenv("PREDICTOR_CODE_DIRTY", "false")
+    result = _invoke(world, monkeypatch, fetchers())
+    assert result.exit_code == 0, result.output
+    lines = read_log(world["work"] / "predictions" / f"{SEASON}.jsonl")
+    assert lines
+    assert all(line["code_version"] == "abc1234" and line["code_dirty"] is False
+               for line in lines)
+
+
+def _in_process_child(world, monkeypatch, fx, before=None):
+    """A cloud-loop child that runs `cloud-run` in this process: the env the
+    loop gives the child is applied for the call (its data dir included)."""
+
+    def child(argv, *, env, cwd, timeout):
+        assert argv[3:5] == ["cloud-run", "--state-repo"]
+        if before is not None:
+            before()
+        with monkeypatch.context() as m:
+            for key in ("PREDICTOR_DATA_DIR", "PREDICTOR_PUBLISH_BRANCH", "GITHUB_OUTPUT",
+                        "GITHUB_STEP_SUMMARY", "PREDICTOR_CODE_VERSION",
+                        "PREDICTOR_CODE_DIRTY"):
+                if key in env:
+                    m.setenv(key, env[key])
+                else:
+                    m.delenv(key, raising=False)
+            s = Settings(data_dir=Path(env["PREDICTOR_DATA_DIR"]))
+            for module in (config, db, raw_store):
+                m.setattr(module, "settings", s)
+            m.setattr(cli, "_cloud_fetchers", lambda: fx)
+            m.setattr(cli, "_repo_dir", lambda: world["seed"])
+            result = CliRunner().invoke(cli.app, argv[3:])
+        return result.exit_code
+
+    return child
+
+
+def test_loop_runs_real_iterations_each_in_a_fresh_data_dir(world, monkeypatch):
     from datetime import timedelta
 
     from predictor.cloud import loop
@@ -888,7 +929,6 @@ def test_loop_runs_real_iterations_each_in_a_fresh_data_dir(world):
     base = world["tmp"] / "loop-data"
     now = [NOW]
     before = config.settings
-    seen_dirs = []
 
     def clock():
         return now[0]
@@ -896,17 +936,19 @@ def test_loop_runs_real_iterations_each_in_a_fresh_data_dir(world):
     def sleep(seconds):
         now[0] += timedelta(seconds=seconds)
 
-    def tracked_run_once(*args, **kwargs):
-        seen_dirs.append(config.settings.data_dir)
-        report = run_once(*args, **kwargs)
-        assert (config.settings.raw_dir).exists()
-        return report
+    seen_dirs = []
+    child = _in_process_child(world, monkeypatch, fetchers(clock=clock))
+
+    def tracked(argv, *, env, cwd, timeout):
+        seen_dirs.append(Path(env["PREDICTOR_DATA_DIR"]))
+        return child(argv, env=env, cwd=cwd, timeout=timeout)
 
     texts = []
     result = loop.run_loop(work, seed, branch="cloud-shadow", base_dir=base,
                            fetchers=fetchers(clock=clock), max_minutes=30, clock=clock,
-                           sleep=sleep, run_once=tracked_run_once, emit=texts.append)
-    # 12:37 at once, then 12:52 (ends by 13:02 <= 13:07); 13:07 would end 13:17.
+                           sleep=sleep, child=tracked, emit=texts.append)
+    # 12:37 at once; 12:52 would run to 13:07 at the latest (15 min watchdog),
+    # within 13:07; 13:07 would not be.
     assert result.iterations == 2 and result.ok, texts
     assert len(set(seen_dirs)) == 2 and all(d.parent == base for d in seen_dirs)
     assert not any(d.exists() for d in seen_dirs)
@@ -914,32 +956,19 @@ def test_loop_runs_real_iterations_each_in_a_fresh_data_dir(world):
     assert subjects(work, 2) == ["predictions: 2026-10-22 slate",
                                  "state: cloud run 2026-10-22T12:37Z"]
     assert texts[0].startswith("# Loop iteration 1 — 2026-10-22 12:37 UTC")
+    assert "## Cloud run 2026-10-22 12:37 UTC" in texts[0]
 
 
 def test_every_call_in_a_loop_records_the_code_version_the_loop_started_with(world, monkeypatch):
-    """When the code checkout moves mid-job (on main it is the state checkout,
-    fast-forwarded every iteration), lines still name the code that runs."""
+    """When the code checkout moves mid-job, lines still name the code the
+    loop started with."""
     from datetime import timedelta
 
     from predictor.cloud import loop
-    from predictor.model import live
 
     work, seed = world["work"], world["seed"]
     start_sha = _git(seed, "rev-parse", "--short", "HEAD").strip()
     now = [NOW]
-    seen = []
-    real_predict, real_grade = live.predict_today, live.grade_seasons
-
-    def spy_predict(*args, **kwargs):
-        seen.append(("predict", kwargs.get("code_version")))
-        return real_predict(*args, **kwargs)
-
-    def spy_grade(*args, **kwargs):
-        seen.append(("grade", kwargs.get("code_version")))
-        return real_grade(*args, **kwargs)
-
-    monkeypatch.setattr(live, "predict_today", spy_predict)
-    monkeypatch.setattr(live, "grade_seasons", spy_grade)
 
     def clock():
         return now[0]
@@ -947,20 +976,17 @@ def test_every_call_in_a_loop_records_the_code_version_the_loop_started_with(wor
     def sleep(seconds):
         now[0] += timedelta(seconds=seconds)
 
-    def run_after_a_code_commit(*args, **kwargs):
-        # A commit lands on the code checkout before each iteration.
+    def code_commit():
         (seed / "code.txt").write_text(str(now[0]), encoding="utf-8")
         _git(seed, "add", "code.txt")
         _git(seed, "commit", "-q", "-m", "code change")
-        return run_once(*args, **kwargs)
 
+    child = _in_process_child(world, monkeypatch, fetchers(clock=clock), before=code_commit)
     result = loop.run_loop(work, seed, branch="cloud-shadow", base_dir=world["tmp"] / "ld",
                            fetchers=fetchers(clock=clock), max_minutes=30, clock=clock,
-                           sleep=sleep, run_once=run_after_a_code_commit)
+                           sleep=sleep, child=child)
     assert result.iterations == 2 and result.ok
     assert _git(seed, "rev-parse", "--short", "HEAD").strip() != start_sha
-    assert [kind for kind, _ in seen] == ["predict", "grade", "predict", "grade"]
-    assert all(cv == (start_sha, False) for _, cv in seen), seen
     lines = read_log(work / "predictions" / f"{SEASON}.jsonl")
     assert lines
     assert all(line["code_version"] == start_sha and line["code_dirty"] is False

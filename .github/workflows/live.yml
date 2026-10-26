@@ -20,7 +20,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 350 # cloud-loop starts nothing that could end after 330 + 10 min
+    timeout-minutes: 350 # cloud-loop kills each iteration at 15 min and starts none that could run past 330
     env:
       # Shadow by default: set the repository variable to `main` at cut-over.
       PREDICTOR_PUBLISH_BRANCH: ${{ vars.PREDICTOR_PUBLISH_BRANCH || 'cloud-shadow' }}
@@ -67,9 +67,10 @@ jobs:
             echo "STATE_REPO=$RUNNER_TEMP/state-repo" >> "$GITHUB_ENV"
           fi
 
-      # Each iteration gets its own data dir under $PREDICTOR_DATA_DIR and
-      # removes it afterwards. cloud-loop also dispatches site.yml after an
-      # iteration that pushed predictions to main (never in shadow mode).
+      # Each iteration is a cloud-run child process (killed at 15 min) with its
+      # own data dir under $PREDICTOR_DATA_DIR, removed afterwards. cloud-loop
+      # also dispatches site.yml after an iteration that pushed predictions to
+      # main (never in shadow mode).
       - id: cloud
         name: Cloud run
         run: uv run --frozen predictor cloud-loop --state-repo "$STATE_REPO" --max-minutes 330
