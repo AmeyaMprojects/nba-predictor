@@ -41,10 +41,21 @@ def _named(name: str) -> dict:
     return next(s for s in _steps() if s.get("name") == name)
 
 
-def test_live_runs_every_15_minutes_and_by_hand():
+def test_live_starts_twice_an_hour_and_by_hand():
+    # One job loops for ~5.5 h; the cron only (re)starts it. A start while a
+    # job runs queues behind it (concurrency group, no cancel).
     on = _live()["on"]
-    assert [entry["cron"] for entry in on["schedule"]] == ["7,22,37,52 * * * *"]
+    assert [entry["cron"] for entry in on["schedule"]] == ["7,37 * * * *"]
     assert "workflow_dispatch" in on
+
+
+def test_cloud_step_runs_the_loop_within_the_job_timeout():
+    run = _step("cloud")["run"]
+    assert "predictor cloud-loop" in run
+    assert "--max-minutes 330" in run
+    assert "cloud-run " not in run
+    # 330 min of starts + one 10 min iteration + setup fit in the timeout.
+    assert int(_job()["timeout-minutes"]) == 350
 
 
 def test_live_never_overlaps():
@@ -97,14 +108,15 @@ def test_gh_token_only_on_the_steps_that_call_gh():
     assert "GH_TOKEN" not in _job()["env"]
     assert "env" not in _live()
     with_token = [s for s in _steps() if "GH_TOKEN" in s.get("env", {})]
-    assert {s.get("id") or s.get("name") for s in with_token} == {"cloud", "Rebuild site"}
+    # The loop step uploads raw archives and dispatches site.yml itself.
+    assert [s.get("id") for s in with_token] == ["cloud"]
     for step in with_token:
         assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
-    assert (WORKFLOWS / "live.yml").read_text().count("github.token") == 2
+    assert (WORKFLOWS / "live.yml").read_text().count("github.token") == 1
 
 
 def test_job_has_a_timeout_and_python_314_via_cached_uv():
-    assert int(_job()["timeout-minutes"]) <= 15
+    assert int(_job()["timeout-minutes"]) <= 360
     uv = next(s for s in _steps() if s.get("uses", "").startswith("astral-sh/setup-uv@"))
     assert uv["with"]["python-version"] == "3.14"
     assert uv["with"]["enable-cache"] == "true"
@@ -123,30 +135,37 @@ def test_state_worktree_lives_outside_the_code_checkout():
     assert "--state-repo \"$STATE_REPO\"" in _step("cloud")["run"]
 
 
-def test_site_dispatched_only_when_predictions_changed():
-    rebuild = _named("Rebuild site")
-    condition = rebuild["if"]
-    assert "steps.cloud.outputs.site_changed == 'true'" in condition
-    assert "env.PREDICTOR_PUBLISH_BRANCH == 'main'" in condition  # never in shadow mode
-    assert rebuild["run"].strip() == "gh workflow run site.yml --ref main"
-    dispatching = [s for s in _steps() if "gh workflow run" in s.get("run", "")]
-    assert dispatching == [rebuild]
+def test_site_dispatched_only_from_the_loop():
+    # cloud-loop dispatches site.yml after an iteration that changed main
+    # (tests/test_cloud_loop.py); no workflow step calls gh itself.
+    assert not any("gh workflow run" in s.get("run", "") for s in _steps())
+    assert not any(s.get("name") == "Rebuild site" for s in _steps())
 
 
-def test_raw_kept_as_artifact_only_when_the_release_upload_failed():
+def test_kept_raw_dirs_uploaded_only_when_kept_and_no_secret_was_found():
     keep = next(s for s in _steps() if s.get("uses", "").startswith("actions/upload-artifact@"))
-    assert keep["if"] == "always() && steps.cloud.outputs.raw_upload_failed == 'true'"
-    # Odds responses stay in the runner's temp dir: never kept as an artifact.
+    assert keep["if"] == (
+        "always() && steps.cloud.outputs.raw_kept == 'true' "
+        "&& steps.cloud.outputs.secret_leak != 'true'"
+    )
+    # Only the raw dirs cloud-loop moved under kept/ (upload failed, secret
+    # check passed); odds responses are never kept as an artifact.
     assert keep["with"]["path"].splitlines() == [
-        "${{ runner.temp }}/predictor-data/raw",
-        "!${{ runner.temp }}/predictor-data/raw/odds",
-        "!${{ runner.temp }}/predictor-data/raw/odds_history",
+        "${{ runner.temp }}/predictor-data/kept/*/raw",
+        "!${{ runner.temp }}/predictor-data/kept/*/raw/odds",
+        "!${{ runner.temp }}/predictor-data/kept/*/raw/odds_history",
     ]
     assert "PREDICTOR_DATA_DIR" not in _job()["env"]  # runner.temp is not allowed in job env
     set_dir = [s for s in _steps() if "PREDICTOR_DATA_DIR=$RUNNER_TEMP/predictor-data" in s.get("run", "")]
     assert len(set_dir) == 1
     assert keep["with"]["name"] == "raw-${{ github.run_id }}-${{ github.run_attempt }}"
     assert int(keep["with"]["retention-days"]) <= 7
+
+
+def test_kept_dir_name_matches_the_loop():
+    from predictor.cloud import loop
+
+    assert loop.KEPT_DIRNAME == "kept"
 
 
 def test_site_yml_still_has_workflow_dispatch():

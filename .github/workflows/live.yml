@@ -2,7 +2,11 @@ name: live
 
 on:
   schedule:
-    - cron: '7,22,37,52 * * * *' # off the top of the hour, where GitHub delays are worst
+    # GitHub fires this cron only every few hours in practice, so one job
+    # loops for ~5.5 h (cloud-loop, every 15 min on :07/:22/:37/:52). The cron
+    # only restarts it: a start while a job runs queues behind it (the
+    # concurrency group below never cancels), off the top of the hour.
+    - cron: '7,37 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -16,11 +20,11 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 350 # cloud-loop starts nothing that could end after 330 + 10 min
     env:
       # Shadow by default: set the repository variable to `main` at cut-over.
       PREDICTOR_PUBLISH_BRANCH: ${{ vars.PREDICTOR_PUBLISH_BRANCH || 'cloud-shadow' }}
-      # GH_TOKEN is set only on the steps that call gh (Cloud run, Rebuild site).
+      # GH_TOKEN is set only on the step that calls gh (Cloud run).
       GH_REPO: ${{ github.repository }}
       GH_PROMPT_DISABLED: '1'
     steps:
@@ -63,31 +67,27 @@ jobs:
             echo "STATE_REPO=$RUNNER_TEMP/state-repo" >> "$GITHUB_ENV"
           fi
 
+      # Each iteration gets its own data dir under $PREDICTOR_DATA_DIR and
+      # removes it afterwards. cloud-loop also dispatches site.yml after an
+      # iteration that pushed predictions to main (never in shadow mode).
       - id: cloud
         name: Cloud run
-        run: uv run --frozen predictor cloud-run --state-repo "$STATE_REPO"
+        run: uv run --frozen predictor cloud-loop --state-repo "$STATE_REPO" --max-minutes 330
         env:
           ODDS_API_KEY: ${{ secrets.ODDS_API_KEY }}
-          GH_TOKEN: ${{ github.token }} # gh release upload of the raw archive
+          GH_TOKEN: ${{ github.token }} # gh release upload of raw archives; gh workflow run site.yml
 
-      # cloud-run sets site_changed only for a push to main; the branch check
-      # is a second guard so shadow mode never rebuilds the public site.
-      - name: Rebuild site
-        if: always() && steps.cloud.outputs.site_changed == 'true' && env.PREDICTOR_PUBLISH_BRANCH == 'main'
-        run: gh workflow run site.yml --ref main
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      # cloud-run keeps raw_upload_failed false when it found the odds key in
-      # the run's files, so a raw dir holding a secret is never uploaded.
-      # Odds responses may not be republished: they stay in the temp dir.
-      - name: Keep raw responses if the release upload failed
-        if: always() && steps.cloud.outputs.raw_upload_failed == 'true'
+      # cloud-loop moves an iteration's raw dir to kept/ only when its release
+      # upload failed and no secret was found in it; a secret found in any
+      # iteration stops the loop and sets secret_leak, and then nothing is
+      # uploaded. Odds responses may not be republished: they stay in the temp dir.
+      - name: Keep raw responses if a release upload failed
+        if: always() && steps.cloud.outputs.raw_kept == 'true' && steps.cloud.outputs.secret_leak != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: 'raw-${{ github.run_id }}-${{ github.run_attempt }}'
           path: |
-            ${{ runner.temp }}/predictor-data/raw
-            !${{ runner.temp }}/predictor-data/raw/odds
-            !${{ runner.temp }}/predictor-data/raw/odds_history
+            ${{ runner.temp }}/predictor-data/kept/*/raw
+            !${{ runner.temp }}/predictor-data/kept/*/raw/odds
+            !${{ runner.temp }}/predictor-data/kept/*/raw/odds_history
           retention-days: 7

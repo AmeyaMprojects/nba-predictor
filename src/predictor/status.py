@@ -47,7 +47,7 @@ the REAL refresh cadence of each source, not a single generic number:
   games threshold and offseason reasoning apply.
 
 Cloud operation (`status --from-state PATH`, `check_cloud`): the cloud run
-(`.github/workflows/live.yml`, every 15 minutes) keeps its data as
+(`.github/workflows/live.yml`, one long job looping every 15 minutes) keeps its data as
 append-only files under `PATH/state`, and `status --from-state` rebuilds a
 throwaway DuckDB from them. Some table ages mean something different there:
 
@@ -611,9 +611,12 @@ def check_live(
 
 # --- cloud runs ------------------------------------------------------------
 
-# The live workflow runs every 15 minutes; 2h without a run is ~8 missed
-# slots, well past GitHub's usual late or skipped cron starts.
-CLOUD_STALE = timedelta(hours=2)
+# The live workflow is one ~5.5 h job looping every 15 minutes (cloud-loop),
+# restarted by a cron GitHub fires only every few hours. Fresh: a run still
+# in progress that started under CLOUD_RUNNING ago (a loop that has not hit
+# its timeout), or a run that finished within CLOUD_STALE.
+CLOUD_STALE = timedelta(hours=6, minutes=15)
+CLOUD_RUNNING = timedelta(hours=6)
 CLOUD_WORKFLOW = "live.yml"
 GH_TIMEOUT = 20
 # Consecutive failed (completed) runs that count as broken.
@@ -621,7 +624,7 @@ CLOUD_FAILURES = 3
 
 _GH_ARGS = [
     "gh", "run", "list", "--workflow", CLOUD_WORKFLOW, "--limit", "5",
-    "--json", "createdAt,status,conclusion",
+    "--json", "createdAt,updatedAt,status,conclusion",
 ]
 # GitHub tokens gh could echo: classic/fine-grained/app/OAuth forms.
 _GH_TOKEN = re.compile(r"\b(gh[pousr]_[A-Za-z0-9]{8,}|github_pat_[A-Za-z0-9_]{8,})")
@@ -661,9 +664,10 @@ def check_cloud(
     now: datetime, runner=subprocess.run, *, cwd: Path | None = None
 ) -> SourceHealth:
     """When live.yml last ran, from ``gh run list`` (run in ``cwd``, so gh
-    finds the repository from that checkout's remote). Stale with no run,
-    when the newest run is more than CLOUD_STALE old, or when the 3 newest
-    completed runs all failed. gh never prompts (GH_PROMPT_DISABLED, no
+    finds the repository from that checkout's remote). Fresh while a run is
+    in progress that started under CLOUD_RUNNING ago, or when the newest
+    completed run finished (its ``updatedAt``) within CLOUD_STALE; stale
+    otherwise, and whenever the 3 newest completed runs all failed. gh never prompts (GH_PROMPT_DISABLED, no
     stdin), is given GH_TIMEOUT seconds, and anything it prints is redacted;
     a missing gh, a timeout or an error is one plain "could not check"."""
     env = dict(os.environ, GH_PROMPT_DISABLED="1", GIT_TERMINAL_PROMPT="0")
@@ -688,6 +692,13 @@ def check_cloud(
             ((_parse_time(r["createdAt"]), r) for r in runs),
             key=lambda pair: pair[0], reverse=True,
         )
+        # A completed run's age counts from when it finished (a loop job
+        # finishes hours after it was created).
+        finished = sorted(
+            ((_parse_time(r.get("updatedAt") or r["createdAt"]), r)
+             for _, r in dated if r.get("status") == "completed"),
+            key=lambda pair: pair[0], reverse=True,
+        )
     except (ValueError, TypeError, KeyError, AttributeError):
         return _could_not_check("gh's answer could not be read")
 
@@ -698,11 +709,14 @@ def check_cloud(
             "gh workflow list, or start it with gh workflow run live.yml",
             detail="no cloud run found for live.yml",
         )
-    finished = [(at, r) for at, r in dated if r.get("status") == "completed"]
-    # Age is that of the last COMPLETED run (a run still going says nothing
-    # yet); with none completed so far, the newest run's.
+    # Age is that of the last COMPLETED run; with none completed so far, the
+    # newest run's. A loop still running (and younger than CLOUD_RUNNING)
+    # keeps the check fresh whatever that age is.
     newest_at, newest = finished[0] if finished else dated[0]
     age = now - newest_at
+    running = any(
+        r.get("status") == "in_progress" and now - at < CLOUD_RUNNING for at, r in dated
+    )
     state = newest.get("conclusion") or newest.get("status") or "unknown"
     detail = f"last cloud run {_ago(age)} ({state})"
     if finished and dated[0][1].get("status") != "completed":
@@ -711,9 +725,10 @@ def check_cloud(
     failing = len(completed) == CLOUD_FAILURES and all(
         r.get("conclusion") == "failure" for r in completed
     )
-    if age > CLOUD_STALE:
+    if age > CLOUD_STALE and not running:
         advice = (
-            f"no live.yml run for over {CLOUD_STALE.total_seconds() / 3600:.0f}h: check "
+            f"no live.yml run completed or running within "
+            f"{CLOUD_STALE.total_seconds() / 3600:g}h: check "
             "the workflow is enabled (gh workflow list) and read the latest run "
             "(gh run list --workflow live.yml, then gh run view <id>)"
         )

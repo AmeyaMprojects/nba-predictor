@@ -2066,6 +2066,51 @@ def cloud_run_cmd(
         raise typer.Exit(code=1)
 
 
+@app.command("cloud-loop")
+def cloud_loop_cmd(
+    state_repo: str = typer.Option(..., "--state-repo", help="The checkout holding state/ and predictions/."),
+    max_minutes: float = typer.Option(330, "--max-minutes", help="Start no iteration that could "
+                                      "end later than this many minutes after the loop began."),
+    interval: int = typer.Option(15, "--interval", help="Minutes between iteration marks "
+                                 "(from minute 7 of the hour; must divide 60)."),
+) -> None:
+    """Run cloud-run again and again on the :07/:22/:37/:52 marks (one long job)."""
+    import os
+    from pathlib import Path
+
+    from predictor import config
+    from predictor.cloud import loop
+
+    try:
+        branch = config.publish_branch(required=True)
+    except ValueError as exc:
+        typer.echo(f"cloud-loop: {exc}")
+        raise typer.Exit(code=1) from None
+    try:
+        attempt = int(os.environ.get("GITHUB_RUN_ATTEMPT", "1") or 1)
+    except ValueError:
+        attempt = 1
+
+    def emit(text: str) -> None:
+        _append_env_file("GITHUB_STEP_SUMMARY", text)
+        typer.echo(text, nl=False)
+
+    try:
+        result = loop.run_loop(
+            Path(state_repo).expanduser(), _repo_dir(), branch=branch,
+            base_dir=config.settings.data_dir, fetchers=_cloud_fetchers(), run_attempt=attempt,
+            max_minutes=max_minutes, interval=interval, emit=emit,
+            set_output=lambda key, value: _append_env_file("GITHUB_OUTPUT", f"{key}={value}\n"),
+        )
+    except ValueError as exc:
+        typer.echo(f"cloud-loop: {exc}")
+        raise typer.Exit(code=1) from None
+    typer.echo(f"cloud-loop: {result.iterations} iteration(s)"
+               + ("" if result.ok else "; FAILED (see the summaries above)"))
+    if not result.ok:
+        raise typer.Exit(code=1)
+
+
 def _compare_git(repo, *args: str):
     """git for `compare-shadow` -- one indirection point so tests can prove
     git is not needed when every input is given as a path."""

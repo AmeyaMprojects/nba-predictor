@@ -874,3 +874,43 @@ def test_odds_window_stops_after_a_download_without_stored_odds(world):
                       fetchers=fetchers(odds_download=download, clock=lambda: later))
     assert step(second, "odds").due is False
     assert len(calls) == 1
+
+
+# --- cloud-loop: real runs in their own data dirs ------------------------------
+
+
+def test_loop_runs_real_iterations_each_in_a_fresh_data_dir(world):
+    from datetime import timedelta
+
+    from predictor.cloud import loop
+
+    work, seed = world["work"], world["seed"]
+    base = world["tmp"] / "loop-data"
+    now = [NOW]
+    before = config.settings
+    seen_dirs = []
+
+    def clock():
+        return now[0]
+
+    def sleep(seconds):
+        now[0] += timedelta(seconds=seconds)
+
+    def tracked_run_once(*args, **kwargs):
+        seen_dirs.append(config.settings.data_dir)
+        report = run_once(*args, **kwargs)
+        assert (config.settings.raw_dir).exists()
+        return report
+
+    texts = []
+    result = loop.run_loop(work, seed, branch="cloud-shadow", base_dir=base,
+                           fetchers=fetchers(clock=clock), max_minutes=30, clock=clock,
+                           sleep=sleep, run_once=tracked_run_once, emit=texts.append)
+    # 12:37 at once, then 12:52 (ends by 13:02 <= 13:07); 13:07 would end 13:17.
+    assert result.iterations == 2 and result.ok, texts
+    assert len(set(seen_dirs)) == 2 and all(d.parent == base for d in seen_dirs)
+    assert not any(d.exists() for d in seen_dirs)
+    assert config.settings is before
+    assert subjects(work, 2) == ["predictions: 2026-10-22 slate",
+                                 "state: cloud run 2026-10-22T12:37Z"]
+    assert texts[0].startswith("# Loop iteration 1 — 2026-10-22 12:37 UTC")

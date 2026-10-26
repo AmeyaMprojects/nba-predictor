@@ -563,8 +563,9 @@ from predictor.cloud import state as cloud_state  # noqa: E402
 CLOUD_NOW = datetime(2026, 10, 22, 12, 0, tzinfo=UTC)
 
 
-def _run(created_at, status_="completed", conclusion="success"):
-    return {"createdAt": created_at, "status": status_, "conclusion": conclusion}
+def _run(created_at, status_="completed", conclusion="success", updated_at=None):
+    return {"createdAt": created_at, "updatedAt": updated_at or created_at,
+            "status": status_, "conclusion": conclusion}
 
 
 class _FakeGh:
@@ -587,8 +588,9 @@ class _FakeGh:
         return subprocess.CompletedProcess(args, self.returncode, out, self.stderr)
 
 
-def test_cloud_stale_after_two_hours():
-    gh = _FakeGh([_run("2026-10-22T10:00:00Z")])
+def test_cloud_stale_after_six_hours_and_a_quarter():
+    # A loop job runs ~5.5 h; the cron restarts it twice an hour.
+    gh = _FakeGh([_run("2026-10-22T05:45:00Z")])
     fresh = status.check_cloud(CLOUD_NOW, runner=gh)
     assert fresh.name == "cloud_runs"
     assert fresh.stale is False
@@ -596,7 +598,42 @@ def test_cloud_stale_after_two_hours():
     late = status.check_cloud(CLOUD_NOW + timedelta(seconds=1), runner=gh)
     assert late.stale is True
     assert "live.yml" in late.advice
-    assert status.CLOUD_STALE == timedelta(hours=2)
+    assert status.CLOUD_STALE == timedelta(hours=6, minutes=15)
+
+
+def test_cloud_age_of_a_completed_run_is_from_when_it_finished():
+    # Started 6 h ago, finished 30 min ago: fresh.
+    gh = _FakeGh([_run("2026-10-22T06:00:00Z", updated_at="2026-10-22T11:30:00Z")])
+    health = status.check_cloud(CLOUD_NOW, runner=gh)
+    assert health.stale is False
+    assert health.detail == "last cloud run 30m ago (success)"
+
+
+def test_cloud_a_loop_in_progress_for_under_six_hours_is_fresh():
+    gh = _FakeGh([_run("2026-10-22T06:07:00Z", "in_progress", ""),
+                  _run("2026-10-21T20:00:00Z", updated_at="2026-10-22T01:30:00Z")])
+    health = status.check_cloud(CLOUD_NOW, runner=gh)
+    assert health.stale is False
+    assert health.advice == ""
+    assert "in_progress" in health.detail
+
+
+def test_cloud_a_run_in_progress_for_over_six_hours_does_not_count():
+    gh = _FakeGh([_run("2026-10-22T05:59:00Z", "in_progress", ""),
+                  _run("2026-10-21T20:00:00Z", updated_at="2026-10-22T01:30:00Z")])
+    health = status.check_cloud(CLOUD_NOW, runner=gh)
+    assert health.stale is True
+
+
+def test_cloud_only_a_fresh_run_in_progress_is_fresh():
+    gh = _FakeGh([_run("2026-10-22T11:07:00Z", "in_progress", "")])
+    assert status.check_cloud(CLOUD_NOW, runner=gh).stale is False
+
+
+def test_cloud_a_queued_run_alone_is_not_fresh():
+    gh = _FakeGh([_run("2026-10-22T11:07:00Z", "queued", ""),
+                  _run("2026-10-21T20:00:00Z", updated_at="2026-10-22T01:30:00Z")])
+    assert status.check_cloud(CLOUD_NOW, runner=gh).stale is True
 
 
 def test_cloud_runs_gh_without_prompts_and_with_a_timeout():
@@ -604,7 +641,7 @@ def test_cloud_runs_gh_without_prompts_and_with_a_timeout():
     status.check_cloud(CLOUD_NOW, runner=gh)
     (args, kwargs), = gh.calls
     assert args == ["gh", "run", "list", "--workflow", "live.yml", "--limit", "5",
-                    "--json", "createdAt,status,conclusion"]
+                    "--json", "createdAt,updatedAt,status,conclusion"]
     assert kwargs["timeout"] == 20
     assert kwargs["env"]["GH_PROMPT_DISABLED"] == "1"
     assert kwargs["capture_output"] is True
@@ -651,12 +688,12 @@ def test_cloud_two_failures_is_not_stale():
 
 
 def test_cloud_age_is_from_the_last_completed_run():
-    gh = _FakeGh([_run("2026-10-22T11:50:00Z", "in_progress", ""),
-                  _run("2026-10-22T09:59:00Z")])
+    gh = _FakeGh([_run("2026-10-22T05:50:00Z", "in_progress", ""),
+                  _run("2026-10-22T05:44:00Z")])
     health = status.check_cloud(CLOUD_NOW, runner=gh)
     assert health.stale is True
     assert health.info is False
-    assert "2h ago" in health.detail or "121m" in health.detail
+    assert "6h ago" in health.detail
 
 
 def test_cloud_could_not_check_never_fails_the_report():
