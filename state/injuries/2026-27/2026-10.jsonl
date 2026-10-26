@@ -243,3 +243,4 @@
 {"game_date":"2026-10-26","game_time":"08:30(ET)","kind":"set","matchup":"ATL@HOU","player":"Dennis,RayJ","player_display":"Dennis,RayJ","reason":"GLeague-Two-Way","status":"Out","team":"ATL","team_display":"AtlantaHawks"}
 {"game_date":"2026-10-26","game_time":"08:30(ET)","kind":"set","matchup":"ATL@HOU","player":"Gilbert,Keshon","player_display":"Gilbert,Keshon","reason":"GLeague-Two-Way","status":"Out","team":"ATL","team_display":"AtlantaHawks"}
 {"game_date":"2026-10-26","game_time":"08:30(ET)","kind":"set","matchup":"ATL@HOU","player":"Wilson,Jalen","player_display":"Wilson,Jalen","reason":"GLeague-Two-Way","status":"Out","team":"ATL","team_display":"AtlantaHawks"}
+{"content_sha":"f161e257133709cfcb2b6045f02c416ec62a86ea37af7d3fa8d3b04c1ea2e77f","fetched_at":"2026-10-26T20:37:00.442112+00:00","kind":"report","report_at":"2026-10-26T20:30:00+00:00","rows":67,"source_key":"Injury-Report_2026-10-26_04_30PM.pdf","v":1}
