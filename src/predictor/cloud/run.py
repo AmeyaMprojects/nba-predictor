@@ -152,6 +152,8 @@ class _Run:
     state_repo: Path
     code_dir: Path
     branch: str
+    # (sha, dirty) read once by the caller (cloud-loop); None: read per call.
+    code_version: tuple[str | None, bool] | None
     fetchers: Fetchers
     run_attempt: int
     started: datetime
@@ -543,7 +545,8 @@ def _predict(run: _Run) -> tuple[bool, bool, str]:
     _id_links(run)  # before predicting: a linked provisional call covers its game
     loaded = model_settings.load(state.settings_path(run.state_dir))
     result = live.predict_today(run.con, loaded, run.state_repo, now, code_dir=run.code_dir,
-                                state_version=publish.head_sha(run.state_repo))
+                                state_version=publish.head_sha(run.state_repo),
+                                code_version=run.code_version)
     detail = (f"slate {live.slate_date(now)}: {result.predicted} predicted, "
               f"{result.not_predicted} not predicted, "
               f"{result.skipped_duplicates} duplicate(s) skipped")
@@ -556,7 +559,7 @@ def _grade(run: _Run) -> tuple[bool, bool, str]:
     now = run.clock()
     _id_links(run)
     graded, _seasons = live.grade_seasons(run.con, run.state_repo, _slate_season(run, now), now,
-                                          code_dir=run.code_dir)
+                                          code_dir=run.code_dir, code_version=run.code_version)
     return True, True, f"{graded} grade line(s) appended"
 
 
@@ -651,10 +654,15 @@ def run_once(
     branch: str,
     fetchers: Fetchers = Fetchers(),
     run_attempt: int = 1,
+    code_version: tuple[str | None, bool] | None = None,
 ) -> RunReport:
-    """Do whatever is due now, in `STEP_NAMES` order; see the module docstring."""
+    """Do whatever is due now, in `STEP_NAMES` order; see the module docstring.
+
+    ``code_version`` (sha, dirty), when given, is recorded on every line
+    instead of reading ``code_dir``'s HEAD (cloud-loop reads it once)."""
     state_repo = Path(state_repo)
     run = _Run(state_repo=state_repo, code_dir=Path(code_dir), branch=branch,
+               code_version=code_version,
                fetchers=fetchers, run_attempt=run_attempt,
                started=db.require_utc(fetchers.clock(), "clock"))
     config.settings.ensure_dirs()

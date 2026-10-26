@@ -17,6 +17,10 @@ job loops internally instead of relying on one start per slot.
 - An iteration that raises, or reports an unexpected or publish error, never
   stops the loop; the loop fails at the end. A secret leak stops the loop at
   once.
+- The code checkout's (sha, dirty) is read once, at the start, and recorded
+  on every iteration's prediction and grade lines: on main the code
+  checkout is the state checkout, fast-forwarded by every iteration, so its
+  HEAD can move past the code this process is running.
 - After an iteration that changed the public predictions on main, site.yml
   is dispatched (``gh workflow run site.yml --ref main``); a failed dispatch
   fails the loop at the end.
@@ -35,6 +39,7 @@ from pathlib import Path
 
 from predictor import config
 from predictor.cloud import run, summary
+from predictor.model import publish
 
 MARK_OFFSET_MINUTES = 7
 ITERATION_BUDGET = timedelta(minutes=10)
@@ -134,6 +139,7 @@ def run_loop(
     next_mark(clock(), interval)  # validates interval before anything runs
     state_repo, base_dir = Path(state_repo), Path(base_dir)
     deadline = clock() + timedelta(minutes=max_minutes)
+    code_version = publish.code_version(Path(code_dir))
     count = 0
     failed = secret_leak = raw_kept = False
     slot: datetime | None = None
@@ -158,7 +164,7 @@ def run_loop(
         try:
             with _data_dir(data_dir):
                 report = run_once(state_repo, code_dir, branch=branch, fetchers=fetchers,
-                                  run_attempt=run_attempt)
+                                  run_attempt=run_attempt, code_version=code_version)
         except Exception as exc:  # noqa: BLE001 -- one bad iteration never stops the loop
             failed = True
             emit(heading + f"iteration failed: {type(exc).__name__}: {_redact(exc)}\n\n")

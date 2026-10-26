@@ -914,3 +914,54 @@ def test_loop_runs_real_iterations_each_in_a_fresh_data_dir(world):
     assert subjects(work, 2) == ["predictions: 2026-10-22 slate",
                                  "state: cloud run 2026-10-22T12:37Z"]
     assert texts[0].startswith("# Loop iteration 1 — 2026-10-22 12:37 UTC")
+
+
+def test_every_call_in_a_loop_records_the_code_version_the_loop_started_with(world, monkeypatch):
+    """When the code checkout moves mid-job (on main it is the state checkout,
+    fast-forwarded every iteration), lines still name the code that runs."""
+    from datetime import timedelta
+
+    from predictor.cloud import loop
+    from predictor.model import live
+
+    work, seed = world["work"], world["seed"]
+    start_sha = _git(seed, "rev-parse", "--short", "HEAD").strip()
+    now = [NOW]
+    seen = []
+    real_predict, real_grade = live.predict_today, live.grade_seasons
+
+    def spy_predict(*args, **kwargs):
+        seen.append(("predict", kwargs.get("code_version")))
+        return real_predict(*args, **kwargs)
+
+    def spy_grade(*args, **kwargs):
+        seen.append(("grade", kwargs.get("code_version")))
+        return real_grade(*args, **kwargs)
+
+    monkeypatch.setattr(live, "predict_today", spy_predict)
+    monkeypatch.setattr(live, "grade_seasons", spy_grade)
+
+    def clock():
+        return now[0]
+
+    def sleep(seconds):
+        now[0] += timedelta(seconds=seconds)
+
+    def run_after_a_code_commit(*args, **kwargs):
+        # A commit lands on the code checkout before each iteration.
+        (seed / "code.txt").write_text(str(now[0]), encoding="utf-8")
+        _git(seed, "add", "code.txt")
+        _git(seed, "commit", "-q", "-m", "code change")
+        return run_once(*args, **kwargs)
+
+    result = loop.run_loop(work, seed, branch="cloud-shadow", base_dir=world["tmp"] / "ld",
+                           fetchers=fetchers(clock=clock), max_minutes=30, clock=clock,
+                           sleep=sleep, run_once=run_after_a_code_commit)
+    assert result.iterations == 2 and result.ok
+    assert _git(seed, "rev-parse", "--short", "HEAD").strip() != start_sha
+    assert [kind for kind, _ in seen] == ["predict", "grade", "predict", "grade"]
+    assert all(cv == (start_sha, False) for _, cv in seen), seen
+    lines = read_log(work / "predictions" / f"{SEASON}.jsonl")
+    assert lines
+    assert all(line["code_version"] == start_sha and line["code_dirty"] is False
+               for line in lines)

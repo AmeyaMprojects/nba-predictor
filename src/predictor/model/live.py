@@ -556,6 +556,7 @@ def predict_today(
     *,
     code_dir: Path | None = None,
     state_version: str | None = None,
+    code_version: tuple[str | None, bool] | None = None,
 ) -> RunResult:
     """Predict every not-yet-logged game on the slate, once each, and log
     an honest not_predicted line for every game that could not be.
@@ -577,7 +578,9 @@ def predict_today(
 
     Every line carries ``state_version`` (the cloud state commit the run
     was computed from; None on the Mac) and the ``code_version`` of
-    ``code_dir`` (default ``repo_dir``). A logged line under a provisional
+    ``code_dir`` (default ``repo_dir``), or ``code_version`` (sha, dirty)
+    when the caller read it once already (cloud-loop: the code that is
+    running, even after the checkout moved). A logged line under a provisional
     ``espn:`` id that ``read_id_links`` maps to an NBA id covers that NBA
     id too, so a linked game is never predicted twice.
     """
@@ -593,7 +596,8 @@ def predict_today(
     stale_flag = bool(results_missing(con, now))
     settings_dict = _settings_dict(settings)
     # Which code made these lines -- see publish.code_version.
-    code_sha, code_dirty = publish.code_version(code_dir or repo_dir)
+    code_sha, code_dirty = (code_version if code_version is not None
+                            else publish.code_version(code_dir or repo_dir))
     predictor = Stage1Predictor(con, settings)
 
     predicted = not_predicted = skipped_duplicates = backfilled = 0
@@ -707,7 +711,8 @@ def predict_today(
 
 
 def grade(
-    con, repo_dir: Path, season: str, now: datetime, *, code_dir: Path | None = None
+    con, repo_dir: Path, season: str, now: datetime, *, code_dir: Path | None = None,
+    code_version: tuple[str | None, bool] | None = None,
 ) -> int:
     """Grade every predicted game that now has a FINAL result.
 
@@ -783,7 +788,8 @@ def grade(
             already_graded.add(g["linked_game_id"])
     games_table = db.POINT_IN_TIME_TABLES["games"]
 
-    code_sha, code_dirty = publish.code_version(code_dir or repo_dir)
+    code_sha, code_dirty = (code_version if code_version is not None
+                            else publish.code_version(code_dir or repo_dir))
     appended = 0
     for key in sorted(latest_predicted):
         line = latest_predicted[key]
@@ -835,7 +841,8 @@ def grade(
 
 
 def grade_seasons(
-    con, repo_dir: Path, season: str, now: datetime, *, code_dir: Path | None = None
+    con, repo_dir: Path, season: str, now: datetime, *, code_dir: Path | None = None,
+    code_version: tuple[str | None, bool] | None = None,
 ) -> tuple[int, set[str]]:
     """Grade ``season``'s prediction log and, when it exists, the previous
     season's -- the one grading rule shared by ``predict-today``,
@@ -854,7 +861,8 @@ def grade_seasons(
     seasons_touched = {season}
     previous_season = previous_season_label(season)
     if log_path(repo_dir, previous_season).exists():
-        graded += grade(con, repo_dir, previous_season, now, code_dir=code_dir)
+        graded += grade(con, repo_dir, previous_season, now, code_dir=code_dir,
+                        code_version=code_version)
         seasons_touched.add(previous_season)
-    graded += grade(con, repo_dir, season, now, code_dir=code_dir)
+    graded += grade(con, repo_dir, season, now, code_dir=code_dir, code_version=code_version)
     return graded, seasons_touched

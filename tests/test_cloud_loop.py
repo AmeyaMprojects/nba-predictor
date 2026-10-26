@@ -16,6 +16,7 @@ from predictor.cloud import loop
 from predictor.cloud.run import STEP_NAMES, Fetchers, RunReport, StepOutcome
 
 START = datetime(2026, 10, 26, 7, 7, 30, tzinfo=UTC)
+FAKE_KEY = "0123456789abcdef" * 2  # built at runtime; never a real key
 
 
 class FakeTime:
@@ -64,7 +65,7 @@ class FakeRun:
         self.starts: list[datetime] = []
         self.data_dirs: list[Path] = []
 
-    def __call__(self, state_repo, code_dir, *, branch, fetchers, run_attempt):
+    def __call__(self, state_repo, code_dir, *, branch, fetchers, run_attempt, code_version):
         started = self.t.now
         self.starts.append(started)
         d = config.settings.data_dir
@@ -207,12 +208,12 @@ def test_a_secret_leak_stops_the_loop_at_once(tmp_path):
 
 def test_the_secret_is_redacted_from_an_iteration_error(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))  # never the real key file
-    monkeypatch.setenv("ODDS_API_KEY", "0123456789abcdef0123456789abcdef")
+    monkeypatch.setenv("ODDS_API_KEY", FAKE_KEY)
     t = FakeTime()
-    fake = FakeRun(t, plan=[RuntimeError("key 0123456789abcdef0123456789abcdef")])
+    fake = FakeRun(t, plan=[RuntimeError(f"key {FAKE_KEY}")])
     _, texts, _ = _loop(tmp_path, t, fake, max_minutes=5)
     joined = "".join(texts)
-    assert "0123456789abcdef0123456789abcdef" not in joined
+    assert FAKE_KEY not in joined
     assert "RuntimeError" in joined
 
 
