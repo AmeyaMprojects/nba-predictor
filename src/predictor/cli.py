@@ -1723,17 +1723,19 @@ def _candidate_decision(con, ev, progress):
     per-team variant against the current live model -- shared by
     evaluate-model and fit-player-model.
 
-    The per-team variant is the candidate: its shrinkage grid starts with
-    flat, so it is flat wherever per-team does not fit strictly better.
+    The candidate is ``candidate.shipped_home_variant``: per team only if
+    its walk-forward scores at least as well as flat on both Brier and log
+    loss, else flat. The correction and the bar are for that variant.
 
-    Returns (variants, tried, corrected, shipped, bar). Raises FitError and
-    duckdb.Error for the callers to report.
+    Returns (variants, cev, tried, corrected, shipped, bar), ``cev`` being
+    the variant that ships. Raises FitError and duckdb.Error for the
+    callers to report.
     """
     from predictor.model import candidate as cand
     from predictor.model import correction
 
     variants = cand.evaluate_home_variants(con, ev, progress=progress)
-    cev = variants.per_team
+    cev = cand.shipped_home_variant(variants)
     progress("training the optional correction model...")
     tried = correction.apply_corrections(cev.winner, cev.features)
     corrected = (
@@ -1744,7 +1746,7 @@ def _candidate_decision(con, ev, progress):
     bar = cand.switch_over_bar(
         ev.winner.predictions, shipped.final_call.predictions, cev.final
     )
-    return variants, tried, corrected, shipped, bar
+    return variants, cev, tried, corrected, shipped, bar
 
 
 def _candidate_report(con, ev, lines_by_game, progress) -> tuple[str, bool]:
@@ -1760,7 +1762,9 @@ def _candidate_report(con, ev, lines_by_game, progress) -> tuple[str, bool]:
     if _player_rows(con) == 0:
         return cand.NO_PLAYER_LOGS, False
     try:
-        variants, tried, corrected, shipped, bar = _candidate_decision(con, ev, progress)
+        variants, cev, tried, corrected, shipped, bar = _candidate_decision(
+            con, ev, progress
+        )
         edges = cand.home_edges(variants)
     except fit_mod.FitError as exc:
         return f"{cand.REPORT_TITLE}\n  Cannot fit the player model candidate: {exc}.", True
@@ -1770,7 +1774,6 @@ def _candidate_report(con, ev, lines_by_game, progress) -> tuple[str, bool]:
             f"needs ({exc}). Run 'predictor ingest-player-logs' first.",
             True,
         )
-    cev = variants.per_team
     text = cand.format_candidate(
         cev,
         bar,
@@ -1817,15 +1820,13 @@ def fit_player_model_cmd() -> None:
             typer.echo(cand.NO_PLAYER_LOGS.strip())
             raise typer.Exit(code=1)
         try:
-            variants, _tried, corrected, _shipped, bar = _candidate_decision(
+            _variants, cev, _tried, corrected, _shipped, bar = _candidate_decision(
                 con, ev, progress
             )
             settings = None
             if bar.met:
                 progress("writing the candidate's settings...")
-                settings = player_stage1.settings_from_candidate(
-                    con, variants.per_team, corrected
-                )
+                settings = player_stage1.settings_from_candidate(con, cev, corrected)
         except fit_mod.FitError as exc:
             typer.echo(f"Cannot fit the player model candidate: {exc}.")
             raise typer.Exit(code=1) from None

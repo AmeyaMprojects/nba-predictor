@@ -246,18 +246,19 @@ def test_fit_player_model_saves_when_bar_met(tmp_path, monkeypatch):
     assert stage1_path.stat().st_mtime == 1_000_000_000
 
 
-def test_fit_player_model_bar_uses_per_team_variant(tmp_path, monkeypatch):
-    """The bar compares the current live model with the per-team variant's
-    walk-forward, and the saved settings carry the per-team final choice."""
+def _spy_fit_player_model(tmp_path, monkeypatch, rewrite=lambda v: v):
+    """Run fit-player-model with the bar forced met and the correction off;
+    ``rewrite`` may replace the home variants. Returns what was seen."""
     from predictor.model import correction
 
     player_path, _ = _cli_db(tmp_path, monkeypatch)
-    seen: dict = {}
+    seen: dict = {"path": player_path}
     real_variants = cand.evaluate_home_variants
     real_evaluate = cli._run_evaluation
 
     def variants_spy(*args, **kwargs):
-        seen["variants"] = real_variants(*args, **kwargs)
+        seen["real"] = real_variants(*args, **kwargs)
+        seen["variants"] = rewrite(seen["real"])
         return seen["variants"]
 
     def evaluate_spy(*args, **kwargs):
@@ -274,15 +275,47 @@ def test_fit_player_model_bar_uses_per_team_variant(tmp_path, monkeypatch):
     monkeypatch.setattr(correction, "correction_helps", lambda *a, **k: False)
     result = CliRunner().invoke(cli.app, ["fit-player-model"])
     assert result.exit_code == 0, result.output
+    return seen
+
+
+def test_fit_player_model_ships_flat_when_per_team_scores_worse(tmp_path, monkeypatch):
+    """The fixture's per-team walk-forward is worse than flat (Brier 0.1042
+    vs 0.1038): the bar is scored on, and the file saves, the flat variant,
+    even though the per-team final fit picked a finite shrinkage."""
+    seen = _spy_fit_player_model(tmp_path, monkeypatch)
     variants = seen["variants"]
+    t, f = variants.per_team.winner.final_call, variants.flat.winner.final_call
+    assert t.brier > f.brier
+    assert not variants.per_team.final.home.flat
+    current, candidate, choice = seen["bar"]
+    assert current is seen["ev"].winner.predictions
+    assert candidate is variants.flat.winner.final_call.predictions
+    assert choice is variants.flat.final
+    saved = pset.load(seen["path"])
+    assert saved.home.flat
+    assert saved.home == variants.flat.final.home
+    assert saved.coefficient_tuple() == variants.flat.final.coefficients
+
+
+def test_fit_player_model_ships_per_team_when_it_scores_better(tmp_path, monkeypatch):
+    """With the walk-forwards arranged so per-team scores better (the real
+    flat result labelled per-team, with a per-team final choice), the
+    per-team variant is scored and saved."""
+    def better_per_team(real):
+        per_team = dataclasses.replace(real.flat, final=dataclasses.replace(
+            real.flat.final, home=HomeParams(50.0, real.flat.final.home.altitude_allowance)))
+        return dataclasses.replace(real, flat=real.per_team, per_team=per_team)
+
+    seen = _spy_fit_player_model(tmp_path, monkeypatch, better_per_team)
+    variants = seen["variants"]
+    assert cand.per_team_kept(variants)
     current, candidate, choice = seen["bar"]
     assert current is seen["ev"].winner.predictions
     assert candidate is variants.per_team.winner.final_call.predictions
-    assert candidate is not variants.flat.winner.final_call.predictions
     assert choice is variants.per_team.final
-    saved = pset.load(player_path)
+    saved = pset.load(seen["path"])
+    assert saved.home.shrinkage == 50.0
     assert saved.home == variants.per_team.final.home
-    assert saved.team == variants.per_team.final.team
     assert saved.coefficient_tuple() == variants.per_team.final.coefficients
 
 

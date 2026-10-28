@@ -1053,48 +1053,66 @@ def flat_home_line(flat: CandidateEvaluation) -> str:
     )
 
 
+def per_team_kept(variants: HomeVariants) -> bool:
+    """Per-team home court ships only if its pooled walk-forward scores at
+    least as well as flat on both Brier and log loss (same games)."""
+    f, t = variants.flat.winner.final_call, variants.per_team.winner.final_call
+    return t.brier <= f.brier and t.log_loss <= f.log_loss
+
+
+def shipped_home_variant(variants: HomeVariants) -> CandidateEvaluation:
+    """The variant that ships and is scored against the switch-over bar:
+    per team if ``per_team_kept``, else flat (its final choice is flat even
+    when the per-team final fit picked a finite shrinkage)."""
+    return variants.per_team if per_team_kept(variants) else variants.flat
+
+
 def format_home_court(
     variants: HomeVariants, edges: list[TeamHomeEdge], altitude: float
 ) -> str:
     """Flat against per-team home court, the shrinkage chosen per season,
-    and each team's home edge. Per-team is kept when the final choice (the
-    setting that would ship) is not flat: its fit, like every fold's, takes
-    a per-team shrinkage only on strictly lower error than flat."""
+    and each team's home edge under the per-team final choice. Per-team is
+    dropped when its walk-forward scores worse than flat on Brier or log
+    loss (flat then ships), or when its final fit chose flat anyway."""
     per_team = variants.per_team
+    kept = per_team_kept(variants)
     lines = [HOME_TITLE]
     lines += _wrap(
         "Flat gives every team the league's home-court value. Per team adds each team's "
         "own home edge (its home results minus its away results, against the ratings), "
         "pulled toward the league value: shrinkage N means N games of evidence count as "
         "much as the league value. Each season's shrinkage is chosen only on earlier "
-        "seasons."
+        "seasons. Per team ships only if its walk-forward scores at least as well as flat "
+        "on both Brier and log loss."
     )
     for season, choice in sorted(per_team.winner.choices.items()):
         lines.append(f"  {season}  {_home_label(choice.home)}")
+    use = "used if the candidate went live" if kept else "not used, see below"
     lines.append(
         f"  {TEST_SEASONS[0]}  {_home_label(per_team.final.home)}  "
-        "(fitted on all tuning seasons; used if the candidate went live)"
+        f"(fitted on all tuning seasons; {use})"
     )
     lines.append("")
-    lines.append(f"    {'':<10}  {'Brier':>8}{'log loss':>10}{'accuracy':>10}")
-    lines.append(f"    {'flat':<10}{_metrics_cells(variants.flat.winner.final_call.predictions)}")
-    lines.append(f"    {'per team':<10}{_metrics_cells(per_team.winner.final_call.predictions)}")
-    lines.append(HOME_DROPPED if per_team.final.home.flat else HOME_KEPT)
     flat_v, team_v = variants.flat.winner.final_call, per_team.winner.final_call
-    if not per_team.final.home.flat and not (
-        team_v.brier < flat_v.brier and team_v.log_loss < flat_v.log_loss
-    ):
+    lines.append(f"    {'':<10}  {'Brier':>8}{'log loss':>10}{'accuracy':>10}")
+    lines.append(f"    {'flat':<10}{_metrics_cells(flat_v.predictions)}")
+    lines.append(f"    {'per team':<10}{_metrics_cells(team_v.predictions)}")
+    if not kept:
         lines += _wrap(
-            "It is kept because it fitted better on all tuning seasons, but its walk-forward "
-            f"did not beat flat on both scores (Brier {team_v.brier:.4f} against "
-            f"{flat_v.brier:.4f}, log loss {team_v.log_loss:.4f} against "
-            f"{flat_v.log_loss:.4f}). The switch-over bar above is what decides."
+            "Per-team home court: dropped -- it scored worse than one league-wide value in "
+            f"the walk-forward (Brier {team_v.brier:.4f} vs {flat_v.brier:.4f}, log loss "
+            f"{team_v.log_loss:.4f} vs {flat_v.log_loss:.4f}). The flat home court ships."
         )
+    elif per_team.final.home.flat:
+        lines.append(HOME_DROPPED)
+    else:
+        lines.append(HOME_KEPT)
     lines.append("")
     lines += _wrap(
         "Each team's home court in points at the end of the last tuning season, with the "
-        "setting above (league value plus the team's shrunk edge); own = the team's "
-        "unshrunk edge."
+        "per-team setting fitted on all tuning seasons (league value plus the team's "
+        "shrunk edge); own = the team's unshrunk edge."
+        + ("" if kept else " Shown for information: flat home court ships.")
     )
     for e in edges:
         lines.append(

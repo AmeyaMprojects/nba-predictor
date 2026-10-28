@@ -342,16 +342,45 @@ def test_format_home_court_lists_every_team_edge():
     assert all(len(ln) <= 96 for ln in lines)
 
 
-def test_format_home_court_kept_but_walk_forward_not_better_says_so():
+def _worse_per_team():
+    """Per-team walk-forward worse than flat (the two walk-forwards of
+    ``_home_variants`` swapped), with a per-team final choice."""
     variants = _home_variants({"2022-23": HomeParams(150.0, 0.66)}, HomeParams(150.0, 0.66))
-    plain = cand.format_home_court(variants, EDGES, 0.0)
-    assert "did not beat flat" not in _flat(plain)
-    # Swap the two walk-forwards, keeping a per-team final choice.
     worse = dataclasses.replace(variants.flat, final=variants.per_team.final)
-    swapped = dataclasses.replace(variants, flat=variants.per_team, per_team=worse)
-    text = cand.format_home_court(swapped, EDGES, 0.0)
-    assert "  Per-team home court: kept" in text.splitlines()
-    assert "did not beat flat on both scores" in _flat(text)
+    return dataclasses.replace(variants, flat=variants.per_team, per_team=worse)
+
+
+def test_shipped_home_variant_needs_per_team_no_worse_on_both_scores():
+    better = _home_variants({"2022-23": HomeParams(150.0, 0.66)}, HomeParams(150.0, 0.66))
+    assert cand.per_team_kept(better) is True
+    assert cand.shipped_home_variant(better) is better.per_team
+    worse = _worse_per_team()
+    assert cand.per_team_kept(worse) is False
+    assert cand.shipped_home_variant(worse) is worse.flat
+    # Equal scores keep per-team ("at least as well").
+    same = dataclasses.replace(better, flat=better.per_team)
+    assert cand.shipped_home_variant(same) is same.per_team
+    # Worse on only one score drops it.
+    fc = better.per_team.winner.final_call
+    one = dataclasses.replace(fc, brier=fc.brier, log_loss=fc.log_loss + 1.0)
+    mixed = dataclasses.replace(better, per_team=dataclasses.replace(
+        better.per_team, winner=dataclasses.replace(better.per_team.winner, final_call=one)))
+    assert cand.shipped_home_variant(mixed) is mixed.flat
+
+
+def test_format_home_court_dropped_when_per_team_scores_worse():
+    variants = _worse_per_team()
+    text = cand.format_home_court(variants, EDGES, 0.0)
+    f = variants.flat.winner.final_call
+    t = variants.per_team.winner.final_call
+    assert (
+        "Per-team home court: dropped -- it scored worse than one league-wide value in the "
+        f"walk-forward (Brier {t.brier:.4f} vs {f.brier:.4f}, log loss {t.log_loss:.4f} vs "
+        f"{f.log_loss:.4f})"
+    ) in _flat(text)
+    assert "  Per-team home court: dropped -- it scored worse" in text
+    assert "Per-team home court: kept" not in text
+    assert "flat home court ships" in _flat(text)
     assert all(len(ln) <= 96 for ln in text.splitlines())
 
 
@@ -451,9 +480,16 @@ def test_current_model_numbers_unchanged(tmp_path, monkeypatch):
     # line and the home-court section.
     variants, (candidate, choice) = seen[0], seen[1]
     assert isinstance(variants, cand.HomeVariants)
-    assert choice is variants.per_team.final
+    # In this fixture per-team scores worse than flat in the walk-forward
+    # (Brier 0.1042 vs 0.1038), so the flat variant ships and is scored.
+    t, f = variants.per_team.winner.final_call, variants.flat.winner.final_call
+    assert t.brier > f.brier
+    assert cand.shipped_home_variant(variants) is variants.flat
+    assert choice is variants.flat.final
+    assert choice.home.flat
     if "Correction model: included" not in section:
-        assert candidate is variants.per_team.winner.final_call.predictions
+        assert candidate is variants.flat.winner.final_call.predictions
+    assert "  Per-team home court: dropped -- it scored worse" in section
     flat = variants.flat.winner.final_call
     assert (
         f"  Player model with flat home court (plan 1): Brier {flat.brier:.4f}, "
