@@ -1,8 +1,18 @@
+import math
 from datetime import date
 
 import pytest
 
-from predictor.model.ratings import RatingParams, Ratings, Result, win_probability
+from predictor.model.ratings import (
+    FLAT_HOME,
+    TEAM_HOME_WINDOW,
+    HomeParams,
+    RatingParams,
+    Ratings,
+    Result,
+    shrunk_deviation,
+    win_probability,
+)
 
 P = RatingParams(k=0.1, margin_cap=20.0, season_regression=0.5, hca_window=2)
 
@@ -92,3 +102,94 @@ def test_win_probability_by_hand():
 def test_win_probability_rejects_nonpositive_sigma():
     with pytest.raises(ValueError):
         win_probability(1.0, 0.0)
+
+
+# --- Home court per team (plan 3, Task 1) ---------------------------------
+
+TP = RatingParams(0.1, 40.0, 0.0, 10)
+
+
+def _two_games(r, altitude_first=False):
+    # Game 1: A at home beats B 110-100. gap 0, league 0, dev 0 -> delta 1.0:
+    #   A +1, B -1. resid = 10 (- allowance if altitude). A home [10], B away [-10].
+    r.apply(Result("g1", "2023-24", date(2024, 1, 1), "A", "B", 110, 100, False),
+            altitude_game=altitude_first)
+    # Game 2: B at home beats A 102-100. gap = -1 - 1 = -2, league 10, dev(B) 0
+    #   (B has no home games) -> predicted 8, delta 0.1 * (2 - 8) = -0.6:
+    #   B -1.6, A +1.6. resid = 2 - (-2) - 10 = -6. B home [-6], A away [6].
+    r.apply(Result("g2", "2023-24", date(2024, 1, 2), "B", "A", 102, 100, False))
+
+
+def test_shrunk_deviation_values():
+    # raw 4, n_eff = 1/(1/4 + 1/4) = 2, 4 * 2 / (2 + 2) = 2
+    assert shrunk_deviation([4.0] * 4, [0.0] * 4, 2.0) == 2.0
+    # raw 4 - 1 = 3, n_eff = 1/(1/2 + 1) = 2/3, 3 * (2/3) / (5/3) = 1.2
+    assert shrunk_deviation([3.0, 5.0], [1.0], 1.0) == pytest.approx(1.2)
+    assert shrunk_deviation([4.0], [0.0], math.inf) == 0.0
+    assert shrunk_deviation([], [1.0], 1.0) == 0.0
+
+
+def test_home_params_validation():
+    assert FLAT_HOME.flat and not HomeParams(0.0).flat
+    assert FLAT_HOME.window == TEAM_HOME_WINDOW == 164
+    with pytest.raises(ValueError):
+        HomeParams(-1.0)
+    with pytest.raises(ValueError):
+        HomeParams(math.nan)
+
+
+def test_team_home_court_two_games():
+    r = Ratings(TP, HomeParams(0.0))
+    _two_games(r)
+    # league margins [10, 2] -> 6
+    assert r.home_court() == 6.0
+    # A: home [10], away [6] -> raw 4, unshrunk -> 6 + 4
+    assert r.home_court("A") == pytest.approx(10.0)
+    # B: home [-6], away [-10] -> raw 4
+    assert r.home_court("B") == pytest.approx(10.0)
+    assert r.rating("A") == pytest.approx(1.6)
+
+    half = Ratings(TP, HomeParams(0.5))
+    _two_games(half)
+    # n_eff 0.5 -> 4 * 0.5 / (0.5 + 0.5) = 2
+    assert half.home_court("A") == pytest.approx(8.0)
+    s = half.team_home_summary("A")
+    assert (s.team, s.home_games, s.away_games) == ("A", 1, 1)
+    assert s.raw == pytest.approx(4.0)
+    assert s.deviation == pytest.approx(2.0)
+
+
+def test_altitude_allowance_kept_out_of_team_edge():
+    r = Ratings(TP, HomeParams(0.0, altitude_allowance=1.5))
+    _two_games(r, altitude_first=True)
+    # A home resid 10 - 1.5 = 8.5, away [6] -> raw 2.5 -> 6 + 2.5
+    assert r.home_court("A") == pytest.approx(8.5)
+
+
+def test_neutral_game_leaves_team_edges_untouched():
+    r = Ratings(TP, HomeParams(0.0))
+    r.apply(Result("g1", "2023-24", date(2024, 1, 1), "C", "D", 110, 100, False))
+    before = r.home_court()
+    r.apply(Result("g2", "2023-24", date(2024, 1, 2), "A", "B", 120, 100, True))
+    assert r.team_home_summary("A").home_games == 0
+    assert r.team_home_summary("B").away_games == 0
+    assert r.home_court() == before
+
+
+def test_team_window_keeps_last_164_per_side():
+    r = Ratings(TP, HomeParams(0.0))
+    for i in range(170):
+        r.apply(Result(f"g{i}", "2023-24", date(2024, 1, 1), "A", "B", 101, 100, False))
+    assert r.team_home_summary("A").home_games == 164
+    assert r.team_home_summary("B").away_games == 164
+
+
+def test_flat_home_equals_league_value():
+    r = Ratings(P)
+    assert r.home is FLAT_HOME
+    r.apply(_r("PHI", "NYK", 110, 100))
+    r.apply(_r("NYK", "BOS", 100, 104))
+    r.apply(_r("BOS", "PHI", 120, 99))
+    for t in ("PHI", "NYK", "BOS", "MIA"):
+        assert r.home_court(t) == r.home_court()
+        assert r.deviation(t) == 0.0

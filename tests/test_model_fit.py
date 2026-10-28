@@ -1,3 +1,4 @@
+import dataclasses
 from datetime import date
 
 import pytest
@@ -9,6 +10,7 @@ from predictor.backtest import replay
 from predictor.config import Settings
 from predictor.model import fit as fit_mod
 from predictor.model import settings as ms
+from predictor.model.ratings import FLAT_HOME, HomeParams, Ratings
 from predictor.model.stage1 import Stage1Predictor
 from predictor.model.venues import VenueIndex
 
@@ -225,3 +227,34 @@ def test_fit_model_save_failure_is_a_plain_error(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "Traceback" not in result.output
     assert not bad_path.exists()
+
+
+def test_simulate_flat_default_and_final_ratings(tmp_path):
+    con = fixture_con(tmp_path)
+    build_history(con, games_per_season=8)
+    games = fit_mod._load(con, VenueIndex.from_db(con))
+    params = fit_mod.RatingParams(k=0.1, margin_cap=20.0, season_regression=0.5, hca_window=10)
+    assert fit_mod._simulate(params, games) == fit_mod._simulate(params, games, FLAT_HOME)
+    home = HomeParams(5.0)
+    final = fit_mod.final_ratings(params, games, home)
+    assert final.home == home
+    # final_ratings is the state after the last game: one more pre-game read
+    # equals what a fresh simulation over the same games ends with.
+    replayed = Ratings(params, home)
+    for g in games:
+        replayed.apply(g.result, altitude_game=g.x[4] == 1.0)
+    for t in ("PHI", "NYK", "BOS", "MIA"):
+        assert final.rating(t) == replayed.rating(t)
+        assert final.home_court(t) == replayed.home_court(t)
+
+
+def test_describe_mentions_team_home_only_when_not_flat():
+    s = ms.ModelSettings(
+        ratings=fit_mod.RatingParams(0.04, 40.0, 0.5, 1230),
+        coefficients=fit_mod.Coefficients(0.0, 0.0, 0.0, 0.0, 0.0),
+        sigma=12.8, half_life=None, tuning_games=1,
+    )
+    line = "Home court: league average plus each team's own edge, shrunk by 150 games"
+    assert line not in fit_mod.describe(s)
+    team = dataclasses.replace(s, home=HomeParams(150.0))
+    assert line in fit_mod.describe(team)

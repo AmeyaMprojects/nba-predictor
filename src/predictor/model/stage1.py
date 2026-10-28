@@ -86,7 +86,7 @@ class Stage1Predictor:
         self._reset()
 
     def _reset(self) -> None:
-        self._ratings = Ratings(self.settings.ratings)
+        self._ratings = Ratings(self.settings.ratings, self.settings.home)
         self._applied: set[str] = set()
         self._last_applied_key = None
         # The latest season explain() has entered. Ratings regress the first
@@ -122,7 +122,7 @@ class Stage1Predictor:
         x = adj.feature_vector(home_sit, away_sit, adj.is_altitude_game(city, neutral))
         t = adj.terms(self.settings.coefficients, x)
         rating = self._ratings.rating(game.home_team) - self._ratings.rating(game.away_team)
-        home = 0.0 if neutral else self._ratings.home_court()
+        home = 0.0 if neutral else self._ratings.home_court(game.home_team)
         spread = rating + home + t.rest + t.travel + t.altitude
         breakdown = Breakdown(
             game_id=game.game_id,
@@ -209,8 +209,10 @@ class Stage1Predictor:
         for gid, season, gd, home, away, hp, ap, _observed_at in rows:
             self._applied.add(gid)
             venue = self.venues.venue(gid)
+            neutral = venue.is_neutral if venue else False
             self._ratings.apply(
-                Result(gid, season, gd, home, away, hp, ap, venue.is_neutral if venue else False)
+                Result(gid, season, gd, home, away, hp, ap, neutral),
+                altitude_game=adj.is_altitude_game(venue.city if venue else None, neutral),
             )
             key = (gd, gid)
             if self._last_applied_key is None or key > self._last_applied_key:

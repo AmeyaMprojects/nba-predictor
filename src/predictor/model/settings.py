@@ -12,7 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from predictor.model.adjustments import Coefficients
-from predictor.model.ratings import RatingParams
+from predictor.model.ratings import FLAT_HOME, HomeParams, RatingParams
 
 WARMUP_SEASONS = ("2014-15", "2015-16", "2016-17", "2017-18", "2018-19")
 TUNING_SEASONS = (
@@ -38,6 +38,10 @@ class ModelSettings:
     half_life: float | None
     # Count of tuning-season games the settings were chosen on.
     tuning_games: int
+    # Home court per team (owner decision 2026-10-25). FLAT_HOME is the
+    # single league value; it is not written to JSON, so flat settings files
+    # stay byte-identical to the pre-plan-3 format.
+    home: HomeParams = FLAT_HOME
 
 
 def season_role(season: str) -> str:
@@ -59,6 +63,12 @@ def to_json(s: ModelSettings) -> str:
         "half_life": s.half_life,
         "tuning_games": s.tuning_games,
     }
+    if not s.home.flat:
+        doc["home"] = {
+            "shrinkage": s.home.shrinkage,
+            "altitude_allowance": s.home.altitude_allowance,
+            "window": s.home.window,
+        }
     return json.dumps(doc, indent=2, sort_keys=True) + "\n"
 
 
@@ -73,6 +83,20 @@ def from_json(text: str) -> ModelSettings:
             )
         r = doc["ratings"]
         half_life = doc["half_life"]
+        h = doc.get("home")
+        if h is None:
+            home = FLAT_HOME
+        else:
+            try:
+                home = HomeParams(
+                    shrinkage=float(h["shrinkage"]),
+                    altitude_allowance=float(h["altitude_allowance"]),
+                    window=int(h["window"]),
+                )
+            except ValueError as exc:
+                raise SettingsError(
+                    f"the model settings file holds impossible values ({exc}). {hint}"
+                ) from None
         s = ModelSettings(
             ratings=RatingParams(
                 k=float(r["k"]),
@@ -84,6 +108,7 @@ def from_json(text: str) -> ModelSettings:
             sigma=float(doc["sigma"]),
             half_life=None if half_life is None else float(half_life),
             tuning_games=int(doc["tuning_games"]),
+            home=home,
         )
     except SettingsError:
         raise

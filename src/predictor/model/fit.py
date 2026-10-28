@@ -26,7 +26,7 @@ from itertools import groupby
 from predictor import db
 from predictor.model import adjustments as adj
 from predictor.model.adjustments import Coefficients
-from predictor.model.ratings import RatingParams, Ratings, Result
+from predictor.model.ratings import FLAT_HOME, HomeParams, RatingParams, Ratings, Result
 from predictor.model.settings import (
     TEST_SEASONS,
     TUNING_SEASONS,
@@ -91,9 +91,10 @@ def _load(con, venues: VenueIndex) -> list[_Game]:
     return games
 
 
-def _simulate(params: RatingParams, games: list[_Game]) -> list[tuple[float, float]]:
-    """Pre-game (rating gap, home court) for every game, in input order."""
-    ratings = Ratings(params)
+def _run(
+    params: RatingParams, games: list[_Game], home: HomeParams
+) -> tuple[list[tuple[float, float]], Ratings]:
+    ratings = Ratings(params, home)
     out: list[tuple[float, float]] = []
     for _, day in groupby(games, key=lambda g: g.result.game_date):
         day = list(day)
@@ -101,10 +102,24 @@ def _simulate(params: RatingParams, games: list[_Game]) -> list[tuple[float, flo
             ratings.enter_season(g.result.season)
             r = g.result
             gap = ratings.rating(r.home_team) - ratings.rating(r.away_team)
-            out.append((gap, 0.0 if r.neutral else ratings.home_court()))
+            out.append((gap, 0.0 if r.neutral else ratings.home_court(r.home_team)))
         for g in day:
-            ratings.apply(g.result)
-    return out
+            ratings.apply(g.result, altitude_game=g.x[4] == 1.0)
+    return out, ratings
+
+
+def _simulate(
+    params: RatingParams, games: list[_Game], home: HomeParams = FLAT_HOME
+) -> list[tuple[float, float]]:
+    """Pre-game (rating gap, home court) for every game, in input order.
+    Home court is the home team's own (league value plus its shrunk edge),
+    which with FLAT_HOME is the league value."""
+    return _run(params, games, home)[0]
+
+
+def final_ratings(params: RatingParams, games: list[_Game], home: HomeParams) -> Ratings:
+    """The `Ratings` after the last game has been applied."""
+    return _run(params, games, home)[1]
 
 
 def fit(con) -> ModelSettings:
@@ -145,6 +160,10 @@ def describe(s: ModelSettings) -> str:
         f"most {r.margin_cap:.0f} points.",
         f"Each new season, ratings fall back {r.season_regression * 100:.0f}% toward average.",
         f"Home court is the average home margin over the last {r.hca_window} games.",
+        *([] if s.home.flat else [
+            f"Home court: league average plus each team's own edge, shrunk by "
+            f"{s.home.shrinkage:g} games"
+        ]),
         "Adjustments, in points for the home team:",
         f"  back-to-back (home minus away)       {_fmt_coef(c.back_to_back)}",
         f"  third game in four nights            {_fmt_coef(c.third_in_four)}",

@@ -9,9 +9,11 @@ from predictor.asof import AsOfView
 from predictor.backtest import replay
 from predictor.backtest.baselines import GameToPredict
 from predictor.model.adjustments import Coefficients
-from predictor.model.ratings import RatingParams, win_probability
+from predictor.model import fit as fit_mod
+from predictor.model.ratings import HomeParams, RatingParams, win_probability
 from predictor.model.settings import ModelSettings
 from predictor.model.stage1 import Breakdown, Stage1Predictor
+from predictor.model.venues import VenueIndex
 
 S = ModelSettings(
     ratings=RatingParams(k=0.1, margin_cap=20.0, season_regression=0.5, hca_window=100),
@@ -430,3 +432,53 @@ def test_a_prior_season_result_seen_after_the_new_season_began_equals_fresh(tmp_
     # 0 - 1 + 10 = 9, margin 10, delta 0.1 -> BOS +0.1, PHI 0.9. Entering
     # 2025-26 halves every rating once: PHI 0.45, BOS 0.05.
     assert fresh.rating == pytest.approx(0.45 - 0.05)
+
+
+def _team_home_history(con):
+    """Three seasons, four teams, DEN's home games in Denver (altitude), a
+    neutral game every 9th, varied margins. Deterministic."""
+    teams = ["PHI", "NYK", "DEN", "MIA"]
+    games = []
+    n = 0
+    for i, season in enumerate(("2018-19", "2019-20", "2020-21")):
+        start = date(2018 + i, 11, 1)
+        for day in range(24):
+            d = start + timedelta(days=day)
+            for j, (h, a) in enumerate(((day % 4, (day + 1) % 4), ((day + 2) % 4, (day + 3) % 4))):
+                n += 1
+                home, away = teams[h], teams[a]
+                margin = ((n * 7) % 23) - 8 + (4 if home == "DEN" else 0)
+                neutral = n % 9 == 0
+                city = "Denver" if home == "DEN" else "Boston"
+                gid = f"002{season[2:4]}{n:05d}"
+                add_game(con, gid, season, d, home, away, 100 + max(margin, 0),
+                         100 + max(-margin, 0), city=city, neutral=neutral)
+                games.append(gid)
+    return games
+
+
+def test_stage1_matches_simulation_with_team_home(tmp_path):
+    con = fixture_con(tmp_path)
+    gids = _team_home_history(con)
+    home = HomeParams(50.0, 0.66)
+    settings = ModelSettings(
+        ratings=RatingParams(k=0.1, margin_cap=20.0, season_regression=0.5, hca_window=30),
+        coefficients=S.coefficients, sigma=13.0, half_life=None, tuning_games=0,
+        home=home,
+    )
+    venues = VenueIndex.from_db(con)
+    loaded = fit_mod._load(con, venues)
+    assert [g.result.game_id for g in loaded] == gids
+    assert any(g.x[4] == 1.0 for g in loaded)  # altitude games present
+    simulated = fit_mod._simulate(settings.ratings, loaded, home)
+    flat = fit_mod._simulate(settings.ratings, loaded)
+    # The per-team edge really changes something.
+    assert any(abs(a[1] - b[1]) > 1e-6 for a, b in zip(simulated, flat))
+
+    predictor = Stage1Predictor(con, settings, venues)
+    _preds, stats = replay.replay(con, predictor)
+    assert stats.predicted == len(gids)
+    for gid, (gap, hc) in zip(gids, simulated):
+        b = predictor.breakdowns[gid]
+        assert abs(b.rating - gap) < 1e-9
+        assert abs(b.home - hc) < 1e-9

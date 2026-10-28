@@ -1,8 +1,10 @@
+import dataclasses
+
 import pytest
 
 from predictor.model import settings as ms
 from predictor.model.adjustments import Coefficients
-from predictor.model.ratings import RatingParams
+from predictor.model.ratings import FLAT_HOME, HomeParams, RatingParams
 
 S = ms.ModelSettings(
     ratings=RatingParams(k=0.08, margin_cap=20.0, season_regression=0.33, hca_window=800),
@@ -105,3 +107,39 @@ def test_season_roles(season, role):
 def test_roles_do_not_overlap():
     groups = [set(ms.WARMUP_SEASONS), set(ms.TUNING_SEASONS), set(ms.TEST_SEASONS)]
     assert sum(len(g) for g in groups) == len(set().union(*groups)) == 13
+
+
+TEAM_HOME = dataclasses.replace(S, home=HomeParams(150.0, 0.658231))
+
+
+def test_settings_default_home_is_flat_and_not_written():
+    assert S.home == FLAT_HOME
+    assert '"home"' not in ms.to_json(S)
+    assert ms.from_json(ms.to_json(S)).home == FLAT_HOME
+
+
+def test_settings_home_round_trip():
+    text = ms.to_json(TEAM_HOME)
+    assert '"home": {' in text
+    assert ms.from_json(text) == TEAM_HOME
+    assert ms.from_json(text).home == HomeParams(150.0, 0.658231, 164)
+
+
+def test_committed_settings_file_round_trips_byte_identical():
+    text = ms.SETTINGS_PATH.read_text()
+    assert ms.to_json(ms.from_json(text)) == text
+    assert ms.from_json(text).home == FLAT_HOME
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    [('"shrinkage": 150.0', '"shrinkage": -1.0'),
+     ('"shrinkage": 150.0', '"shrinkage": NaN'),
+     ('"window": 164', '"window": 0'),
+     ('"altitude_allowance": 0.658231', '"altitude_allowance": NaN')],
+)
+def test_settings_rejects_negative_shrinkage(old, new):
+    text = ms.to_json(TEAM_HOME)
+    assert old in text
+    with pytest.raises(ms.SettingsError):
+        ms.from_json(text.replace(old, new))
