@@ -159,6 +159,74 @@ def _played(row: PlayerGameRow) -> bool:
 
 DayRows = list[tuple[PlayerGameRow, bool]]  # (row, feeds ratings and minutes)
 
+# A player id in player_boxscores that no NBA player link resolved.
+UNLINKED_PREFIX = "espn:"
+
+
+@dataclass(frozen=True)
+class EspnMergeStats:
+    """What ``espn_rows`` merged: games and rows used, and rows skipped
+    because their athlete has no NBA player id (``espn:<id>``)."""
+
+    games: int = 0
+    rows: int = 0
+    unlinked: int = 0
+
+
+def _espn_season_type(game_id: str) -> str:
+    if game_id.startswith("004"):
+        return "playoffs"
+    if game_id.startswith("005"):
+        return "playin"
+    return "regular"
+
+
+def espn_rows(
+    view, before: date, nba_games: set[str]
+) -> tuple[list[tuple[PlayerGameRow, str]], EspnMergeStats]:
+    """ESPN box rows (``player_boxscores``) as box-incomplete player rows.
+
+    Reads only ``view.latest("player_boxscores")`` (latest per game, player
+    and source), so a row observed after the view's cutoff is never used.
+    Keeps games dated strictly before ``before`` that have no NBA
+    ``player_games`` row (``nba_games``): an NBA row always replaces ESPN.
+    Did-not-play rows are skipped. A player id still ``espn:<id>`` (no NBA
+    link) is skipped and counted as ``unlinked``: such a player has no
+    rating, minutes or roster history from these rows, so a later NBA row
+    for him starts from the rookie prior exactly as it would without ESPN.
+
+    Rows carry points, assists, minutes and plus-minus only; every other
+    box field is None and ``box_complete`` is False, so they update the
+    plus-minus rating, minutes and rosters but never the box rating.
+    """
+    raw = view.latest("player_boxscores").project(
+        "game_id, season, game_date, player_id, player_name, team, did_not_play, "
+        "minutes, points, assists, plus_minus"
+    ).fetchall()
+    out: list[tuple[PlayerGameRow, str]] = []
+    games: set[str] = set()
+    unlinked = 0
+    for gid, season, gd, pid, name, team, dnp, mins, pts, ast, pm in sorted(
+        raw, key=lambda r: (r[2], r[0], str(r[3]))
+    ):
+        if gd >= before or gid in nba_games or dnp:
+            continue
+        if str(pid).startswith(UNLINKED_PREFIX):
+            unlinked += 1
+            continue
+        out.append((
+            PlayerGameRow(
+                gid, season, gd, int(pid), name or "", team, _float(mins),
+                pts=_int(pts), fgm=None, fga=None, fg3m=None, fg3a=None,
+                ftm=None, fta=None, oreb=None, dreb=None, ast=_int(ast),
+                stl=None, blk=None, tov=None, pf=None, plus_minus=_float(pm),
+                box_complete=False,
+            ),
+            _espn_season_type(gid),
+        ))
+        games.add(gid)
+    return out, EspnMergeStats(games=len(games), rows=len(out), unlinked=unlinked)
+
 
 class PlayerLines:
     """Every player game row (latest per game and player), by date.
@@ -195,6 +263,8 @@ class PlayerLines:
         self.played: dict[str, frozenset[int]] = {g: frozenset(p) for g, p in played.items()}
         self.names: dict[int, str] = {p: n for p, (_, n) in names.items()}
         self.tip_index: dict[tuple[date, str], datetime] = dict(tip_index or {})
+        # What from_view merged from ESPN box rows (zeros otherwise).
+        self.espn: EspnMergeStats = EspnMergeStats()
 
     @classmethod
     def from_db(cls, con) -> PlayerLines:
@@ -213,7 +283,7 @@ class PlayerLines:
         return cls(_parse_lines(rows), tipoff_mod.tipoff_index(con))
 
     @classmethod
-    def from_view(cls, view, before: date) -> PlayerLines:
+    def from_view(cls, view, before: date, *, espn: bool = True) -> PlayerLines:
         """What an ``AsOfView`` shows: the latest-observed visible row per
         (game_id, player_id), for games dated strictly before ``before``.
 
@@ -221,6 +291,10 @@ class PlayerLines:
         there is no tip-off index (the caller already knows its call time).
         Rows are parsed exactly as ``from_db`` parses them (NULL and NaN
         numbers become None).
+
+        With ``espn`` (the default), games with no visible NBA row add their
+        ESPN box rows (``espn_rows``: box-incomplete), and ``self.espn``
+        counts them. ``from_db`` (the replay) never reads ESPN rows.
         """
         rows = view.table("player_games").project(
             f"{_LINE_COLUMNS}, observed_at"
@@ -234,7 +308,15 @@ class PlayerLines:
             if seen is None or row[-1] > seen[-1]:
                 latest[key] = row
         ordered = sorted(latest.values(), key=lambda r: (r[2], r[0], int(r[3])))
-        return cls(_parse_lines([r[:-1] for r in ordered]), include_test_seasons=True)
+        parsed = _parse_lines([r[:-1] for r in ordered])
+        stats = EspnMergeStats()
+        if espn:
+            nba_games = {row[0] for row in rows}
+            extra, stats = espn_rows(view, before, nba_games)
+            parsed.extend(extra)
+        lines = cls(parsed, include_test_seasons=True)
+        lines.espn = stats
+        return lines
 
 
 _LINE_COLUMNS = (

@@ -120,6 +120,10 @@ class PlayerGameRow:
     tov: int | None
     pf: int | None
     plus_minus: float | None
+    # False for a row with no full box score (an ESPN box row: points,
+    # assists, minutes and plus-minus only). Such a row updates plus-minus
+    # ratings, minutes and rosters, never the box rating.
+    box_complete: bool = True
 
 
 @dataclass(frozen=True)

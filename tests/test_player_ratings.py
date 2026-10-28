@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import date
 
 import pytest
@@ -273,3 +274,36 @@ def test_reads_with_as_of_raise_once_that_day_is_applied():
             book.last_team(1, as_of=as_of)
         with pytest.raises(ValueError):
             book.team_recent_games("BOS", as_of=as_of)
+
+
+def test_box_rating_not_updated_from_incomplete_row():
+    book = PlayerBook(PARAMS)
+    row = dataclasses.replace(
+        _row(player_id=9, minutes=25.0),
+        fgm=None, fga=None, ftm=None, fta=None, oreb=None, dreb=None,
+        stl=None, blk=None, tov=None, pf=None, box_complete=False,
+    )
+    book.apply_game([row], {"BOS": 5})
+    assert book.rating(9, "box") == ROOKIE_PRIOR
+    assert book.rating(9, "pm") != ROOKIE_PRIOR
+    lam = 0.5 ** (25.0 / 1500.0)
+    assert book.rating(9, "pm") == pytest.approx(lam * -2.0 + (1 - lam) * (48 * 10 / 25 - 5))
+    assert book.recent_minutes(9) == [25.0]
+    assert book.last_team(9) == "BOS"
+    assert book.team_recent_games("BOS") == [{9}]
+
+
+def test_incomplete_row_does_not_move_league_box_mean():
+    book = PlayerBook(PARAMS)
+    book.apply_game([_row()], {"BOS": 5})
+    before = book.league_box_mean
+    incomplete = dataclasses.replace(
+        _row(player_id=2, game_id="0022400002", game_date=date(2024, 11, 2)),
+        box_complete=False,
+    )
+    book.apply_game([incomplete], {"BOS": 0})
+    assert book.league_box_mean == before
+
+
+def test_player_game_row_is_box_complete_by_default():
+    assert _row().box_complete is True

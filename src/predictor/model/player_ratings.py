@@ -121,7 +121,10 @@ class PlayerBook:
         """Fold one game's player rows into the book.
 
         ``margins`` maps each team to its final margin. Rows with no minutes
-        or under one minute are skipped entirely.
+        or under one minute are skipped entirely. A row with
+        ``box_complete`` False (an ESPN box row) updates the ``"pm"``
+        rating, minutes and lineups but never the ``"box"`` rating, and it
+        never feeds the league box mean.
         """
         rows = list(rows)
         if not rows:
@@ -150,7 +153,12 @@ class PlayerBook:
             ratings = self._ratings.setdefault(
                 row.player_id, {f: ROOKIE_PRIOR for f in FORMULAS}
             )
-            ratings["box"] = ewma_update(ratings["box"], per48 - league_mean, minutes, half_life)
+            if row.box_complete:
+                ratings["box"] = ewma_update(
+                    ratings["box"], per48 - league_mean, minutes, half_life
+                )
+                box_sum += 48.0 * game_score(row)
+                minutes_sum += minutes
             if (
                 row.plus_minus is not None
                 and not math.isnan(row.plus_minus)
@@ -158,8 +166,6 @@ class PlayerBook:
             ):
                 pm_obs = 48.0 * row.plus_minus / minutes - margins[row.team]
                 ratings["pm"] = ewma_update(ratings["pm"], pm_obs, minutes, half_life)
-            box_sum += 48.0 * game_score(row)
-            minutes_sum += minutes
             self._minutes.setdefault(row.player_id, deque(maxlen=RECENT_GAMES)).append(minutes)
             self._last_team[row.player_id] = row.team
             lineups.setdefault(row.team, set()).add(row.player_id)

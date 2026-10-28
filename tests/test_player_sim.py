@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 from datetime import UTC, datetime, time, timedelta
+from datetime import date as _date
 
 import pytest
 
@@ -31,11 +32,18 @@ from player_fixtures import (
     report_name,
 )
 from predictor import db
+from predictor.asof import AsOfView
 from predictor.model import fit as fit_mod
 from predictor.model import player_sim
 from predictor.model.availability import STATUS_PRIORS, InjuryHistory, Listing
 from predictor.model.player_ratings import PlayerBook, PlayerParams
-from predictor.model.player_sim import PlayerLines, collect_listings, simulate
+from predictor.model.player_sim import (
+    EspnMergeStats,
+    PlayerLines,
+    collect_listings,
+    espn_rows,
+    simulate,
+)
 from predictor.model.venues import VenueIndex
 
 PARAMS = PlayerParams(half_life_minutes=1500.0, season_regression=0.4)
@@ -427,3 +435,116 @@ def test_collect_listings_uses_report_lag(con):
     assert collect_listings(con, games, history, index, report_lag=timedelta(0)) == [
         Listing(SEASON, "final", "Out", True),
     ]
+
+
+# -- ESPN box rows in the live view (plan 3, Task 4) -------------------------
+
+LIVE_SEASON = "2026-27"
+E1, E2 = "0022600101", "0022600102"
+ED = _date(2026, 11, 2)
+AFTER = _date(2026, 11, 4)
+SEEN = datetime(2026, 11, 3, 5, 0, tzinfo=UTC)
+LATE = datetime(2026, 11, 4, 0, 0, tzinfo=UTC)
+
+
+def _espn(con, game_id, player_id, *, team="BOS", game_date=ED, minutes=30.0,
+          points=12, assists=3, plus_minus=4, did_not_play=False,
+          observed_at=SEEN, name="Al Adams", season=LIVE_SEASON):
+    table = db.POINT_IN_TIME_TABLES["player_boxscores"]
+    con.execute(
+        f"INSERT INTO {table} (game_id, season, game_date, team, player_id,"
+        " espn_player_id, player_name, starter, did_not_play, minutes, points,"
+        " rebounds, assists, plus_minus, source, observed_at)"
+        " VALUES (?,?,?,?,?,?,?,TRUE,?,?,?,5,?,?,'espn',?)",
+        [game_id, season, game_date, team, str(player_id), "9" + str(player_id),
+         name, did_not_play, minutes, points, assists, plus_minus, observed_at],
+    )
+
+
+def _lines_at(con, at, before=AFTER, **kw):
+    return PlayerLines.from_view(AsOfView(con, at), before, **kw)
+
+
+def _rows(lines):
+    return [row for day in lines.by_date.values() for row, _ in day]
+
+
+def test_espn_rows_used_only_when_nba_rows_absent(con):
+    add_player_row(con, E1, ED, 1, "BOS", season=LIVE_SEASON, observed_at=SEEN)
+    _espn(con, E1, 1, minutes=99.0)
+    _espn(con, E2, 2, name="Bo Baker")
+    lines = _lines_at(con, LATE)
+    rows = _rows(lines)
+    g1 = [r for r in rows if r.game_id == E1]
+    g2 = [r for r in rows if r.game_id == E2]
+    assert [(r.player_id, r.minutes, r.box_complete) for r in g1] == [(1, 30.0, True)]
+    assert len(g2) == 1
+    r = g2[0]
+    assert r.box_complete is False
+    assert (r.player_id, r.pts, r.ast, r.plus_minus, r.minutes) == (2, 12, 3, 4.0, 30.0)
+    assert r.fga is None and r.tov is None and r.dreb is None
+    assert lines.espn == EspnMergeStats(games=1, rows=1, unlinked=0)
+
+
+def test_espn_rows_flag_off_reads_nba_rows_only(con):
+    _espn(con, E2, 2, name="Bo Baker")
+    lines = _lines_at(con, LATE, espn=False)
+    assert _rows(lines) == []
+    assert lines.espn == EspnMergeStats(0, 0, 0)
+
+
+def test_nba_row_seen_later_replaces_espn_row(con):
+    _espn(con, E2, 2, name="Bo Baker", minutes=20.0)
+    add_player_row(con, E2, ED, 2, "BOS", minutes=33.0, season=LIVE_SEASON,
+                   observed_at=datetime(2026, 11, 3, 12, 0, tzinfo=UTC))
+    early = _rows(_lines_at(con, datetime(2026, 11, 3, 6, 0, tzinfo=UTC)))
+    assert [(r.minutes, r.box_complete) for r in early] == [(20.0, False)]
+    late = _rows(_lines_at(con, LATE))
+    assert [(r.minutes, r.box_complete) for r in late] == [(33.0, True)]
+
+
+def test_espn_rows_respect_view_cutoff(con):
+    _espn(con, E2, 2, name="Bo Baker", observed_at=SEEN)
+    assert _rows(_lines_at(con, SEEN - timedelta(seconds=1))) == []
+    assert len(_rows(_lines_at(con, SEEN))) == 1
+
+
+def test_espn_rows_respect_before_date(con):
+    _espn(con, E2, 2, name="Bo Baker")
+    assert _rows(_lines_at(con, LATE, before=ED)) == []
+
+
+def test_espn_latest_observation_wins(con):
+    _espn(con, E2, 2, name="Bo Baker", minutes=30.0, observed_at=SEEN)
+    _espn(con, E2, 2, name="Bo Baker", minutes=31.0,
+          observed_at=SEEN + timedelta(hours=1))
+    rows = _rows(_lines_at(con, LATE))
+    assert [r.minutes for r in rows] == [31.0]
+
+
+def test_unlinked_espn_player_skipped_and_counted(con):
+    _espn(con, E2, "espn:3945274", name="New Guy")
+    _espn(con, E2, 2, name="Bo Baker")
+    lines = _lines_at(con, LATE)
+    assert [r.player_id for r in _rows(lines)] == [2]
+    assert lines.espn.unlinked == 1
+    assert lines.espn.rows == 1
+
+
+def test_dnp_espn_row_ignored(con):
+    _espn(con, E2, 2, name="Bo Baker", did_not_play=True, minutes=None)
+    lines = _lines_at(con, LATE)
+    assert _rows(lines) == []
+    assert lines.espn.rows == 0
+
+
+def test_espn_season_type_from_game_id(con):
+    _espn(con, "0042600101", 1)
+    _espn(con, "0022600101", 2, name="Bo Baker")
+    _espn(con, "0052600101", 3, name="Cy Cole")
+    view = AsOfView(con, LATE)
+    got, stats = espn_rows(view, AFTER, set())
+    types = {row.game_id: st for row, st in got}
+    assert types == {"0042600101": "playoffs", "0022600101": "regular",
+                     "0052600101": "playin"}
+    assert stats == EspnMergeStats(games=3, rows=3, unlinked=0)
