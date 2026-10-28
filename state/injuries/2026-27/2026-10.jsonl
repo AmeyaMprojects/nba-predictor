@@ -714,3 +714,4 @@
 {"game_date":"2026-10-28","game_time":"08:00(ET)","kind":"set","matchup":"DEN@NOP","player":"Dia,Malik","player_display":"Dia,Malik","reason":"GLeague-Two-Way","status":"Out","team":"NOP","team_display":"NewOrleansPelicans"}
 {"game_date":"2026-10-28","game_time":"08:00(ET)","kind":"set","matchup":"DEN@NOP","player":"PierreJr.,Jaron","player_display":"PierreJr.,Jaron","reason":"GLeague-Two-Way","status":"Out","team":"NOP","team_display":"NewOrleansPelicans"}
 {"game_date":"2026-10-28","game_time":"08:00(ET)","kind":"set","matchup":"DEN@NOP","player":"Poole,Jordan","player_display":"Poole,Jordan","reason":"Injury/Illness-Illness","status":"Available","team":"NOP","team_display":"NewOrleansPelicans"}
+{"content_sha":"42916c5bce594eba9f0ee3f84832bc33d17634c5f8d571a7f1e1e0145425f82e","fetched_at":"2026-10-28T17:52:00.351810+00:00","kind":"report","report_at":"2026-10-28T17:45:00+00:00","rows":100,"source_key":"Injury-Report_2026-10-28_01_45PM.pdf","v":1}
