@@ -644,3 +644,4 @@
 {"game_date":"2026-10-27","kind":"drop","player":"Harris,Tobias","team":"SAS"}
 {"game_date":"2026-10-27","kind":"drop","player":"Quaintance,Jayden","team":"SAS"}
 {"content_sha":"df8ab168021c05da742a20241c74d243ec7d791f3e2462de20abf7c624a4cf9a","fetched_at":"2026-10-28T04:22:00.486250+00:00","kind":"report","report_at":"2026-10-28T04:15:00+00:00","rows":95,"source_key":"Injury-Report_2026-10-28_12_15AM.pdf","v":1}
+{"content_sha":"df8ab168021c05da742a20241c74d243ec7d791f3e2462de20abf7c624a4cf9a","fetched_at":"2026-10-28T04:37:00.474805+00:00","kind":"report","report_at":"2026-10-28T04:30:00+00:00","rows":95,"source_key":"Injury-Report_2026-10-28_12_30AM.pdf","v":1}
