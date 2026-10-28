@@ -1,0 +1,325 @@
+{"format":"lines","v":1}
+{"kind":"report","observed_at":"2020-09-01T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-01","v":1}
+{"game_date":"2020-09-01","game_time":"05:30 (ET)","kind":"set","matchup":"BOS@TOR","player":"Green,Javonte","player_display":"Green, Javonte","reason":"Injury/Illness - Right Knee; Surgery","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-01","game_time":"05:30 (ET)","kind":"set","matchup":"BOS@TOR","player":"Hayward,Gordon","player_display":"Hayward, Gordon","reason":"Injury/Illness - Right Ankle; Sprain","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-01","game_time":"05:30 (ET)","kind":"set","matchup":"BOS@TOR","player":"Waters,Tremont","player_display":"Waters, Tremont","reason":"Injury/Illness - Left Knee; Sprain","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-01","game_time":"08:30 (ET)","kind":"set","matchup":"UTA@DEN","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-01","game_time":"08:30 (ET)","kind":"set","matchup":"UTA@DEN","player":"Cancar,Vlatko","player_display":"Cancar, Vlatko","reason":"Injury/Illness - Left Foot; Fracture","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-01","game_time":"05:30 (ET)","kind":"set","matchup":"BOS@TOR","player":"Brissett,Oshae","player_display":"Brissett, Oshae","reason":"Injury/Illness - Right Knee; Surgery","status":"Out","team":"TOR","team_display":"Toronto Raptors"}
+{"game_date":"2020-09-01","game_time":"05:30 (ET)","kind":"set","matchup":"BOS@TOR","player":"McCaw,Patrick","player_display":"McCaw, Patrick","reason":"Injury/Illness - Left Knee; Surgery","status":"Out","team":"TOR","team_display":"Toronto Raptors"}
+{"game_date":"2020-09-01","game_time":"08:30 (ET)","kind":"set","matchup":"UTA@DEN","player":"Davis,Ed","player_display":"Davis, Ed","reason":"Injury/Illness - Left Knee; MCL Injury","status":"Out","team":"UTA","team_display":"Utah Jazz"}
+{"game_date":"2020-09-01","game_time":"08:30 (ET)","kind":"set","matchup":"UTA@DEN","player":"Wright-Foreman,Justin","player_display":"Wright-Foreman, Justin","reason":"Not With Team","status":"Out","team":"UTA","team_display":"Utah Jazz"}
+{"game_date":"2020-09-02","game_time":"06:30 (ET)","kind":"set","matchup":"MIA@MIL","player":"Silva,Chris","player_display":"Silva, Chris","reason":"Injury/Illness - Left Pubic Bone; Stress Fracture","status":"Out","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-02","game_time":"06:30 (ET)","kind":"set","matchup":"MIA@MIL","player":"Vincent,Gabe","player_display":"Vincent, Gabe","reason":"Injury/Illness - Right Shoulder; Sprain","status":"Questionable","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-02","game_time":"06:30 (ET)","kind":"set","matchup":"MIA@MIL","player":"Bledsoe,Eric","player_display":"Bledsoe, Eric","reason":"Injury/Illness - Right Hamstring; Strain","status":"Questionable","team":"MIL","team_display":"Milwaukee Bucks"}
+{"kind":"report","observed_at":"2020-09-02T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-02","v":1}
+{"game_date":"2020-09-03","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Green,Javonte","player_display":"Green, Javonte","reason":"Injury/Illness - Right Knee; Surgery","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-03","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Hayward,Gordon","player_display":"Hayward, Gordon","reason":"Injury/Illness - Right Ankle; Sprain","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-03","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Waters,Tremont","player_display":"Waters, Tremont","reason":"Injury/Illness - Left Knee; Sprain","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-03","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAC","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-03","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAC","player":"Cancar,Vlatko","player_display":"Cancar, Vlatko","reason":"Injury/Illness - Left Foot; Fracture","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-03","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAC","player":"Beverley,Patrick","player_display":"Beverley, Patrick","reason":"Injury/Illness - Left Calf; Strain","status":"Questionable","team":"LAC","team_display":"LA Clippers"}
+{"game_date":"2020-09-03","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Brissett,Oshae","player_display":"Brissett, Oshae","reason":"Injury/Illness - Right Knee; Surgery","status":"Out","team":"TOR","team_display":"Toronto Raptors"}
+{"game_date":"2020-09-03","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"McCaw,Patrick","player_display":"McCaw, Patrick","reason":"Injury/Illness - Left Knee; Surgery","status":"Out","team":"TOR","team_display":"Toronto Raptors"}
+{"game_date":"2020-09-01","kind":"drop","player":"Green,Javonte","team":"BOS"}
+{"game_date":"2020-09-01","kind":"drop","player":"Hayward,Gordon","team":"BOS"}
+{"game_date":"2020-09-01","kind":"drop","player":"Waters,Tremont","team":"BOS"}
+{"game_date":"2020-09-01","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2020-09-01","kind":"drop","player":"Cancar,Vlatko","team":"DEN"}
+{"game_date":"2020-09-01","kind":"drop","player":"Brissett,Oshae","team":"TOR"}
+{"game_date":"2020-09-01","kind":"drop","player":"McCaw,Patrick","team":"TOR"}
+{"game_date":"2020-09-01","kind":"drop","player":"Davis,Ed","team":"UTA"}
+{"game_date":"2020-09-01","kind":"drop","player":"Wright-Foreman,Justin","team":"UTA"}
+{"kind":"report","observed_at":"2020-09-03T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-03","v":1}
+{"game_date":"2020-09-03","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Poirier,Vincent","player_display":"Poirier, Vincent","reason":"Personal Reasons","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-04","game_time":"06:30 (ET)","kind":"set","matchup":"MIL@MIA","player":"Iguodala,Andre","player_display":"Iguodala, Andre","reason":"Injury/Illness - Right Ankle; Sprain","status":"Questionable","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-04","game_time":"06:30 (ET)","kind":"set","matchup":"MIL@MIA","player":"Olynyk,Kelly","player_display":"Olynyk, Kelly","reason":"Injury/Illness - Right Knee; Bruise","status":"Questionable","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-04","game_time":"06:30 (ET)","kind":"set","matchup":"MIL@MIA","player":"Silva,Chris","player_display":"Silva, Chris","reason":"Injury/Illness - Left Pubic Bone; Stress Fracture","status":"Out","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-04","game_time":"06:30 (ET)","kind":"set","matchup":"MIL@MIA","player":"Vincent,Gabe","player_display":"Vincent, Gabe","reason":"Injury/Illness - Right Shoulder; Sprain","status":"Questionable","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-02","kind":"drop","player":"Silva,Chris","team":"MIA"}
+{"game_date":"2020-09-02","kind":"drop","player":"Vincent,Gabe","team":"MIA"}
+{"game_date":"2020-09-02","kind":"drop","player":"Bledsoe,Eric","team":"MIL"}
+{"kind":"report","observed_at":"2020-09-04T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-04","v":1}
+{"game_date":"2020-09-04","game_time":"09:00 (ET)","kind":"set","matchup":"HOU@LAL","player":"Davis,Anthony","player_display":"Davis, Anthony","reason":"Injury/Illness - Left finger; Left finger (5th digit) sprain","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-04","game_time":"09:00 (ET)","kind":"set","matchup":"HOU@LAL","player":"James,LeBron","player_display":"James, LeBron","reason":"Injury/Illness - Right Groin; Sore right groin","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-04","game_time":"09:00 (ET)","kind":"set","matchup":"HOU@LAL","player":"Rondo,Rajon","player_display":"Rondo, Rajon","reason":"Injury/Illness - Back; Back spasms","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-05","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Green,Javonte","player_display":"Green, Javonte","reason":"Injury/Illness - Right Knee; Surgery","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-05","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Hayward,Gordon","player_display":"Hayward, Gordon","reason":"Injury/Illness - Right Ankle; Sprain","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-05","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Poirier,Vincent","player_display":"Poirier, Vincent","reason":"Personal Reasons","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-05","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Waters,Tremont","player_display":"Waters, Tremont","reason":"Injury/Illness - Left Knee; Sprain","status":"Questionable","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-05","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAC","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-05","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAC","player":"Cancar,Vlatko","player_display":"Cancar, Vlatko","reason":"Injury/Illness - Left Foot; Fracture","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-05","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Brissett,Oshae","player_display":"Brissett, Oshae","reason":"Injury/Illness - Right Knee; Surgery","status":"Out","team":"TOR","team_display":"Toronto Raptors"}
+{"game_date":"2020-09-05","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"McCaw,Patrick","player_display":"McCaw, Patrick","reason":"Injury/Illness - Left Knee; Surgery","status":"Out","team":"TOR","team_display":"Toronto Raptors"}
+{"game_date":"2020-09-03","kind":"drop","player":"Green,Javonte","team":"BOS"}
+{"game_date":"2020-09-03","kind":"drop","player":"Hayward,Gordon","team":"BOS"}
+{"game_date":"2020-09-03","kind":"drop","player":"Poirier,Vincent","team":"BOS"}
+{"game_date":"2020-09-03","kind":"drop","player":"Waters,Tremont","team":"BOS"}
+{"game_date":"2020-09-03","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2020-09-03","kind":"drop","player":"Cancar,Vlatko","team":"DEN"}
+{"game_date":"2020-09-03","kind":"drop","player":"Beverley,Patrick","team":"LAC"}
+{"game_date":"2020-09-03","kind":"drop","player":"Brissett,Oshae","team":"TOR"}
+{"game_date":"2020-09-03","kind":"drop","player":"McCaw,Patrick","team":"TOR"}
+{"kind":"report","observed_at":"2020-09-05T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-05","v":1}
+{"game_date":"2020-09-05","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Waters,Tremont","player_display":"Waters, Tremont","reason":"Injury/Illness - Left Knee; Sprain","status":"Available","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-06","game_time":"08:30 (ET)","kind":"set","matchup":"HOU@LAL","player":"Davis,Anthony","player_display":"Davis, Anthony","reason":"Injury/Illness - Left Finger; left finger (5th digit) sprain","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-06","game_time":"08:30 (ET)","kind":"set","matchup":"HOU@LAL","player":"James,LeBron","player_display":"James, LeBron","reason":"Injury/Illness - Right Groin; Sore right groin","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-06","game_time":"08:30 (ET)","kind":"set","matchup":"HOU@LAL","player":"Rondo,Rajon","player_display":"Rondo, Rajon","reason":"Injury/Illness - Back; Back spasms","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-06","game_time":"03:30 (ET)","kind":"set","matchup":"MIL@MIA","player":"Herro,Tyler","player_display":"Herro, Tyler","reason":"Injury/Illness - Right Hip; Bruise","status":"Probable","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-06","game_time":"03:30 (ET)","kind":"set","matchup":"MIL@MIA","player":"Olynyk,Kelly","player_display":"Olynyk, Kelly","reason":"Injury/Illness - Right Knee; Bruise","status":"Questionable","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-06","game_time":"03:30 (ET)","kind":"set","matchup":"MIL@MIA","player":"Silva,Chris","player_display":"Silva, Chris","reason":"Injury/Illness - Left Pubic Bone; Stress Fracture","status":"Out","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-06","game_time":"03:30 (ET)","kind":"set","matchup":"MIL@MIA","player":"Antetokounmpo,Giannis","player_display":"Antetokounmpo, Giannis","reason":"Injury/Illness - Right Ankle; Sprain","status":"Questionable","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2020-09-04","kind":"drop","player":"Davis,Anthony","team":"LAL"}
+{"game_date":"2020-09-04","kind":"drop","player":"James,LeBron","team":"LAL"}
+{"game_date":"2020-09-04","kind":"drop","player":"Rondo,Rajon","team":"LAL"}
+{"game_date":"2020-09-04","kind":"drop","player":"Iguodala,Andre","team":"MIA"}
+{"game_date":"2020-09-04","kind":"drop","player":"Olynyk,Kelly","team":"MIA"}
+{"game_date":"2020-09-04","kind":"drop","player":"Silva,Chris","team":"MIA"}
+{"game_date":"2020-09-04","kind":"drop","player":"Vincent,Gabe","team":"MIA"}
+{"kind":"report","observed_at":"2020-09-06T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-06","v":1}
+{"game_date":"2020-09-06","game_time":"03:30 (ET)","kind":"set","matchup":"MIL@MIA","player":"Herro,Tyler","player_display":"Herro, Tyler","reason":"Injury/Illness - Right Hip; Bruise","status":"Available","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-06","game_time":"03:30 (ET)","kind":"set","matchup":"MIL@MIA","player":"Olynyk,Kelly","player_display":"Olynyk, Kelly","reason":"Injury/Illness - Right Knee; Bruise","status":"Available","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-06","game_time":"03:30 (ET)","kind":"set","matchup":"MIL@MIA","player":"Antetokounmpo,Giannis","player_display":"Antetokounmpo, Giannis","reason":"Injury/Illness - Right Ankle; Sprain","status":"Available","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2020-09-07","game_time":"06:30 (ET)","kind":"set","matchup":"BOS@TOR","player":"Green,Javonte","player_display":"Green, Javonte","reason":"Injury/Illness - Right Knee; Surgery","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-07","game_time":"06:30 (ET)","kind":"set","matchup":"BOS@TOR","player":"Hayward,Gordon","player_display":"Hayward, Gordon","reason":"Injury/Illness - Right Ankle; Sprain","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-07","game_time":"06:30 (ET)","kind":"set","matchup":"BOS@TOR","player":"Poirier,Vincent","player_display":"Poirier, Vincent","reason":"Personal Reasons","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-07","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@DEN","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-07","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@DEN","player":"Cancar,Vlatko","player_display":"Cancar, Vlatko","reason":"Injury/Illness - Left Foot; Fracture","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-07","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@DEN","player":"Jokic,Nikola","player_display":"Jokic, Nikola","reason":"Injury/Illness - Right Wrist; Sprain","status":"Questionable","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-07","game_time":"06:30 (ET)","kind":"set","matchup":"BOS@TOR","player":"Brissett,Oshae","player_display":"Brissett, Oshae","reason":"Injury/Illness - Right Knee; Surgery","status":"Out","team":"TOR","team_display":"Toronto Raptors"}
+{"game_date":"2020-09-07","game_time":"06:30 (ET)","kind":"set","matchup":"BOS@TOR","player":"McCaw,Patrick","player_display":"McCaw, Patrick","reason":"Injury/Illness - Left Knee; Surgery","status":"Out","team":"TOR","team_display":"Toronto Raptors"}
+{"game_date":"2020-09-05","kind":"drop","player":"Green,Javonte","team":"BOS"}
+{"game_date":"2020-09-05","kind":"drop","player":"Hayward,Gordon","team":"BOS"}
+{"game_date":"2020-09-05","kind":"drop","player":"Poirier,Vincent","team":"BOS"}
+{"game_date":"2020-09-05","kind":"drop","player":"Waters,Tremont","team":"BOS"}
+{"game_date":"2020-09-05","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2020-09-05","kind":"drop","player":"Cancar,Vlatko","team":"DEN"}
+{"game_date":"2020-09-05","kind":"drop","player":"Brissett,Oshae","team":"TOR"}
+{"game_date":"2020-09-05","kind":"drop","player":"McCaw,Patrick","team":"TOR"}
+{"kind":"report","observed_at":"2020-09-07T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-07","v":1}
+{"game_date":"2020-09-08","game_time":"09:00 (ET)","kind":"set","matchup":"LAL@HOU","player":"Davis,Anthony","player_display":"Davis, Anthony","reason":"Injury/Illness - Left Finger; Left finger(5th digit) sprain","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-08","game_time":"09:00 (ET)","kind":"set","matchup":"LAL@HOU","player":"James,LeBron","player_display":"James, LeBron","reason":"Injury/Illness - Right Groin; Sore right groin","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-08","game_time":"09:00 (ET)","kind":"set","matchup":"LAL@HOU","player":"McGee,JaVale","player_display":"McGee, JaVale","reason":"Injury/Illness - Left Ankle; Sprained left ankle","status":"Questionable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-08","game_time":"09:00 (ET)","kind":"set","matchup":"LAL@HOU","player":"Waiters,Dion","player_display":"Waiters, Dion","reason":"Injury/Illness - Left Groin; Sore left groin","status":"Doubtful","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-08","game_time":"06:30 (ET)","kind":"set","matchup":"MIA@MIL","player":"Crowder,Jae","player_display":"Crowder, Jae","reason":"Injury/Illness - Left Ankle; Sprain","status":"Questionable","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-08","game_time":"06:30 (ET)","kind":"set","matchup":"MIA@MIL","player":"Herro,Tyler","player_display":"Herro, Tyler","reason":"Injury/Illness - Right Hip; Bruise","status":"Questionable","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-08","game_time":"06:30 (ET)","kind":"set","matchup":"MIA@MIL","player":"Olynyk,Kelly","player_display":"Olynyk, Kelly","reason":"Injury/Illness - Right Knee; Bruise","status":"Questionable","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-08","game_time":"06:30 (ET)","kind":"set","matchup":"MIA@MIL","player":"Silva,Chris","player_display":"Silva, Chris","reason":"Injury/Illness - Left Pubic Bone; Stress fracture","status":"Out","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-08","game_time":"06:30 (ET)","kind":"set","matchup":"MIA@MIL","player":"Antetokounmpo,Giannis","player_display":"Antetokounmpo, Giannis","reason":"Injury/Illness - Right Ankle; Sprain","status":"Questionable","team":"MIL","team_display":"Milwaukee Bucks"}
+{"game_date":"2020-09-06","kind":"drop","player":"Davis,Anthony","team":"LAL"}
+{"game_date":"2020-09-06","kind":"drop","player":"James,LeBron","team":"LAL"}
+{"game_date":"2020-09-06","kind":"drop","player":"Rondo,Rajon","team":"LAL"}
+{"game_date":"2020-09-06","kind":"drop","player":"Herro,Tyler","team":"MIA"}
+{"game_date":"2020-09-06","kind":"drop","player":"Olynyk,Kelly","team":"MIA"}
+{"game_date":"2020-09-06","kind":"drop","player":"Silva,Chris","team":"MIA"}
+{"game_date":"2020-09-06","kind":"drop","player":"Antetokounmpo,Giannis","team":"MIL"}
+{"kind":"report","observed_at":"2020-09-08T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-08","v":1}
+{"game_date":"2020-09-09","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Green,Javonte","player_display":"Green, Javonte","reason":"Injury/Illness - Right Knee; Surgery","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-09","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Hayward,Gordon","player_display":"Hayward, Gordon","reason":"Injury/Illness - Right Ankle; Sprain","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-09","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Poirier,Vincent","player_display":"Poirier, Vincent","reason":"Personal Reasons","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-09","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@DEN","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Knee; Out","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-09","game_time":"09:00 (ET)","kind":"set","matchup":"LAC@DEN","player":"Cancar,Vlatko","player_display":"Cancar, Vlatko","reason":"Injury/Illness - Left Foot; Out","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-09","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Brissett,Oshae","player_display":"Brissett, Oshae","reason":"Injury/Illness - Right Knee; Surgery","status":"Out","team":"TOR","team_display":"Toronto Raptors"}
+{"game_date":"2020-09-09","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Left Ankle; Sprain","status":"Questionable","team":"TOR","team_display":"Toronto Raptors"}
+{"game_date":"2020-09-09","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"McCaw,Patrick","player_display":"McCaw, Patrick","reason":"Injury/Illness - Left Knee; Surgery","status":"Out","team":"TOR","team_display":"Toronto Raptors"}
+{"game_date":"2020-09-07","kind":"drop","player":"Green,Javonte","team":"BOS"}
+{"game_date":"2020-09-07","kind":"drop","player":"Hayward,Gordon","team":"BOS"}
+{"game_date":"2020-09-07","kind":"drop","player":"Poirier,Vincent","team":"BOS"}
+{"game_date":"2020-09-07","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2020-09-07","kind":"drop","player":"Cancar,Vlatko","team":"DEN"}
+{"game_date":"2020-09-07","kind":"drop","player":"Jokic,Nikola","team":"DEN"}
+{"game_date":"2020-09-07","kind":"drop","player":"Brissett,Oshae","team":"TOR"}
+{"game_date":"2020-09-07","kind":"drop","player":"McCaw,Patrick","team":"TOR"}
+{"kind":"report","observed_at":"2020-09-09T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-09","v":1}
+{"game_date":"2020-09-09","game_time":"06:30 (ET)","kind":"set","matchup":"TOR@BOS","player":"Ibaka,Serge","player_display":"Ibaka, Serge","reason":"Injury/Illness - Left Ankle; Sprain","status":"Available","team":"TOR","team_display":"Toronto Raptors"}
+{"game_date":"2020-09-10","game_time":"07:00 (ET)","kind":"set","matchup":"LAL@HOU","player":"Covington,Robert","player_display":"Covington, Robert","reason":"Injury/Illness - Head; Headache","status":"Questionable","team":"HOU","team_display":"Houston Rockets"}
+{"game_date":"2020-09-10","game_time":"07:00 (ET)","kind":"set","matchup":"LAL@HOU","player":"HouseJr.,Danuel","player_display":"House Jr., Danuel","reason":"Personal Reasons","status":"Out","team":"HOU","team_display":"Houston Rockets"}
+{"game_date":"2020-09-08","kind":"drop","player":"Davis,Anthony","team":"LAL"}
+{"game_date":"2020-09-08","kind":"drop","player":"James,LeBron","team":"LAL"}
+{"game_date":"2020-09-08","kind":"drop","player":"McGee,JaVale","team":"LAL"}
+{"game_date":"2020-09-08","kind":"drop","player":"Waiters,Dion","team":"LAL"}
+{"game_date":"2020-09-08","kind":"drop","player":"Crowder,Jae","team":"MIA"}
+{"game_date":"2020-09-08","kind":"drop","player":"Herro,Tyler","team":"MIA"}
+{"game_date":"2020-09-08","kind":"drop","player":"Olynyk,Kelly","team":"MIA"}
+{"game_date":"2020-09-08","kind":"drop","player":"Silva,Chris","team":"MIA"}
+{"game_date":"2020-09-08","kind":"drop","player":"Antetokounmpo,Giannis","team":"MIL"}
+{"kind":"report","observed_at":"2020-09-10T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-10","v":1}
+{"game_date":"2020-09-10","game_time":"07:00 (ET)","kind":"set","matchup":"LAL@HOU","player":"Covington,Robert","player_display":"Covington, Robert","reason":"Injury/Illness - Head; Headache","status":"Available","team":"HOU","team_display":"Houston Rockets"}
+{"game_date":"2020-09-10","game_time":"07:00 (ET)","kind":"set","matchup":"LAL@HOU","player":"Davis,Anthony","player_display":"Davis, Anthony","reason":"Injury/Illness - Right Rib; Right rib contusion","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-10","game_time":"07:00 (ET)","kind":"set","matchup":"LAL@HOU","player":"James,LeBron","player_display":"James, LeBron","reason":"Injury/Illness - Right calf; Right calf contusion","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-10","game_time":"07:00 (ET)","kind":"set","matchup":"LAL@HOU","player":"McGee,JaVale","player_display":"McGee, JaVale","reason":"Injury/Illness - Left Ankle; Sprained left ankle","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-10","game_time":"07:00 (ET)","kind":"set","matchup":"LAL@HOU","player":"Waiters,Dion","player_display":"Waiters, Dion","reason":"Injury/Illness - Left Groin; Sore left groin","status":"Doubtful","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-11","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@TOR","player":"Green,Javonte","player_display":"Green, Javonte","reason":"Injury/Illness - Right Knee; Surgery","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-11","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@TOR","player":"Hayward,Gordon","player_display":"Hayward, Gordon","reason":"Injury/Illness - Right Ankle; Sprain","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-11","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@TOR","player":"Poirier,Vincent","player_display":"Poirier, Vincent","reason":"Personal Reasons","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-11","game_time":"06:30 (ET)","kind":"set","matchup":"DEN@LAC","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-11","game_time":"06:30 (ET)","kind":"set","matchup":"DEN@LAC","player":"Cancar,Vlatko","player_display":"Cancar, Vlatko","reason":"Injury/Illness - Left Foot; Fracture","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-11","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@TOR","player":"Brissett,Oshae","player_display":"Brissett, Oshae","reason":"Injury/Illness - Right Knee; Surgery","status":"Out","team":"TOR","team_display":"Toronto Raptors"}
+{"game_date":"2020-09-11","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@TOR","player":"McCaw,Patrick","player_display":"McCaw, Patrick","reason":"Injury/Illness - Left Knee; Surgery","status":"Out","team":"TOR","team_display":"Toronto Raptors"}
+{"game_date":"2020-09-09","kind":"drop","player":"Green,Javonte","team":"BOS"}
+{"game_date":"2020-09-09","kind":"drop","player":"Hayward,Gordon","team":"BOS"}
+{"game_date":"2020-09-09","kind":"drop","player":"Poirier,Vincent","team":"BOS"}
+{"game_date":"2020-09-09","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2020-09-09","kind":"drop","player":"Cancar,Vlatko","team":"DEN"}
+{"game_date":"2020-09-09","kind":"drop","player":"Brissett,Oshae","team":"TOR"}
+{"game_date":"2020-09-09","kind":"drop","player":"Ibaka,Serge","team":"TOR"}
+{"game_date":"2020-09-09","kind":"drop","player":"McCaw,Patrick","team":"TOR"}
+{"kind":"report","observed_at":"2020-09-11T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-11","v":1}
+{"game_date":"2020-09-11","game_time":"06:30 (ET)","kind":"set","matchup":"DEN@LAC","player":"Craig,Torrey","player_display":"Craig, Torrey","reason":"Injury/Illness - Right Knee; Soreness","status":"Probable","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-12","game_time":"08:00 (ET)","kind":"set","matchup":"HOU@LAL","player":"HouseJr.,Danuel","player_display":"House Jr., Danuel","reason":"Personal Reasons","status":"Out","team":"HOU","team_display":"Houston Rockets"}
+{"game_date":"2020-09-12","game_time":"08:00 (ET)","kind":"set","matchup":"HOU@LAL","player":"Davis,Anthony","player_display":"Davis, Anthony","reason":"Injury/Illness - Right rib; Right rib contusion","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-12","game_time":"08:00 (ET)","kind":"set","matchup":"HOU@LAL","player":"James,LeBron","player_display":"James, LeBron","reason":"Injury/Illness - Right Groin; Sore right groin","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-12","game_time":"08:00 (ET)","kind":"set","matchup":"HOU@LAL","player":"McGee,JaVale","player_display":"McGee, JaVale","reason":"Injury/Illness - Left Ankle; Sprained left ankle","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-12","game_time":"08:00 (ET)","kind":"set","matchup":"HOU@LAL","player":"Waiters,Dion","player_display":"Waiters, Dion","reason":"Injury/Illness - Left Groin; Sore left groin","status":"Doubtful","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-10","kind":"drop","player":"Covington,Robert","team":"HOU"}
+{"game_date":"2020-09-10","kind":"drop","player":"HouseJr.,Danuel","team":"HOU"}
+{"game_date":"2020-09-10","kind":"drop","player":"Davis,Anthony","team":"LAL"}
+{"game_date":"2020-09-10","kind":"drop","player":"James,LeBron","team":"LAL"}
+{"game_date":"2020-09-10","kind":"drop","player":"McGee,JaVale","team":"LAL"}
+{"game_date":"2020-09-10","kind":"drop","player":"Waiters,Dion","team":"LAL"}
+{"kind":"report","observed_at":"2020-09-12T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-12","v":1}
+{"game_date":"2020-09-12","game_time":"08:00 (ET)","kind":"set","matchup":"HOU@LAL","player":"Chandler,Tyson","player_display":"Chandler, Tyson","reason":"Injury/Illness - Neck; Spasms","status":"Out","team":"HOU","team_display":"Houston Rockets"}
+{"game_date":"2020-09-13","game_time":"01:00 (ET)","kind":"set","matchup":"LAC@DEN","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-13","game_time":"01:00 (ET)","kind":"set","matchup":"LAC@DEN","player":"Cancar,Vlatko","player_display":"Cancar, Vlatko","reason":"Injury/Illness - Left Foot; Fracture","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-11","kind":"drop","player":"Green,Javonte","team":"BOS"}
+{"game_date":"2020-09-11","kind":"drop","player":"Hayward,Gordon","team":"BOS"}
+{"game_date":"2020-09-11","kind":"drop","player":"Poirier,Vincent","team":"BOS"}
+{"game_date":"2020-09-11","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2020-09-11","kind":"drop","player":"Cancar,Vlatko","team":"DEN"}
+{"game_date":"2020-09-11","kind":"drop","player":"Craig,Torrey","team":"DEN"}
+{"game_date":"2020-09-11","kind":"drop","player":"Brissett,Oshae","team":"TOR"}
+{"game_date":"2020-09-11","kind":"drop","player":"McCaw,Patrick","team":"TOR"}
+{"kind":"report","observed_at":"2020-09-13T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-13","v":1}
+{"game_date":"2020-09-12","kind":"drop","player":"Chandler,Tyson","team":"HOU"}
+{"game_date":"2020-09-12","kind":"drop","player":"HouseJr.,Danuel","team":"HOU"}
+{"game_date":"2020-09-12","kind":"drop","player":"Davis,Anthony","team":"LAL"}
+{"game_date":"2020-09-12","kind":"drop","player":"James,LeBron","team":"LAL"}
+{"game_date":"2020-09-12","kind":"drop","player":"McGee,JaVale","team":"LAL"}
+{"game_date":"2020-09-12","kind":"drop","player":"Waiters,Dion","team":"LAL"}
+{"kind":"report","observed_at":"2020-09-14T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-14","v":1}
+{"game_date":"2020-09-15","game_time":"06:30 (ET)","kind":"set","matchup":"MIA@BOS","player":"Green,Javonte","player_display":"Green, Javonte","reason":"Injury/Illness - Right Knee; Surgery","status":"Doubtful","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-15","game_time":"06:30 (ET)","kind":"set","matchup":"MIA@BOS","player":"Hayward,Gordon","player_display":"Hayward, Gordon","reason":"Injury/Illness - Right Ankle; Sprain","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-15","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAC","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-15","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAC","player":"Cancar,Vlatko","player_display":"Cancar, Vlatko","reason":"Injury/Illness - Left Foot; Fracture","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-15","game_time":"06:30 (ET)","kind":"set","matchup":"MIA@BOS","player":"Silva,Chris","player_display":"Silva, Chris","reason":"Injury/Illness - Left Pubic Bone; Stress Fracture","status":"Out","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-13","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2020-09-13","kind":"drop","player":"Cancar,Vlatko","team":"DEN"}
+{"kind":"report","observed_at":"2020-09-15T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-15","v":1}
+{"game_date":"2020-09-15","game_time":"06:30 (ET)","kind":"set","matchup":"MIA@BOS","player":"Green,Javonte","player_display":"Green, Javonte","reason":"Injury/Illness - Right Knee; Surgery","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"kind":"report","observed_at":"2020-09-16T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-16","v":1}
+{"game_date":"2020-09-17","game_time":"07:00 (ET)","kind":"set","matchup":"MIA@BOS","player":"Green,Javonte","player_display":"Green, Javonte","reason":"Injury/Illness - Right Knee; Surgery","status":"Doubtful","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-17","game_time":"07:00 (ET)","kind":"set","matchup":"MIA@BOS","player":"Hayward,Gordon","player_display":"Hayward, Gordon","reason":"Injury/Illness - Right Ankle; Sprain","status":"Doubtful","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-17","game_time":"07:00 (ET)","kind":"set","matchup":"MIA@BOS","player":"Silva,Chris","player_display":"Silva, Chris","reason":"Injury/Illness - Left Pubic Bone; Stress Fracture","status":"Out","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-15","kind":"drop","player":"Green,Javonte","team":"BOS"}
+{"game_date":"2020-09-15","kind":"drop","player":"Hayward,Gordon","team":"BOS"}
+{"game_date":"2020-09-15","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2020-09-15","kind":"drop","player":"Cancar,Vlatko","team":"DEN"}
+{"game_date":"2020-09-15","kind":"drop","player":"Silva,Chris","team":"MIA"}
+{"kind":"report","observed_at":"2020-09-17T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-17","v":1}
+{"game_date":"2020-09-17","game_time":"07:00 (ET)","kind":"set","matchup":"MIA@BOS","player":"Green,Javonte","player_display":"Green, Javonte","reason":"Injury/Illness - Right Knee; Surgery","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-17","game_time":"07:00 (ET)","kind":"set","matchup":"MIA@BOS","player":"Hayward,Gordon","player_display":"Hayward, Gordon","reason":"Injury/Illness - Right Ankle; Sprain","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-18","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAL","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-18","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAL","player":"Cancar,Vlatko","player_display":"Cancar, Vlatko","reason":"Injury/Illness - Left Foot; Fracture","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-18","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAL","player":"James,LeBron","player_display":"James, LeBron","reason":"Injury/Illness - Right Groin; Sore right groin","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-18","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAL","player":"Rondo,Rajon","player_display":"Rondo, Rajon","reason":"Injury/Illness - Back; Back spasms","status":"Questionable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-18","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAL","player":"Waiters,Dion","player_display":"Waiters, Dion","reason":"Injury/Illness - Left Groin; Sore left groin","status":"Doubtful","team":"LAL","team_display":"Los Angeles Lakers"}
+{"kind":"report","observed_at":"2020-09-18T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-18","v":1}
+{"game_date":"2020-09-19","game_time":"08:30 (ET)","kind":"set","matchup":"BOS@MIA","player":"Green,Javonte","player_display":"Green, Javonte","reason":"Injury/Illness - Right Knee; Surgery","status":"Probable","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-19","game_time":"08:30 (ET)","kind":"set","matchup":"BOS@MIA","player":"Hayward,Gordon","player_display":"Hayward, Gordon","reason":"Injury/Illness - Right Ankle; Sprain","status":"Questionable","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-19","game_time":"08:30 (ET)","kind":"set","matchup":"BOS@MIA","player":"Langford,Romeo","player_display":"Langford, Romeo","reason":"Injury/Illness - Right Adductor; Strain","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-19","game_time":"08:30 (ET)","kind":"set","matchup":"BOS@MIA","player":"Iguodala,Andre","player_display":"Iguodala, Andre","reason":"Injury/Illness - Lower Back; Spasms","status":"Probable","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-19","game_time":"08:30 (ET)","kind":"set","matchup":"BOS@MIA","player":"Silva,Chris","player_display":"Silva, Chris","reason":"Injury/Illness - Left Pubic Bone; Stress Fracture","status":"Out","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-17","kind":"drop","player":"Green,Javonte","team":"BOS"}
+{"game_date":"2020-09-17","kind":"drop","player":"Hayward,Gordon","team":"BOS"}
+{"game_date":"2020-09-17","kind":"drop","player":"Silva,Chris","team":"MIA"}
+{"kind":"report","observed_at":"2020-09-19T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-19","v":1}
+{"game_date":"2020-09-20","game_time":"07:30 (ET)","kind":"set","matchup":"DEN@LAL","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-20","game_time":"07:30 (ET)","kind":"set","matchup":"DEN@LAL","player":"Cancar,Vlatko","player_display":"Cancar, Vlatko","reason":"Injury/Illness - Left Foot; Fracture","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-20","game_time":"07:30 (ET)","kind":"set","matchup":"DEN@LAL","player":"James,LeBron","player_display":"James, LeBron","reason":"Injury/Illness - Right Groin; Sore right groin","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-20","game_time":"07:30 (ET)","kind":"set","matchup":"DEN@LAL","player":"Rondo,Rajon","player_display":"Rondo, Rajon","reason":"Injury/Illness - Back; Back spasms","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-20","game_time":"07:30 (ET)","kind":"set","matchup":"DEN@LAL","player":"Waiters,Dion","player_display":"Waiters, Dion","reason":"Injury/Illness - Left Groin; Sore left groin","status":"Doubtful","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-18","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2020-09-18","kind":"drop","player":"Cancar,Vlatko","team":"DEN"}
+{"game_date":"2020-09-18","kind":"drop","player":"James,LeBron","team":"LAL"}
+{"game_date":"2020-09-18","kind":"drop","player":"Rondo,Rajon","team":"LAL"}
+{"game_date":"2020-09-18","kind":"drop","player":"Waiters,Dion","team":"LAL"}
+{"kind":"report","observed_at":"2020-09-20T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-20","v":1}
+{"game_date":"2020-09-19","kind":"drop","player":"Green,Javonte","team":"BOS"}
+{"game_date":"2020-09-19","kind":"drop","player":"Hayward,Gordon","team":"BOS"}
+{"game_date":"2020-09-19","kind":"drop","player":"Langford,Romeo","team":"BOS"}
+{"game_date":"2020-09-19","kind":"drop","player":"Iguodala,Andre","team":"MIA"}
+{"game_date":"2020-09-19","kind":"drop","player":"Silva,Chris","team":"MIA"}
+{"kind":"report","observed_at":"2020-09-21T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-21","v":1}
+{"game_date":"2020-09-22","game_time":"09:00 (ET)","kind":"set","matchup":"LAL@DEN","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-22","game_time":"09:00 (ET)","kind":"set","matchup":"LAL@DEN","player":"Cancar,Vlatko","player_display":"Cancar, Vlatko","reason":"Injury/Illness - Left Foot; Fracture","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-22","game_time":"09:00 (ET)","kind":"set","matchup":"LAL@DEN","player":"James,LeBron","player_display":"James, LeBron","reason":"Injury/Illness - Right Groin; sore right groin","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-22","game_time":"09:00 (ET)","kind":"set","matchup":"LAL@DEN","player":"Waiters,Dion","player_display":"Waiters, Dion","reason":"Injury/Illness - Left Groin; Sore left groin","status":"Doubtful","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-20","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2020-09-20","kind":"drop","player":"Cancar,Vlatko","team":"DEN"}
+{"game_date":"2020-09-20","kind":"drop","player":"James,LeBron","team":"LAL"}
+{"game_date":"2020-09-20","kind":"drop","player":"Rondo,Rajon","team":"LAL"}
+{"game_date":"2020-09-20","kind":"drop","player":"Waiters,Dion","team":"LAL"}
+{"kind":"report","observed_at":"2020-09-22T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-22","v":1}
+{"game_date":"2020-09-23","game_time":"08:30 (ET)","kind":"set","matchup":"BOS@MIA","player":"Langford,Romeo","player_display":"Langford, Romeo","reason":"Injury/Illness - Right Wrist; Surgery","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-23","game_time":"08:30 (ET)","kind":"set","matchup":"BOS@MIA","player":"Silva,Chris","player_display":"Silva, Chris","reason":"Injury/Illness - Left Pubic Bone; Stress Fracture","status":"Out","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-23","game_time":"08:30 (ET)","kind":"set","matchup":"BOS@MIA","player":"Vincent,Gabe","player_display":"Vincent, Gabe","reason":"Injury/Illness - Right Knee; Soreness","status":"Questionable","team":"MIA","team_display":"Miami Heat"}
+{"kind":"report","observed_at":"2020-09-23T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-23","v":1}
+{"game_date":"2020-09-24","game_time":"09:00 (ET)","kind":"set","matchup":"LAL@DEN","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-24","game_time":"09:00 (ET)","kind":"set","matchup":"LAL@DEN","player":"Cancar,Vlatko","player_display":"Cancar, Vlatko","reason":"Injury/Illness - Left Foot; Fracture","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-24","game_time":"09:00 (ET)","kind":"set","matchup":"LAL@DEN","player":"Caruso,Alex","player_display":"Caruso, Alex","reason":"Injury/Illness - Right wrist; Sore right wrist","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-24","game_time":"09:00 (ET)","kind":"set","matchup":"LAL@DEN","player":"Green,Danny","player_display":"Green, Danny","reason":"Injury/Illness - Left Finger; Volar plate injury","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-24","game_time":"09:00 (ET)","kind":"set","matchup":"LAL@DEN","player":"James,LeBron","player_display":"James, LeBron","reason":"Injury/Illness - Right Groin; Sore right groin","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-24","game_time":"09:00 (ET)","kind":"set","matchup":"LAL@DEN","player":"Waiters,Dion","player_display":"Waiters, Dion","reason":"Injury/Illness - Left Groin; Sore left groin","status":"Doubtful","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-22","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2020-09-22","kind":"drop","player":"Cancar,Vlatko","team":"DEN"}
+{"game_date":"2020-09-22","kind":"drop","player":"James,LeBron","team":"LAL"}
+{"game_date":"2020-09-22","kind":"drop","player":"Waiters,Dion","team":"LAL"}
+{"kind":"report","observed_at":"2020-09-24T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-24","v":1}
+{"game_date":"2020-09-25","game_time":"08:30 (ET)","kind":"set","matchup":"MIA@BOS","player":"Langford,Romeo","player_display":"Langford, Romeo","reason":"Injury/Illness - Right Wrist; Surgery","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-25","game_time":"08:30 (ET)","kind":"set","matchup":"MIA@BOS","player":"Silva,Chris","player_display":"Silva, Chris","reason":"Injury/Illness - Left Pubic Bone; Stress Fracture","status":"Out","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-25","game_time":"08:30 (ET)","kind":"set","matchup":"MIA@BOS","player":"Vincent,Gabe","player_display":"Vincent, Gabe","reason":"Injury/Illness - Right Knee; Soreness","status":"Questionable","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-23","kind":"drop","player":"Langford,Romeo","team":"BOS"}
+{"game_date":"2020-09-23","kind":"drop","player":"Silva,Chris","team":"MIA"}
+{"game_date":"2020-09-23","kind":"drop","player":"Vincent,Gabe","team":"MIA"}
+{"kind":"report","observed_at":"2020-09-25T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-25","v":1}
+{"game_date":"2020-09-26","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAL","player":"Caruso,Alex","player_display":"Caruso, Alex","reason":"Injury/Illness - Right Wrist; Sore wrist","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-26","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAL","player":"Davis,Anthony","player_display":"Davis, Anthony","reason":"Injury/Illness - Left Ankle; Sprained left ankle","status":"Questionable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-26","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAL","player":"Green,Danny","player_display":"Green, Danny","reason":"Injury/Illness - Left Finger; Volar plate injury, ring finger","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-26","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAL","player":"James,LeBron","player_display":"James, LeBron","reason":"Injury/Illness - Right Groin; Sore right groin","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-26","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAL","player":"Waiters,Dion","player_display":"Waiters, Dion","reason":"Injury/Illness - Left Groin; Sore left groin","status":"Questionable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-24","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2020-09-24","kind":"drop","player":"Cancar,Vlatko","team":"DEN"}
+{"game_date":"2020-09-24","kind":"drop","player":"Caruso,Alex","team":"LAL"}
+{"game_date":"2020-09-24","kind":"drop","player":"Green,Danny","team":"LAL"}
+{"game_date":"2020-09-24","kind":"drop","player":"James,LeBron","team":"LAL"}
+{"game_date":"2020-09-24","kind":"drop","player":"Waiters,Dion","team":"LAL"}
+{"kind":"report","observed_at":"2020-09-26T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-26","v":1}
+{"game_date":"2020-09-26","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAL","player":"Barton,Will","player_display":"Barton, Will","reason":"Injury/Illness - Right Knee; Soreness","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-26","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAL","player":"Cancar,Vlatko","player_display":"Cancar, Vlatko","reason":"Injury/Illness - Left Foot; Fracture","status":"Out","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-26","game_time":"09:00 (ET)","kind":"set","matchup":"DEN@LAL","player":"Murray,Jamal","player_display":"Murray, Jamal","reason":"Injury/Illness - Right Knee; Contusion","status":"Probable","team":"DEN","team_display":"Denver Nuggets"}
+{"game_date":"2020-09-27","game_time":"07:30 (ET)","kind":"set","matchup":"BOS@MIA","player":"Langford,Romeo","player_display":"Langford, Romeo","reason":"Injury/Illness - Right Wrist; Surgery","status":"Out","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2020-09-27","game_time":"07:30 (ET)","kind":"set","matchup":"BOS@MIA","player":"Silva,Chris","player_display":"Silva, Chris","reason":"Injury/Illness - Left Pubic Bone; Stress Fracture","status":"Out","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-27","game_time":"07:30 (ET)","kind":"set","matchup":"BOS@MIA","player":"Vincent,Gabe","player_display":"Vincent, Gabe","reason":"Injury/Illness - Right Knee; Soreness","status":"Questionable","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-25","kind":"drop","player":"Langford,Romeo","team":"BOS"}
+{"game_date":"2020-09-25","kind":"drop","player":"Silva,Chris","team":"MIA"}
+{"game_date":"2020-09-25","kind":"drop","player":"Vincent,Gabe","team":"MIA"}
+{"kind":"report","observed_at":"2020-09-27T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-27","v":1}
+{"game_date":"2020-09-26","kind":"drop","player":"Barton,Will","team":"DEN"}
+{"game_date":"2020-09-26","kind":"drop","player":"Cancar,Vlatko","team":"DEN"}
+{"game_date":"2020-09-26","kind":"drop","player":"Murray,Jamal","team":"DEN"}
+{"game_date":"2020-09-26","kind":"drop","player":"Caruso,Alex","team":"LAL"}
+{"game_date":"2020-09-26","kind":"drop","player":"Davis,Anthony","team":"LAL"}
+{"game_date":"2020-09-26","kind":"drop","player":"Green,Danny","team":"LAL"}
+{"game_date":"2020-09-26","kind":"drop","player":"James,LeBron","team":"LAL"}
+{"game_date":"2020-09-26","kind":"drop","player":"Waiters,Dion","team":"LAL"}
+{"kind":"report","observed_at":"2020-09-29T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-29","v":1}
+{"game_date":"2020-09-30","game_time":"09:00 (ET)","kind":"set","matchup":"MIA@LAL","player":"Caruso,Alex","player_display":"Caruso, Alex","reason":"Injury/Illness - Right wrist; Sore right wrist","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-30","game_time":"09:00 (ET)","kind":"set","matchup":"MIA@LAL","player":"Davis,Anthony","player_display":"Davis, Anthony","reason":"Injury/Illness - Right heel; Right heel contusion","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-30","game_time":"09:00 (ET)","kind":"set","matchup":"MIA@LAL","player":"Green,Danny","player_display":"Green, Danny","reason":"Injury/Illness - Left Finger; Volar plate injury, left ring finger","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-30","game_time":"09:00 (ET)","kind":"set","matchup":"MIA@LAL","player":"James,LeBron","player_display":"James, LeBron","reason":"Injury/Illness - Right groin; Sore right groin","status":"Probable","team":"LAL","team_display":"Los Angeles Lakers"}
+{"game_date":"2020-09-30","game_time":"09:00 (ET)","kind":"set","matchup":"MIA@LAL","player":"Silva,Chris","player_display":"Silva, Chris","reason":"Injury/Illness - Left Pubic Bone; Stress Fracture","status":"Questionable","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-30","game_time":"09:00 (ET)","kind":"set","matchup":"MIA@LAL","player":"Vincent,Gabe","player_display":"Vincent, Gabe","reason":"Injury/Illness - Right Knee; Soreness","status":"Questionable","team":"MIA","team_display":"Miami Heat"}
+{"game_date":"2020-09-27","kind":"drop","player":"Langford,Romeo","team":"BOS"}
+{"game_date":"2020-09-27","kind":"drop","player":"Silva,Chris","team":"MIA"}
+{"game_date":"2020-09-27","kind":"drop","player":"Vincent,Gabe","team":"MIA"}
+{"kind":"report","observed_at":"2020-09-30T21:30:00+00:00","reconstructed":false,"report_date":"2020-09-30","v":1}

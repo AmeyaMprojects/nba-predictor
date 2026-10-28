@@ -1,0 +1,104 @@
+{"format":"lines","v":1}
+{"kind":"report","observed_at":"2022-06-01T21:30:00+00:00","reconstructed":false,"report_date":"2022-06-01","v":1}
+{"game_date":"2022-06-02","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"Iguodala,Andre","player_display":"Iguodala, Andre","reason":"Injury/Illness - Left Cervical; Disc Injury","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-02","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"PaytonII,Gary","player_display":"Payton II, Gary","reason":"Injury/Illness - Left Elbow; Fracture","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-02","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"PorterJr.,Otto","player_display":"Porter Jr., Otto","reason":"Injury/Illness - Left Foot; Soreness","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-02","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"Wiseman,James","player_display":"Wiseman, James","reason":"Injury/Illness - Right Knee; Injury Management","status":"Out","team":"GSW","team_display":"Golden State Warriors"}
+{"kind":"report","observed_at":"2022-06-02T12:30:00+00:00","reconstructed":false,"report_date":"2022-06-02","v":1}
+{"game_date":"2022-06-02","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"WilliamsIII,Robert","player_display":"Williams III, Robert","reason":"Injury/Illness - Left Knee; Soreness","status":"Questionable","team":"BOS","team_display":"Boston Celtics"}
+{"kind":"report","observed_at":"2022-06-02T21:30:00+00:00","reconstructed":false,"report_date":"2022-06-02","v":1}
+{"kind":"report","observed_at":"2022-06-02T23:30:00+00:00","reconstructed":false,"report_date":"2022-06-02","v":1}
+{"game_date":"2022-06-02","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"WilliamsIII,Robert","player_display":"Williams III, Robert","reason":"Injury/Illness - Left Knee; Soreness","status":"Available","team":"BOS","team_display":"Boston Celtics"}
+{"kind":"report","observed_at":"2022-06-03T00:30:00+00:00","reconstructed":false,"report_date":"2022-06-02","v":1}
+{"game_date":"2022-06-02","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"Iguodala,Andre","player_display":"Iguodala, Andre","reason":"Injury/Illness - Left Cervical; Disc Injury","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-02","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"PaytonII,Gary","player_display":"Payton II, Gary","reason":"Injury/Illness - Left Elbow; Fracture","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-02","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"PorterJr.,Otto","player_display":"Porter Jr., Otto","reason":"Injury/Illness - Left Foot; Soreness","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
+{"kind":"report","observed_at":"2022-06-05T12:30:00+00:00","reconstructed":false,"report_date":"2022-06-05","v":1}
+{"game_date":"2022-06-05","game_time":"08:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"WilliamsIII,Robert","player_display":"Williams III, Robert","reason":"Injury/Illness - Left Knee; Soreness","status":"Questionable","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2022-06-05","game_time":"08:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"Iguodala,Andre","player_display":"Iguodala, Andre","reason":"Injury/Illness - Left Cervical; Disc Injury","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-05","game_time":"08:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"PaytonII,Gary","player_display":"Payton II, Gary","reason":"Injury/Illness - Left Elbow; Fracture","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-05","game_time":"08:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"PorterJr.,Otto","player_display":"Porter Jr., Otto","reason":"Injury/Illness - Left Foot; Soreness","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-05","game_time":"08:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"Wiseman,James","player_display":"Wiseman, James","reason":"Injury/Illness - Right Knee; Injury Management","status":"Out","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-02","kind":"drop","player":"WilliamsIII,Robert","team":"BOS"}
+{"game_date":"2022-06-02","kind":"drop","player":"Iguodala,Andre","team":"GSW"}
+{"game_date":"2022-06-02","kind":"drop","player":"PaytonII,Gary","team":"GSW"}
+{"game_date":"2022-06-02","kind":"drop","player":"PorterJr.,Otto","team":"GSW"}
+{"game_date":"2022-06-02","kind":"drop","player":"Wiseman,James","team":"GSW"}
+{"kind":"report","observed_at":"2022-06-05T21:30:00+00:00","reconstructed":false,"report_date":"2022-06-05","v":1}
+{"game_date":"2022-06-05","game_time":"08:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"Iguodala,Andre","player_display":"Iguodala, Andre","reason":"Injury/Illness - Right Knee; Inflammation","status":"Out","team":"GSW","team_display":"Golden State Warriors"}
+{"kind":"report","observed_at":"2022-06-05T22:30:00+00:00","reconstructed":false,"report_date":"2022-06-05","v":1}
+{"game_date":"2022-06-05","game_time":"08:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"WilliamsIII,Robert","player_display":"Williams III, Robert","reason":"Injury/Illness - Left Knee; Soreness","status":"Available","team":"BOS","team_display":"Boston Celtics"}
+{"kind":"report","observed_at":"2022-06-05T23:30:00+00:00","reconstructed":false,"report_date":"2022-06-05","v":1}
+{"game_date":"2022-06-05","game_time":"08:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"PaytonII,Gary","player_display":"Payton II, Gary","reason":"Injury/Illness - Left Elbow; Fracture","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-05","game_time":"08:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"PorterJr.,Otto","player_display":"Porter Jr., Otto","reason":"Injury/Illness - Left Foot; Soreness","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
+{"kind":"report","observed_at":"2022-06-07T21:30:00+00:00","reconstructed":false,"report_date":"2022-06-07","v":1}
+{"game_date":"2022-06-08","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"WilliamsIII,Robert","player_display":"Williams III, Robert","reason":"Injury/Illness - Left Knee; Soreness","status":"Questionable","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2022-06-08","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"Iguodala,Andre","player_display":"Iguodala, Andre","reason":"Injury/Illness - Right Knee; Inflammation","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-08","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"PaytonII,Gary","player_display":"Payton II, Gary","reason":"Injury/Illness - Left Elbow; Fracture","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-08","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"PorterJr.,Otto","player_display":"Porter Jr., Otto","reason":"Injury/Illness - Left Foot; Soreness","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-08","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"Wiseman,James","player_display":"Wiseman, James","reason":"Injury/Illness - Right Knee; Injury Management","status":"Out","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-05","kind":"drop","player":"WilliamsIII,Robert","team":"BOS"}
+{"game_date":"2022-06-05","kind":"drop","player":"Iguodala,Andre","team":"GSW"}
+{"game_date":"2022-06-05","kind":"drop","player":"PaytonII,Gary","team":"GSW"}
+{"game_date":"2022-06-05","kind":"drop","player":"PorterJr.,Otto","team":"GSW"}
+{"game_date":"2022-06-05","kind":"drop","player":"Wiseman,James","team":"GSW"}
+{"kind":"report","observed_at":"2022-06-08T12:30:00+00:00","reconstructed":false,"report_date":"2022-06-08","v":1}
+{"kind":"report","observed_at":"2022-06-08T21:30:00+00:00","reconstructed":false,"report_date":"2022-06-08","v":1}
+{"kind":"report","observed_at":"2022-06-08T23:30:00+00:00","reconstructed":false,"report_date":"2022-06-08","v":1}
+{"game_date":"2022-06-08","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"WilliamsIII,Robert","player_display":"Williams III, Robert","reason":"Injury/Illness - Left Knee; Soreness","status":"Available","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2022-06-08","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"Iguodala,Andre","player_display":"Iguodala, Andre","reason":"Injury/Illness - Right Knee; Inflammation","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-08","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"PaytonII,Gary","player_display":"Payton II, Gary","reason":"Injury/Illness - Left Elbow; Fracture","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-08","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"PorterJr.,Otto","player_display":"Porter Jr., Otto","reason":"Injury/Illness - Left Foot; Soreness","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
+{"kind":"report","observed_at":"2022-06-09T00:30:00+00:00","reconstructed":false,"report_date":"2022-06-08","v":1}
+{"kind":"report","observed_at":"2022-06-09T21:30:00+00:00","reconstructed":false,"report_date":"2022-06-09","v":1}
+{"game_date":"2022-06-10","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"WilliamsIII,Robert","player_display":"Williams III, Robert","reason":"Injury/Illness - Left Knee; Soreness","status":"Questionable","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2022-06-10","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"Curry,Stephen","player_display":"Curry, Stephen","reason":"Injury/Illness - Left Foot; Soreness","status":"Probable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-10","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"Iguodala,Andre","player_display":"Iguodala, Andre","reason":"Injury/Illness - Right Knee; Inflammation","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-10","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"PorterJr.,Otto","player_display":"Porter Jr., Otto","reason":"Injury/Illness - Left Foot; Soreness","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-10","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"Wiseman,James","player_display":"Wiseman, James","reason":"Injury/Illness - Right Knee; Injury Management","status":"Out","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-08","kind":"drop","player":"WilliamsIII,Robert","team":"BOS"}
+{"game_date":"2022-06-08","kind":"drop","player":"Iguodala,Andre","team":"GSW"}
+{"game_date":"2022-06-08","kind":"drop","player":"PaytonII,Gary","team":"GSW"}
+{"game_date":"2022-06-08","kind":"drop","player":"PorterJr.,Otto","team":"GSW"}
+{"game_date":"2022-06-08","kind":"drop","player":"Wiseman,James","team":"GSW"}
+{"kind":"report","observed_at":"2022-06-10T12:30:00+00:00","reconstructed":false,"report_date":"2022-06-10","v":1}
+{"kind":"report","observed_at":"2022-06-10T21:30:00+00:00","reconstructed":false,"report_date":"2022-06-10","v":1}
+{"kind":"report","observed_at":"2022-06-10T23:30:00+00:00","reconstructed":false,"report_date":"2022-06-10","v":1}
+{"game_date":"2022-06-10","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"Curry,Stephen","player_display":"Curry, Stephen","reason":"Injury/Illness - Left Foot; Soreness","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-10","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"Iguodala,Andre","player_display":"Iguodala, Andre","reason":"Injury/Illness - Right Knee; Inflammation","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-10","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"PorterJr.,Otto","player_display":"Porter Jr., Otto","reason":"Injury/Illness - Left Foot; Soreness","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
+{"kind":"report","observed_at":"2022-06-11T00:30:00+00:00","reconstructed":false,"report_date":"2022-06-10","v":1}
+{"game_date":"2022-06-10","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"WilliamsIII,Robert","player_display":"Williams III, Robert","reason":"Injury/Illness - Left Knee; Soreness","status":"Available","team":"BOS","team_display":"Boston Celtics"}
+{"kind":"report","observed_at":"2022-06-12T21:30:00+00:00","reconstructed":false,"report_date":"2022-06-12","v":1}
+{"game_date":"2022-06-13","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"Iguodala,Andre","player_display":"Iguodala, Andre","reason":"Injury/Illness - Right Knee; Inflammation","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-13","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"PorterJr.,Otto","player_display":"Porter Jr., Otto","reason":"Injury/Illness - Left Foot; Soreness","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-13","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"Wiseman,James","player_display":"Wiseman, James","reason":"Injury/Illness - Right Knee; Injury Management","status":"Out","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-10","kind":"drop","player":"WilliamsIII,Robert","team":"BOS"}
+{"game_date":"2022-06-10","kind":"drop","player":"Curry,Stephen","team":"GSW"}
+{"game_date":"2022-06-10","kind":"drop","player":"Iguodala,Andre","team":"GSW"}
+{"game_date":"2022-06-10","kind":"drop","player":"PorterJr.,Otto","team":"GSW"}
+{"game_date":"2022-06-10","kind":"drop","player":"Wiseman,James","team":"GSW"}
+{"kind":"report","observed_at":"2022-06-13T12:30:00+00:00","reconstructed":false,"report_date":"2022-06-13","v":1}
+{"game_date":"2022-06-13","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"WilliamsIII,Robert","player_display":"Williams III, Robert","reason":"Injury/Illness - Left Knee; Soreness","status":"Questionable","team":"BOS","team_display":"Boston Celtics"}
+{"kind":"report","observed_at":"2022-06-13T21:30:00+00:00","reconstructed":false,"report_date":"2022-06-13","v":1}
+{"kind":"report","observed_at":"2022-06-13T23:30:00+00:00","reconstructed":false,"report_date":"2022-06-13","v":1}
+{"game_date":"2022-06-13","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"WilliamsIII,Robert","player_display":"Williams III, Robert","reason":"Injury/Illness - Left Knee; Soreness","status":"Available","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2022-06-13","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"Iguodala,Andre","player_display":"Iguodala, Andre","reason":"Injury/Illness - Right Knee; Inflammation","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-13","game_time":"09:00 (ET)","kind":"set","matchup":"BOS@GSW","player":"PorterJr.,Otto","player_display":"Porter Jr., Otto","reason":"Injury/Illness - Left Foot; Soreness","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
+{"kind":"report","observed_at":"2022-06-14T00:30:00+00:00","reconstructed":false,"report_date":"2022-06-13","v":1}
+{"kind":"report","observed_at":"2022-06-15T21:30:00+00:00","reconstructed":false,"report_date":"2022-06-15","v":1}
+{"game_date":"2022-06-16","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"WilliamsIII,Robert","player_display":"Williams III, Robert","reason":"Injury/Illness - Left Knee; Soreness","status":"Questionable","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2022-06-13","kind":"drop","player":"WilliamsIII,Robert","team":"BOS"}
+{"game_date":"2022-06-13","kind":"drop","player":"Iguodala,Andre","team":"GSW"}
+{"game_date":"2022-06-13","kind":"drop","player":"PorterJr.,Otto","team":"GSW"}
+{"game_date":"2022-06-13","kind":"drop","player":"Wiseman,James","team":"GSW"}
+{"kind":"report","observed_at":"2022-06-16T12:30:00+00:00","reconstructed":false,"report_date":"2022-06-16","v":1}
+{"game_date":"2022-06-16","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"Iguodala,Andre","player_display":"Iguodala, Andre","reason":"Injury/Illness - Right Knee; Inflammation","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-16","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"PorterJr.,Otto","player_display":"Porter Jr., Otto","reason":"Injury/Illness - Left Foot; Soreness","status":"Questionable","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-16","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"Wiseman,James","player_display":"Wiseman, James","reason":"Injury/Illness - Right Knee; Injury Management","status":"Out","team":"GSW","team_display":"Golden State Warriors"}
+{"kind":"report","observed_at":"2022-06-16T21:30:00+00:00","reconstructed":false,"report_date":"2022-06-16","v":1}
+{"kind":"report","observed_at":"2022-06-16T23:30:00+00:00","reconstructed":false,"report_date":"2022-06-16","v":1}
+{"kind":"report","observed_at":"2022-06-17T00:30:00+00:00","reconstructed":false,"report_date":"2022-06-16","v":1}
+{"game_date":"2022-06-16","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"WilliamsIII,Robert","player_display":"Williams III, Robert","reason":"Injury/Illness - Left Knee; Soreness","status":"Available","team":"BOS","team_display":"Boston Celtics"}
+{"game_date":"2022-06-16","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"Iguodala,Andre","player_display":"Iguodala, Andre","reason":"Injury/Illness - Right Knee; Inflammation","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
+{"game_date":"2022-06-16","game_time":"09:00 (ET)","kind":"set","matchup":"GSW@BOS","player":"PorterJr.,Otto","player_display":"Porter Jr., Otto","reason":"Injury/Illness - Left Foot; Soreness","status":"Available","team":"GSW","team_display":"Golden State Warriors"}
