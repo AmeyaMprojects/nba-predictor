@@ -5,6 +5,11 @@ switch-over bar. Nothing reads it to make live predictions in this plan: the
 current model (``stage1_settings.json``) stays live, and plan 3 decides the
 switch.
 
+Version 2 (plan 3) adds ``home``: the home-court setting (per-team
+shrinkage, the altitude allowance and the window), always written, with a
+flat shrinkage (``math.inf``) written as ``null``. A version 1 file (plan 1,
+no ``home`` key) still loads, as flat home court.
+
 A shipped correction is recorded by its training seasons and its
 gradient-boosting parameters only. The model itself is retrained from the
 database when the predictor is built (deterministic, ``random_state=0``) and
@@ -22,10 +27,11 @@ from predictor.model.availability import CALLS, STATUS_PRIORS
 from predictor.model.candidate import FORMULAS, feature_names
 from predictor.model.correction import GBM_PARAMS
 from predictor.model.player_ratings import PlayerParams
-from predictor.model.ratings import RatingParams
+from predictor.model.ratings import FLAT_HOME, HomeParams, RatingParams
 
 SETTINGS_PATH = Path(__file__).with_name("player_settings.json")
-_VERSION = 1
+_VERSION = 2
+_V1 = 1  # plan 1: no "home" key; read as flat home court
 HINT = "Run: predictor fit-player-model"
 
 
@@ -49,6 +55,7 @@ class PlayerModelSettings:
     # {"training_seasons": [...], "params": GBM_PARAMS}, or None.
     correction: dict | None
     tuning_games: int
+    home: HomeParams = FLAT_HOME
 
     def coefficient_tuple(self) -> tuple[float, ...]:
         return tuple(self.coefficients[name] for name in feature_names(self.formula))
@@ -70,8 +77,39 @@ def to_json(s: PlayerModelSettings) -> str:
             "params": dict(s.correction["params"]),
         },
         "tuning_games": s.tuning_games,
+        "home": {
+            "shrinkage": None if s.home.flat else s.home.shrinkage,
+            "altitude_allowance": s.home.altitude_allowance,
+            "window": s.home.window,
+        },
     }
     return json.dumps(doc, indent=2, sort_keys=True) + "\n"
+
+
+def _number(value, what: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{what} {value!r} is not a number")
+    return float(value)
+
+
+def _home(doc: dict) -> HomeParams:
+    """The ``home`` block: required in version 2, absent in version 1."""
+    if doc["version"] == _V1:
+        if "home" in doc:
+            raise ValueError("a version 1 file has no home-court setting")
+        return FLAT_HOME
+    h = doc["home"]
+    if not isinstance(h, dict):
+        raise ValueError(f"home must be an object, got {h!r}")
+    window = h["window"]
+    if isinstance(window, bool) or not isinstance(window, int):
+        raise ValueError(f"home window {window!r} is not a whole number")
+    shrinkage = h["shrinkage"]
+    return HomeParams(
+        shrinkage=math.inf if shrinkage is None else _number(shrinkage, "home shrinkage"),
+        altitude_allowance=_number(h["altitude_allowance"], "home altitude allowance"),
+        window=window,
+    )
 
 
 def _finite(value) -> float:
@@ -84,7 +122,9 @@ def _finite(value) -> float:
 def from_json(text: str) -> PlayerModelSettings:
     try:
         doc = json.loads(text)
-        if not isinstance(doc, dict) or doc.get("version") != _VERSION:
+        if not isinstance(doc, dict) or doc.get("version") not in (_VERSION, _V1) or (
+            isinstance(doc.get("version"), bool)
+        ):
             version = doc.get("version") if isinstance(doc, dict) else None
             raise SettingsError(
                 f"the player-model settings file is from an unknown version "
@@ -130,6 +170,7 @@ def from_json(text: str) -> PlayerModelSettings:
             availability=availability,
             correction=correction,
             tuning_games=int(doc["tuning_games"]),
+            home=_home(doc),
         )
     except SettingsError:
         raise

@@ -159,12 +159,8 @@ def test_fold_never_sees_its_own_season_per_team_grid(world, monkeypatch):
             assert seasons and all(s < season for s in seasons)
 
 
-def test_choices_unchanged_when_the_season_itself_is_corrupted(world, tmp_path):
-    """Corrupting every 2022-23 result, box score and injury report leaves
-    the choices for 2020-21 .. 2022-23 unchanged (fit on earlier seasons
-    only); the 2023-24 choice, which trains on 2022-23, does move."""
-    con = fixture_con(tmp_path)
-    _build(con)
+def _corrupt_2022_23(con) -> None:
+    """Every 2022-23 result, box score and injury report."""
     games = db.POINT_IN_TIME_TABLES["games"]
     players = db.POINT_IN_TIME_TABLES["player_games"]
     injuries = db.POINT_IN_TIME_TABLES["injury_status"]
@@ -173,10 +169,35 @@ def test_choices_unchanged_when_the_season_itself_is_corrupted(world, tmp_path):
     con.execute(f"UPDATE {players} SET pts = 60, plus_minus = 40 WHERE season = '2022-23'")
     con.execute(f"UPDATE {injuries} SET status = 'Out' WHERE game_date IN "
                 f"(SELECT game_date FROM {games} WHERE season = '2022-23')")
+
+
+def test_choices_unchanged_when_the_season_itself_is_corrupted(world, tmp_path):
+    """Corrupting every 2022-23 result, box score and injury report leaves
+    the choices for 2020-21 .. 2022-23 unchanged (fit on earlier seasons
+    only); the 2023-24 choice, which trains on 2022-23, does move."""
+    con = fixture_con(tmp_path)
+    _build(con)
+    _corrupt_2022_23(con)
     after = cand.evaluate_candidate(con, world["current"])
     before = world["cev"]
     for v_before, v_after in zip(before.variants, after.variants, strict=True):
         for season in ("2020-21", "2021-22", "2022-23"):
+            assert v_after.choices[season] == v_before.choices[season]
+        assert v_after.choices["2023-24"] != v_before.choices["2023-24"]
+    con.close()
+
+
+def test_per_team_choices_unchanged_when_the_season_itself_is_corrupted(world, tmp_path):
+    """The same corruption on the per-team grid (``SHRINKAGE_GRID``): the
+    choices for 2020-21 .. 2022-23, home court included, do not move."""
+    con = fixture_con(tmp_path)
+    _build(con)
+    _corrupt_2022_23(con)
+    after = cand.evaluate_candidate(con, world["current"], shrinkage_grid=SHRINKAGE_GRID)
+    before = world["variants"].per_team
+    for v_before, v_after in zip(before.variants, after.variants, strict=True):
+        for season in ("2020-21", "2021-22", "2022-23"):
+            assert v_after.choices[season].home == v_before.choices[season].home
             assert v_after.choices[season] == v_before.choices[season]
         assert v_after.choices["2023-24"] != v_before.choices["2023-24"]
     con.close()
@@ -522,7 +543,7 @@ def test_home_variants_share_one_world(world, monkeypatch):
         variants.flat = variants.per_team
 
 
-def test_home_edges_cover_last_season_teams(world):
+def test_edges_after_cover_last_season_teams(world):
     con = world["con"]
     games = fit_mod._load(con, VenueIndex.from_db(con))
     want = {
@@ -530,7 +551,7 @@ def test_home_edges_cover_last_season_teams(world):
         for t in (g.result.home_team, g.result.away_team)
     }
     flat_choice = world["cev"].final
-    edges = cand.home_edges(games, flat_choice)
+    edges = cand._edges_after(games, flat_choice)
     assert {e.team for e in edges} == want
     assert len(edges) == len(want)
     league = fit_mod.final_ratings(flat_choice.team, games, flat_choice.home).home_court()
@@ -539,7 +560,7 @@ def test_home_edges_cover_last_season_teams(world):
         assert e.home_games > 0 and e.away_games > 0
 
     per_team = dataclasses.replace(flat_choice, home=HomeParams(5.0, 0.5))
-    edges = cand.home_edges(games, per_team)
+    edges = cand._edges_after(games, per_team)
     ratings = fit_mod.final_ratings(per_team.team, games, per_team.home)
     assert [e.edge for e in edges] == sorted((e.edge for e in edges), reverse=True)
     for e in edges:
@@ -549,3 +570,33 @@ def test_home_edges_cover_last_season_teams(world):
             ratings.home_court(e.team),
         )
     assert len({round(e.edge, 9) for e in edges}) > 1
+
+
+def test_home_edges_use_the_world_and_the_per_team_final_choice(world):
+    """``home_edges(variants)`` replays every warm-up and tuning game (the
+    variants' own world) with the per-team variant's final choice."""
+    con = world["con"]
+    variants = world["variants"]
+    games = fit_mod._load(con, VenueIndex.from_db(con))
+    assert list(variants.games) == games
+    assert cand.home_edges(variants) == cand._edges_after(games, variants.per_team.final)
+    per_team = dataclasses.replace(variants.per_team.final, home=HomeParams(5.0, 0.5))
+    tweaked = dataclasses.replace(
+        variants, per_team=dataclasses.replace(variants.per_team, final=per_team)
+    )
+    assert cand.home_edges(tweaked) == cand._edges_after(games, per_team)
+
+
+def test_edges_after_refuses_the_wrong_games(world):
+    con = world["con"]
+    games = fit_mod._load(con, VenueIndex.from_db(con))
+    choice = world["cev"].final
+    with pytest.raises(ValueError, match="last tuning season"):
+        cand._edges_after([g for g in games if g.result.season != TUNING_SEASONS[-1]], choice)
+    with pytest.raises(ValueError, match="order"):
+        cand._edges_after(list(reversed(games)), choice)
+    test_game = dataclasses.replace(
+        games[-1], result=dataclasses.replace(games[-1].result, season="2026-27")
+    )
+    with pytest.raises(ValueError, match="test season"):
+        cand._edges_after(games + [test_game], choice)

@@ -8,6 +8,7 @@ data/, the committed settings files, or the network.
 from __future__ import annotations
 
 import dataclasses
+import math
 import os
 
 import pytest
@@ -21,7 +22,7 @@ from predictor.model import settings as model_settings
 from predictor.model.availability import CALLS, STATUS_PRIORS
 from predictor.model.correction import GBM_PARAMS
 from predictor.model.player_ratings import PlayerParams
-from predictor.model.ratings import RatingParams
+from predictor.model.ratings import FLAT_HOME, HomeParams, RatingParams
 
 NOT_MET = "Switch-over bar not met -- nothing was saved; the current model stays live."
 
@@ -60,10 +61,79 @@ def test_settings_round_trip():
 
 
 def test_settings_rejects_wrong_version():
-    text = pset.to_json(_settings()).replace('"version": 1', '"version": 2')
-    with pytest.raises(pset.SettingsError) as exc:
-        pset.from_json(text)
-    assert str(exc.value).endswith("Run: predictor fit-player-model")
+    for version in ('"version": 3', '"version": 0', '"version": "2"'):
+        text = pset.to_json(_settings()).replace('"version": 2', version)
+        with pytest.raises(pset.SettingsError) as exc:
+            pset.from_json(text)
+        assert str(exc.value).endswith("Run: predictor fit-player-model")
+
+
+def test_settings_v1_file_loads_with_flat_home():
+    """The committed (plan 1, version 1) file has no "home" key and loads as
+    flat home court."""
+    import json
+
+    text = pset.SETTINGS_PATH.read_text()
+    assert json.loads(text)["version"] == 1
+    s = pset.from_json(text)
+    assert s.home.flat is True
+    assert s.home == FLAT_HOME
+
+
+def test_settings_v1_with_home_key_is_rejected():
+    import json
+
+    doc = json.loads(pset.to_json(_settings(home=HomeParams(150.0, 0.66))))
+    doc["version"] = 1
+    with pytest.raises(pset.SettingsError):
+        pset.from_json(json.dumps(doc))
+
+
+def test_settings_v2_round_trip_with_inf():
+    import json
+
+    s = _settings(home=HomeParams(math.inf, 0.66))
+    text = pset.to_json(s)
+    doc = json.loads(text)
+    assert doc["version"] == 2
+    assert doc["home"] == {"shrinkage": None, "altitude_allowance": 0.66, "window": 164}
+    assert '"shrinkage": null' in text
+    assert pset.from_json(text) == s
+    team = _settings(home=HomeParams(150.0, 0.658231, window=100))
+    assert json.loads(pset.to_json(team))["home"] == {
+        "shrinkage": 150.0, "altitude_allowance": 0.658231, "window": 100}
+    assert pset.from_json(pset.to_json(team)) == team
+    # Flat is written too: "home" is always present in version 2.
+    assert json.loads(pset.to_json(_settings()))["home"] == {
+        "shrinkage": None, "altitude_allowance": 0.0, "window": 164}
+
+
+def test_settings_from_candidate_copies_final_home(monkeypatch):
+    """``settings_from_candidate`` copies the final choice's home court."""
+    from predictor.model import player_stage1 as ps1
+
+    names = cand.feature_names("box")
+    final = cand.CandidateChoice(
+        team=RatingParams(0.05, 20.0, 0.33, 400), player=PlayerParams(1500.0, 0.4),
+        formula="box", w=0.25, coefficients=tuple(0.1 for _ in names),
+        feature_names=names, sigma=12.0, games=10, home=HomeParams(150.0, 0.66),
+    )
+    winner = dataclasses.replace(_StubResult(), half_life=None)
+    cev = _StubCev(final=final, winner=winner, listings=[])
+    s = ps1.settings_from_candidate(None, cev, None)
+    assert s.home == HomeParams(150.0, 0.66)
+
+
+@dataclasses.dataclass(frozen=True)
+class _StubResult:
+    half_life: float | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class _StubCev:
+    final: object
+    winner: object
+    listings: list
 
 
 @pytest.mark.parametrize("mutate", [
@@ -81,6 +151,15 @@ def test_settings_rejects_wrong_version():
     lambda d: d["team"].update(margin_cap=float("inf")),
     lambda d: d["team"].update(season_regression=1.5),
     lambda d: d["team"].update(season_regression=float("nan")),
+    lambda d: d.pop("home"),
+    lambda d: d.update(home=None),
+    lambda d: d["home"].update(shrinkage=-1.0),
+    lambda d: d["home"].update(shrinkage="150"),
+    lambda d: d["home"].update(altitude_allowance=None),
+    lambda d: d["home"].update(window=164.5),
+    lambda d: d["home"].update(window=True),
+    lambda d: d["home"].update(window=0),
+    lambda d: d["home"].pop("window"),
 ])
 def test_settings_rejects_bad_files(mutate):
     import json
@@ -165,6 +244,46 @@ def test_fit_player_model_saves_when_bar_met(tmp_path, monkeypatch):
     assert set(s.availability) == set(CALLS)
     assert s.tuning_games > 0
     assert stage1_path.stat().st_mtime == 1_000_000_000
+
+
+def test_fit_player_model_bar_uses_per_team_variant(tmp_path, monkeypatch):
+    """The bar compares the current live model with the per-team variant's
+    walk-forward, and the saved settings carry the per-team final choice."""
+    from predictor.model import correction
+
+    player_path, _ = _cli_db(tmp_path, monkeypatch)
+    seen: dict = {}
+    real_variants = cand.evaluate_home_variants
+    real_evaluate = cli._run_evaluation
+
+    def variants_spy(*args, **kwargs):
+        seen["variants"] = real_variants(*args, **kwargs)
+        return seen["variants"]
+
+    def evaluate_spy(*args, **kwargs):
+        seen["ev"] = real_evaluate(*args, **kwargs)
+        return seen["ev"]
+
+    def bar_spy(current, candidate, choice):
+        seen["bar"] = (current, candidate, choice)
+        return _bar(True)
+
+    monkeypatch.setattr(cand, "evaluate_home_variants", variants_spy)
+    monkeypatch.setattr(cli, "_run_evaluation", evaluate_spy)
+    monkeypatch.setattr(cand, "switch_over_bar", bar_spy)
+    monkeypatch.setattr(correction, "correction_helps", lambda *a, **k: False)
+    result = CliRunner().invoke(cli.app, ["fit-player-model"])
+    assert result.exit_code == 0, result.output
+    variants = seen["variants"]
+    current, candidate, choice = seen["bar"]
+    assert current is seen["ev"].winner.predictions
+    assert candidate is variants.per_team.winner.final_call.predictions
+    assert candidate is not variants.flat.winner.final_call.predictions
+    assert choice is variants.per_team.final
+    saved = pset.load(player_path)
+    assert saved.home == variants.per_team.final.home
+    assert saved.team == variants.per_team.final.team
+    assert saved.coefficient_tuple() == variants.per_team.final.coefficients
 
 
 def test_fit_player_model_without_player_logs(tmp_path, monkeypatch):

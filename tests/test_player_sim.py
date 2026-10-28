@@ -25,6 +25,7 @@ from player_fixtures import (
     add_report,
     add_team_rows,
     build_player_fixture,
+    early_at,
     final_at,
     player_index,
     report_name,
@@ -374,6 +375,22 @@ def test_report_lag_hides_report_inside_lag(con, monkeypatch):
     assert lagged[G3].final.no_report is True
     no_lag, _ = _run(con, report_lag=timedelta(0))
     assert no_lag[G3].final.injury_gap["box"] != 0.0
+
+
+def test_report_lag_hides_report_inside_lag_at_early_call(con, monkeypatch):
+    """The lag applies to the early call too: a report 10 minutes before
+    12:30 UTC is hidden at the early call (and seen at the final call)."""
+    build_player_fixture(con)
+    _force_ratings(monkeypatch)
+    add_report(con, early_at(D3) - timedelta(minutes=10), D3, "BOS", STAR_NAME, "Out")
+    lagged, stats = _run_default_lag(con)
+    assert lagged[G3].early.no_report is True
+    assert lagged[G3].early.injury_gap == {"box": 0.0, "pm": 0.0}
+    assert lagged[G3].final.injury_gap["box"] != 0.0
+    assert stats.no_report["early"][SEASON] == 3
+    no_lag, _ = _run(con, report_lag=timedelta(0))
+    assert no_lag[G3].early.injury_gap["box"] != 0.0
+    assert no_lag[G3].early.report_at == early_at(D3) - timedelta(minutes=10)
 
 
 def test_report_exactly_at_lag_counts(con, monkeypatch):

@@ -8,6 +8,7 @@ a small fixture database in tmp_path; none touches data/ or the network.
 from __future__ import annotations
 
 import dataclasses
+import math
 from collections import Counter
 from datetime import UTC, date, datetime
 
@@ -25,7 +26,7 @@ from predictor.model.market import MarketView
 from predictor.model.player_ids import LinkReport
 from predictor.model.player_ratings import PlayerParams
 from predictor.model.player_sim import SimStats
-from predictor.model.ratings import RatingParams
+from predictor.model.ratings import FLAT_HOME, HomeParams, RatingParams
 
 SEASONS = evaluate_mod.WALK_FORWARD_SEASONS
 TITLE = "  Player model candidate (walk-forward, final call = tip-off minus 45 minutes)"
@@ -278,6 +279,94 @@ def test_format_candidate_top_ten_unlinked_only():
     assert "Name10, X" not in text
 
 
+# -- home court per team ---------------------------------------------------------
+
+HOME_TITLE = "  Home court per team (walk-forward; flat = one league-wide value)"
+LAG_LINE = (
+    "  Reports count only from 15 minutes before each call time (live runs fetch every "
+    "15 minutes)."
+)
+
+
+def _home_variants(per_team_home: dict[str, HomeParams], final_home: HomeParams):
+    """Flat: ``_cev(3)``. Per team: ``_cev(4)`` with the given homes."""
+    flat, _ = _cev(better=3)
+    per_team, _ = _cev(better=4)
+    choices = {
+        s: dataclasses.replace(c, home=per_team_home.get(s, FLAT_HOME))
+        for s, c in per_team.winner.choices.items()
+    }
+    winner = dataclasses.replace(per_team.winner, choices=choices)
+    per_team = dataclasses.replace(
+        per_team, variants=(winner,), winner=winner,
+        final=dataclasses.replace(per_team.final, home=final_home),
+    )
+    return cand.HomeVariants(flat=flat, per_team=per_team, games=())
+
+
+EDGES = [
+    cand.TeamHomeEdge("DEN", 164, 164, 5.43, 3.12),
+    cand.TeamHomeEdge("BOS", 120, 118, 2.0, 2.41),
+    cand.TeamHomeEdge("UTA", 164, 163, -0.75, 1.98),
+]
+
+
+def test_format_home_court_lists_every_team_edge():
+    variants = _home_variants({"2022-23": HomeParams(150.0, 0.66)}, HomeParams(150.0, 0.66))
+    text = cand.format_home_court(variants, EDGES, 1.2345)
+    assert "Home court per team" in text
+    assert "DEN" in text
+    assert "Altitude is a separate term" in text
+    lines = text.splitlines()
+    assert lines[0] == HOME_TITLE
+    assert "  2021-22  flat" in lines
+    assert "  2022-23  shrinkage 150 games" in lines
+    for season in SEASONS:
+        assert any(ln.startswith(f"  {season}  ") for ln in lines)
+    assert "  DEN  +3.1  (own +5.4 from 164 home / 164 away games)" in lines
+    assert "  BOS  +2.4  (own +2.0 from 120 home / 118 away games)" in lines
+    assert "  UTA  +2.0  (own -0.8 from 164 home / 163 away games)" in lines
+    assert lines.index("  DEN  +3.1  (own +5.4 from 164 home / 164 away games)") < lines.index(
+        "  UTA  +2.0  (own -0.8 from 164 home / 163 away games)")
+    assert (
+        "  Altitude is a separate term: +1.23 points, not inside DEN's or UTA's edge."
+    ) in lines
+    assert LAG_LINE in lines
+    assert "  Per-team home court: kept" in lines
+    flat_v, per_v = variants.flat.winner.final_call, variants.per_team.winner.final_call
+    flat_row = next(ln for ln in lines if ln.strip().startswith("flat "))
+    team_row = next(ln for ln in lines if ln.strip().startswith("per team "))
+    assert f"{flat_v.brier:.4f}" in flat_row and f"{flat_v.log_loss:.4f}" in flat_row
+    assert f"{flat_v.accuracy * 100:.1f}%" in flat_row
+    assert f"{per_v.brier:.4f}" in team_row and f"{per_v.log_loss:.4f}" in team_row
+    assert all(len(ln) <= 96 for ln in lines)
+
+
+def test_format_home_court_kept_but_walk_forward_not_better_says_so():
+    variants = _home_variants({"2022-23": HomeParams(150.0, 0.66)}, HomeParams(150.0, 0.66))
+    plain = cand.format_home_court(variants, EDGES, 0.0)
+    assert "did not beat flat" not in _flat(plain)
+    # Swap the two walk-forwards, keeping a per-team final choice.
+    worse = dataclasses.replace(variants.flat, final=variants.per_team.final)
+    swapped = dataclasses.replace(variants, flat=variants.per_team, per_team=worse)
+    text = cand.format_home_court(swapped, EDGES, 0.0)
+    assert "  Per-team home court: kept" in text.splitlines()
+    assert "did not beat flat on both scores" in _flat(text)
+    assert all(len(ln) <= 96 for ln in text.splitlines())
+
+
+def test_format_home_court_dropped_when_flat_wins():
+    variants = _home_variants({}, HomeParams(math.inf, 0.66))
+    text = cand.format_home_court(variants, EDGES, -0.5)
+    assert (
+        "  Per-team home court: dropped -- the flat league value scored as well or better"
+    ) in text.splitlines()
+    assert "Per-team home court: kept" not in text
+    for season in SEASONS:
+        assert f"  {season}  flat" in text.splitlines()
+    assert "Altitude is a separate term: -0.50 points" in text
+
+
 def test_evaluation_no_longer_prints_always_pick_home(tmp_path):
     from model_fixtures import fixture_con
 
@@ -322,6 +411,19 @@ def test_current_model_numbers_unchanged(tmp_path, monkeypatch):
     con = _cli_db(tmp_path, monkeypatch)
     _build(con)
     con.close()
+    seen: list = []
+    real_variants, real_bar = cand.evaluate_home_variants, cand.switch_over_bar
+
+    def variants_spy(*args, **kwargs):
+        seen.append(real_variants(*args, **kwargs))
+        return seen[-1]
+
+    def bar_spy(current, candidate, choice):
+        seen.append((candidate, choice))
+        return real_bar(current, candidate, choice)
+
+    monkeypatch.setattr(cand, "evaluate_home_variants", variants_spy)
+    monkeypatch.setattr(cand, "switch_over_bar", bar_spy)
     runner = CliRunner()
     without = runner.invoke(cli.app, ["evaluate-model", "--no-candidate"])
     assert without.exit_code == 0, without.stdout
@@ -343,3 +445,29 @@ def test_current_model_numbers_unchanged(tmp_path, monkeypatch):
         cur = [ln for ln in without.stdout.splitlines() if key in ln]
         assert cur and all(ln in head.splitlines() for ln in cur)
     assert tuning.GRID_K == (0.05,)  # the shrunk grid was used
+
+    # The bar is scored for the per-team variant (when no correction is
+    # included, its walk-forward predictions), and the report adds the flat
+    # line and the home-court section.
+    variants, (candidate, choice) = seen[0], seen[1]
+    assert isinstance(variants, cand.HomeVariants)
+    assert choice is variants.per_team.final
+    if "Correction model: included" not in section:
+        assert candidate is variants.per_team.winner.final_call.predictions
+    flat = variants.flat.winner.final_call
+    assert (
+        f"  Player model with flat home court (plan 1): Brier {flat.brier:.4f}, "
+        f"log loss {flat.log_loss:.4f}, accuracy {flat.accuracy * 100:.1f}%"
+    ) in section.splitlines()
+    assert HOME_TITLE in section.splitlines()
+    assert LAG_LINE in section.splitlines()
+    for edge in cand.home_edges(variants):
+        assert (
+            f"  {edge.team}  {edge.edge:+.1f}  (own {edge.raw:+.1f} from "
+            f"{edge.home_games} home / {edge.away_games} away games)"
+        ) in section.splitlines()
+    altitude = dict(zip(choice.feature_names, choice.coefficients, strict=True))["altitude"]
+    assert (
+        f"  Altitude is a separate term: {altitude:+.2f} points, not inside DEN's or "
+        "UTA's edge."
+    ) in section.splitlines()

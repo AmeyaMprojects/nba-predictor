@@ -523,6 +523,9 @@ def evaluate_candidate(
 class HomeVariants:
     flat: CandidateEvaluation
     per_team: CandidateEvaluation
+    # The shared world's games: every warm-up and tuning game, in replay
+    # order (``fit._load``). ``home_edges`` replays them.
+    games: tuple[_Game, ...]
 
 
 def evaluate_home_variants(
@@ -536,7 +539,7 @@ def evaluate_home_variants(
     flat = _evaluate(world, stats, first, listings, current, progress, (math.inf,))
     progress("home court: per team...")
     per_team = _evaluate(world, stats, first, listings, current, progress, SHRINKAGE_GRID)
-    return HomeVariants(flat=flat, per_team=per_team)
+    return HomeVariants(flat=flat, per_team=per_team, games=tuple(world.games))
 
 
 @dataclass(frozen=True)
@@ -548,10 +551,34 @@ class TeamHomeEdge:
     edge: float  # the home court the team gets (league value + shrunk edge)
 
 
-def home_edges(games: list[_Game], choice: CandidateChoice) -> list[TeamHomeEdge]:
-    """Each team's home court after every game, for the teams that played in
-    the last tuning season; highest edge first, then team."""
-    ratings = fit.final_ratings(choice.team, games, choice.home)
+def home_edges(variants: HomeVariants) -> list[TeamHomeEdge]:
+    """Each team's home court under the per-team variant's final choice
+    (fitted on every tuning season: the setting that would ship), after
+    replaying every warm-up and tuning game of the variants' own world.
+    Teams that played in the last tuning season; highest edge first, then
+    team.
+
+    Taking the whole ``HomeVariants`` keeps the two inputs together: a fold
+    choice, the flat variant, or a partial list of games cannot be passed
+    by mistake.
+    """
+    return _edges_after(list(variants.games), variants.per_team.final)
+
+
+def _edges_after(games: Sequence[_Game], choice: CandidateChoice) -> list[TeamHomeEdge]:
+    """``home_edges`` for any choice. ``games`` must be the world's games:
+    no test season, in replay order, and including the last tuning season
+    (the edges are as of its end)."""
+    if any(g.result.season in TEST_SEASONS for g in games):
+        raise ValueError("home edges were given a test season game; refusing")
+    if not any(g.result.season == TUNING_SEASONS[-1] for g in games):
+        raise ValueError(
+            f"home edges need the games of the last tuning season ({TUNING_SEASONS[-1]})"
+        )
+    keys = [(g.result.game_date, g.result.game_id) for g in games]
+    if keys != sorted(keys):
+        raise ValueError("home edges need the games in replay order (date, then game id)")
+    ratings = fit.final_ratings(choice.team, list(games), choice.home)
     teams = {
         t for g in games if g.result.season == TUNING_SEASONS[-1]
         for t in (g.result.home_team, g.result.away_team)
@@ -997,4 +1024,86 @@ def format_candidate(
     lines += _market_block(market_final, market_current)
     lines.append("")
     lines += _data_quality(shipped.stats)
+    return "\n".join(lines)
+
+
+# -- home court per team (evaluate-model) ------------------------------------------
+
+HOME_TITLE = "  Home court per team (walk-forward; flat = one league-wide value)"
+HOME_KEPT = "  Per-team home court: kept"
+HOME_DROPPED = (
+    "  Per-team home court: dropped -- the flat league value scored as well or better"
+)
+REPORT_LAG_NOTE = (
+    "  Reports count only from 15 minutes before each call time (live runs fetch every "
+    "15 minutes)."
+)
+
+
+def _home_label(home: HomeParams) -> str:
+    return "flat" if home.flat else f"shrinkage {home.shrinkage:g} games"
+
+
+def flat_home_line(flat: CandidateEvaluation) -> str:
+    """The plan-1 (flat home court) candidate's pooled walk-forward scores."""
+    v = flat.winner.final_call
+    return (
+        f"  Player model with flat home court (plan 1): Brier {v.brier:.4f}, "
+        f"log loss {v.log_loss:.4f}, accuracy {v.accuracy * 100:.1f}%"
+    )
+
+
+def format_home_court(
+    variants: HomeVariants, edges: list[TeamHomeEdge], altitude: float
+) -> str:
+    """Flat against per-team home court, the shrinkage chosen per season,
+    and each team's home edge. Per-team is kept when the final choice (the
+    setting that would ship) is not flat: its fit, like every fold's, takes
+    a per-team shrinkage only on strictly lower error than flat."""
+    per_team = variants.per_team
+    lines = [HOME_TITLE]
+    lines += _wrap(
+        "Flat gives every team the league's home-court value. Per team adds each team's "
+        "own home edge (its home results minus its away results, against the ratings), "
+        "pulled toward the league value: shrinkage N means N games of evidence count as "
+        "much as the league value. Each season's shrinkage is chosen only on earlier "
+        "seasons."
+    )
+    for season, choice in sorted(per_team.winner.choices.items()):
+        lines.append(f"  {season}  {_home_label(choice.home)}")
+    lines.append(
+        f"  {TEST_SEASONS[0]}  {_home_label(per_team.final.home)}  "
+        "(fitted on all tuning seasons; used if the candidate went live)"
+    )
+    lines.append("")
+    lines.append(f"    {'':<10}  {'Brier':>8}{'log loss':>10}{'accuracy':>10}")
+    lines.append(f"    {'flat':<10}{_metrics_cells(variants.flat.winner.final_call.predictions)}")
+    lines.append(f"    {'per team':<10}{_metrics_cells(per_team.winner.final_call.predictions)}")
+    lines.append(HOME_DROPPED if per_team.final.home.flat else HOME_KEPT)
+    flat_v, team_v = variants.flat.winner.final_call, per_team.winner.final_call
+    if not per_team.final.home.flat and not (
+        team_v.brier < flat_v.brier and team_v.log_loss < flat_v.log_loss
+    ):
+        lines += _wrap(
+            "It is kept because it fitted better on all tuning seasons, but its walk-forward "
+            f"did not beat flat on both scores (Brier {team_v.brier:.4f} against "
+            f"{flat_v.brier:.4f}, log loss {team_v.log_loss:.4f} against "
+            f"{flat_v.log_loss:.4f}). The switch-over bar above is what decides."
+        )
+    lines.append("")
+    lines += _wrap(
+        "Each team's home court in points at the end of the last tuning season, with the "
+        "setting above (league value plus the team's shrunk edge); own = the team's "
+        "unshrunk edge."
+    )
+    for e in edges:
+        lines.append(
+            f"  {e.team}  {e.edge:+.1f}  (own {e.raw:+.1f} from {e.home_games} home / "
+            f"{e.away_games} away games)"
+        )
+    lines.append(
+        f"  Altitude is a separate term: {altitude:+.2f} points, not inside DEN's or "
+        "UTA's edge."
+    )
+    lines.append(REPORT_LAG_NOTE)
     return "\n".join(lines)

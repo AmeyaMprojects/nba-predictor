@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import dataclasses
 import math
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 
 import pytest
 
@@ -28,6 +28,7 @@ from player_fixtures import (
     add_report,
     add_team_rows,
     build_player_fixture,
+    early_at,
     final_at,
     player_index,
     report_name,
@@ -43,7 +44,7 @@ from predictor.model.availability import CALLS, STATUS_PRIORS, InjuryHistory
 from predictor.model.player_ratings import PlayerParams
 from predictor.model.player_settings import PlayerModelSettings
 from predictor.model.player_sim import PlayerLines, simulate
-from predictor.model.ratings import RatingParams
+from predictor.model.ratings import FLAT_HOME, HomeParams, RatingParams
 from predictor.model.venues import VenueIndex
 
 TEAM = RatingParams(k=0.06, margin_cap=20.0, season_regression=0.3, hca_window=400)
@@ -132,7 +133,7 @@ def _replay(con, settings):
     lines = PlayerLines.from_db(con)
     history = InjuryHistory.from_db(con)
     feats, _ = simulate(games, lines, history, player_index(con), settings.player, [])
-    pre = fit_mod._simulate(settings.team, games)
+    pre = fit_mod._simulate(settings.team, games, settings.home)
     coef = settings.coefficient_tuple()
     out = {}
     for g, (gap, hc) in zip(games, pre, strict=True):
@@ -192,6 +193,57 @@ def test_parity_with_simulation(con, order, monkeypatch):
     # The comparison is not trivial: both player terms move somewhere.
     assert injuries >= 3 and roster >= 3
     assert len(keys) == 2 * 6
+
+
+def test_parity_with_simulation_with_team_home_and_lag(con):
+    """Per-team home court and the 15-minute report lag: the predictor
+    built with ``report_lag=REPLAY_REPORT_LAG`` matches the replay for every
+    game and both calls. Reports inside the lag (10 minutes before G3's
+    final call and 5 minutes before G5's early call) are hidden from both."""
+    from predictor.model.player_sim import REPLAY_REPORT_LAG
+
+    add_report(con, final_at(D3) - timedelta(minutes=10), D3, "NYK",
+               report_name(ROSTERS["NYK"][13]), "Out")
+    add_report(con, early_at(D5) - timedelta(minutes=5), D5, "NYK",
+               report_name(ROSTERS["NYK"][15]), "Out")
+    settings = dataclasses.replace(_settings(), home=HomeParams(150.0, 0.66))
+    expected = _replay(con, settings)
+    predictor = ps1.PlayerStage1Predictor(con, settings, report_lag=REPLAY_REPORT_LAG)
+    unlagged = ps1.PlayerStage1Predictor(con, settings)
+    flat = ps1.PlayerStage1Predictor(
+        con, dataclasses.replace(settings, home=FLAT_HOME), report_lag=REPLAY_REPORT_LAG
+    )
+    lag_matters = home_matters = 0
+    for key in sorted(expected, key=lambda k: (expected[k][1], k)):
+        g, at, sim_spread, *_ = expected[key]
+        view = AsOfView(con, at)
+        b = predictor.explain(_game(g), view, key[1])
+        assert b.spread == pytest.approx(sim_spread, abs=1e-9), key
+        lag_matters += abs(unlagged.explain(_game(g), view, key[1]).spread - b.spread) > 1e-9
+        home_matters += abs(flat.explain(_game(g), view, key[1]).home - b.home) > 1e-9
+    assert len(expected) == 2 * 6
+    # Neither the lag nor the per-team home court is a no-op here.
+    assert lag_matters >= 2
+    assert home_matters >= 1
+
+
+def test_live_predictor_has_no_report_lag(con):
+    """Live (the default) reads every report visible at the call time."""
+    predictor = ps1.PlayerStage1Predictor(con, _settings())
+    add_report(con, final_at(D3) - timedelta(minutes=10), D3, "NYK",
+               report_name(ROSTERS["NYK"][13]), "Out")
+    game = GameToPredict("0022400003", SEASON, D3, "BOS", "NYK")
+    b = predictor.explain(game, AsOfView(con, final_at(D3)), "final")
+    assert ("NYK", "Ka Kent", "Out") in b.absent
+    lagged = ps1.PlayerStage1Predictor(con, _settings(), report_lag=timedelta(minutes=15))
+    b = lagged.explain(game, AsOfView(con, final_at(D3)), "final")
+    assert ("NYK", "Ka Kent", "Out") not in b.absent
+
+
+def test_stage1_settings_carry_home():
+    s = dataclasses.replace(_settings(), home=HomeParams(150.0, 0.66))
+    assert ps1._stage1_settings(s).home == HomeParams(150.0, 0.66)
+    assert ps1._stage1_settings(_settings()).home == FLAT_HOME
 
 
 def test_parity_of_correction_inputs(con):

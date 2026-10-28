@@ -12,8 +12,10 @@ expected home margin from what ``view`` shows and nothing else:
   books are read ``as_of`` the game date, after every earlier day and
   before any row of that day.
 - The injury snapshot is the latest visible report listing the game date
-  (``InjuryHistory.from_view``), and play probabilities come from the
-  settings' availability table for the call.
+  (``InjuryHistory.from_view``), read at ``view.as_of - report_lag`` (0 live;
+  the replay's 15 minutes in the parity test), and play probabilities come
+  from the settings' availability table for the call.
+- Home court is per team when the settings' ``home`` is (plan 3).
 
 The per-call terms are computed by ``player_sim.call_terms``, the function
 the fast replay uses, so the two cannot drift apart; a parity test checks
@@ -33,7 +35,7 @@ import dataclasses
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import numpy as np
 
@@ -77,7 +79,7 @@ from predictor.model.player_sim import (
     collect_listings,
     simulate,
 )
-from predictor.model.ratings import FLAT_HOME, Result, win_probability
+from predictor.model.ratings import Result, win_probability
 from predictor.model.settings import TEST_SEASONS, TUNING_SEASONS, ModelSettings
 from predictor.model.stage1 import Stage1Predictor
 from predictor.model.venues import VenueIndex
@@ -168,6 +170,7 @@ def _stage1_settings(s: PlayerModelSettings) -> ModelSettings:
         sigma=s.sigma,
         half_life=s.half_life,
         tuning_games=s.tuning_games,
+        home=s.home,
     )
 
 
@@ -185,8 +188,14 @@ class _State:
 
 class PlayerStage1Predictor:
     def __init__(
-        self, con, settings: PlayerModelSettings, venues: VenueIndex | None = None
+        self, con, settings: PlayerModelSettings, venues: VenueIndex | None = None,
+        *, report_lag: timedelta = timedelta(0),
     ) -> None:
+        # Live calls use no lag (they read every report the view shows); the
+        # replay parity uses ``player_sim.REPLAY_REPORT_LAG``.
+        if report_lag < timedelta(0):
+            raise ValueError(f"report_lag must not be negative, got {report_lag}")
+        self.report_lag = report_lag
         self.settings = settings
         self.venues = venues if venues is not None else VenueIndex.from_db(con)
         self._team = Stage1Predictor(con, _stage1_settings(settings), self.venues)
@@ -269,7 +278,7 @@ class PlayerStage1Predictor:
         state = self._state_for(view, game.game_date)
         state.book.enter_season(game.season)
         d = game.game_date
-        snap = state.history.snapshot_at(d, view.as_of)
+        snap = state.history.snapshot_at(d, view.as_of - self.report_lag)
         terms = call_terms(
             (game.home_team, game.away_team), d, game.season, snap, state.linker,
             state.rosters, state.book, self._tables[call], state.lines.names,
@@ -351,9 +360,7 @@ def correction_rows(
     index = load_player_index(con)
     listings = collect_listings(con, games, history, index)
     feats, _ = simulate(games, lines, history, index, settings.player, listings)
-    # Home court per team: PlayerModelSettings gains ``home`` in plan 3
-    # Task 3; until then every settings file is flat.
-    pre = fit._simulate(settings.team, games, getattr(settings, "home", FLAT_HOME))
+    pre = fit._simulate(settings.team, games, settings.home)
     coef = settings.coefficient_tuple()
     out: dict[str, list[tuple[tuple[float, ...], float]]] = defaultdict(list)
     for g, (gap, hc) in zip(games, pre, strict=True):
@@ -421,6 +428,7 @@ def settings_from_candidate(
         availability=availability,
         correction=None,
         tuning_games=final.games,
+        home=final.home,
     )
     if corrected is None:
         return settings
