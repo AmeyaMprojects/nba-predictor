@@ -346,3 +346,42 @@ def test_job_with_no_matching_games_raises_fit_error():
     database fixture."""
     with pytest.raises(fit_mod.FitError, match="1999-00"):
         tuning.choose([], [tuning.Job(("1999-00",), None)])
+
+
+def test_home_is_passed_to_the_simulation(tmp_path, monkeypatch):
+    """`choose` and `spreads_and_outcomes` simulate with the given home-court
+    settings (flat by default)."""
+    from predictor.model.ratings import FLAT_HOME, HomeParams
+
+    con = fixture_con(tmp_path)
+    build_history(con, games_per_season=8)
+    games = _load(con)
+    con.close()
+    seen = []
+    real = tuning._simulate
+
+    def spy(params, games, home=FLAT_HOME):
+        seen.append(home)
+        return real(params, games, home)
+
+    monkeypatch.setattr(tuning, "_simulate", spy)
+    monkeypatch.setattr(tuning, "GRID_K", (0.05,))
+    monkeypatch.setattr(tuning, "GRID_CAP", (20.0,))
+    monkeypatch.setattr(tuning, "GRID_REGRESSION", (0.33,))
+    monkeypatch.setattr(tuning, "GRID_WINDOW", (400,))
+    job = tuning.Job(tuple(ms.TUNING_SEASONS), None)
+    home = HomeParams(5.0, 0.5)
+    chosen = tuning.choose(games, [job], home)[job]
+    tuning.choose(games, [job])
+    params = fit_mod.RatingParams(0.05, 20.0, 0.33, 400)
+    out = tuning.spreads_and_outcomes(games, params, chosen.coefficients,
+                                      ms.TUNING_SEASONS, home)
+    tuning.spreads_and_outcomes(games, params, chosen.coefficients, ms.TUNING_SEASONS)
+    assert seen == [home, home, FLAT_HOME, FLAT_HOME, home, FLAT_HOME]
+    pre = real(params, games, home)
+    by_id = {g.result.game_id: i for i, g in enumerate(games)}
+    for g, spread, _ in out:
+        gap, hc = pre[by_id[g.result.game_id]]
+        assert spread == pytest.approx(
+            gap + hc + sum(fit_mod.adj.astuple_terms(chosen.coefficients, g.x))
+        )

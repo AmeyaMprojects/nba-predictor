@@ -27,9 +27,11 @@ Per game and call:
   available (q = 1) and are counted per season.
 - ``roster_gap[f] = S_normal(home) - S_normal(away)`` and
   ``injury_gap[f] = (S_avail - S_normal)(home) - (S_avail - S_normal)(away)``.
-- The snapshot is the latest report at or before the call that lists the
-  game's date. It is a fallback when it is more than an hour older than the
-  call, or when a later report (at or before the call) did not list the date.
+- The snapshot is the latest report at or before ``call - report_lag``
+  (``REPLAY_REPORT_LAG``, 15 minutes, by default) that lists the game's date.
+  It is a fallback when it is more than an hour older than that lagged time,
+  or when a later report (at or before the lagged time) did not list the
+  date.
   With no report at all the injury gap is 0 and the call is "no report".
 - Games with no tip-off get both calls at 23:00 UTC on the game date.
 
@@ -85,6 +87,10 @@ from predictor.sources.player_games import RATING_SEASON_TYPES, PlayerGameRow
 
 NO_TIP_CALL_UTC = time(23, 0)
 FALLBACK_AFTER = timedelta(hours=1)
+# A report counts at call time T only if its header time is <= T - lag. The
+# live loop fetches the newest 15-minute slot, so a live call at T sees
+# reports up to about T - 7 to T - 22 minutes (plan 3, call 1).
+REPLAY_REPORT_LAG = timedelta(minutes=15)
 FORM_GAMES = 10
 CONTINUITY_GAMES = 5
 EXTRA_KEYS = ("recent_margin_gap", "pace_sum", "continuity_gap", "continuity_gap_early")
@@ -646,7 +652,8 @@ def _replay(
 
 
 def collect_listings(
-    con, games: list[_Game], history: InjuryHistory, index: PlayerIndex
+    con, games: list[_Game], history: InjuryHistory, index: PlayerIndex,
+    *, report_lag: timedelta = REPLAY_REPORT_LAG,
 ) -> list[Listing]:
     """Every linked rotation player in each call's snapshot, and whether he
     then played (a row for that game with at least one minute)."""
@@ -659,7 +666,7 @@ def collect_listings(
         calls, _ = _game_calls(g, lines.tip_index)
         played = lines.played.get(r.game_id, frozenset())
         for call in CALLS:
-            snap = history.snapshot_at(r.game_date, calls[call])
+            snap = history.snapshot_at(r.game_date, calls[call] - report_lag)
             listed = _snapshot_by_player(snap, r.season, linker)
             for lineup in _lineups((r.home_team, r.away_team), listed, rosters, r.game_date):
                 for pid, status in sorted(lineup.status.items()):
@@ -676,6 +683,8 @@ def simulate(
     index: PlayerIndex,
     params: PlayerParams,
     listings: list[Listing],
+    *,
+    report_lag: timedelta = REPLAY_REPORT_LAG,
 ) -> tuple[dict[str, GameFeatures], SimStats]:
     book = PlayerBook(params)
     linker = _Linker(index)
@@ -693,7 +702,10 @@ def simulate(
         r = g.result
         d = r.game_date
         teams = (r.home_team, r.away_team)
-        snap = history.snapshot_at(d, at)
+        # Reports count from ``report_lag`` before the call; the call time
+        # itself (and so ratings, rosters, minutes) is unchanged.
+        seen_at = at - report_lag
+        snap = history.snapshot_at(d, seen_at)
         if snap is not None:
             for (team, name) in snap.statuses:
                 if team in teams:
@@ -711,8 +723,10 @@ def simulate(
             no_report[call][r.season] += 1
             return CallFeatures(terms.roster_gap, terms.injury_gap, (), None, False, True)
         report_at = snap.observed_at
-        latest = history.latest_report_at(at)
-        fell_back = report_at < at - FALLBACK_AFTER or (latest is not None and latest > report_at)
+        latest = history.latest_report_at(seen_at)
+        fell_back = report_at < seen_at - FALLBACK_AFTER or (
+            latest is not None and latest > report_at
+        )
         if fell_back:
             fallback[call][r.season] += 1
         return CallFeatures(

@@ -28,6 +28,15 @@ settings chosen only on the tuning seasons strictly before it
 The six player simulations are shared by every fold and recency variant.
 The early call is scored with the same settings, applied to the early-call
 features.
+
+Home court per team (plan 3): ``home_court`` is the home team's own edge
+(``ratings.HomeParams``). Its shrinkage is searched walk-forward like the
+other settings: the grid (``(math.inf,)`` = flat by default, or
+``SHRINKAGE_GRID``) is the outermost loop, flat first, and only a strictly
+lower weighted MSE replaces the best, so per-team wins only on strictly lower
+error. The altitude allowance for a fold is the current model's altitude
+coefficient for that same fold (fitted on earlier seasons only).
+``evaluate_home_variants`` scores flat and per-team on one shared world.
 """
 
 from __future__ import annotations
@@ -52,7 +61,7 @@ from predictor.backtest.report import (
 )
 from predictor.backtest.replay import Prediction
 from predictor.model import evaluate as evaluate_mod
-from predictor.model import fit, tuning
+from predictor.model import fit, player_sim, tuning
 from predictor.model.adjustments import FEATURE_NAMES
 from predictor.model.availability import InjuryHistory, Listing
 from predictor.model.fit import FitError, _Game
@@ -64,9 +73,14 @@ from predictor.model.player_sim import (
     PlayerLines,
     SimStats,
     collect_listings,
-    simulate,
 )
-from predictor.model.ratings import RatingParams, win_probability
+from predictor.model.ratings import (
+    FLAT_HOME,
+    SHRINKAGE_GRID,
+    HomeParams,
+    RatingParams,
+    win_probability,
+)
 from predictor.model.settings import TEST_SEASONS, TUNING_SEASONS
 from predictor.model.venues import VenueIndex
 
@@ -128,6 +142,7 @@ class CandidateChoice:
     feature_names: tuple[str, ...]
     sigma: float
     games: int
+    home: HomeParams = FLAT_HOME
 
 
 @dataclass(frozen=True)
@@ -214,20 +229,26 @@ class _World:
     features: dict[PlayerParams, dict[str, GameFeatures]]
     # (params, formula, call) -> design matrix over every game, in game order
     designs: dict[tuple[PlayerParams, str, str], np.ndarray]
-    team: dict[RatingParams, np.ndarray]  # params -> (gap, home court) per game
+    # (params, home) -> (gap, home court) per game
+    team: dict[tuple[RatingParams, HomeParams], np.ndarray]
     margin: np.ndarray
     no_report: np.ndarray  # bool per game, final call
 
-    def team_sim(self, params: RatingParams) -> np.ndarray:
-        if params not in self.team:
-            self.team[params] = np.array(
-                fit._simulate(params, self.games), dtype=float
+    def team_sim(self, params: RatingParams, home: HomeParams = FLAT_HOME) -> np.ndarray:
+        # Flat output does not depend on the allowance or window (they only
+        # feed the per-team edges, which flat never reads), so every flat
+        # HomeParams shares one simulation.
+        key = (params, FLAT_HOME if home.flat else home)
+        if key not in self.team:
+            self.team[key] = np.array(
+                fit._simulate(params, self.games, home), dtype=float
             ).reshape(len(self.games), 2)
-        return self.team[params]
+        return self.team[key]
 
 
 def _fit_job(
-    world: _World, job: tuning.Job, team: RatingParams, season: str | None
+    world: _World, job: tuning.Job, team: RatingParams, season: str | None, *,
+    shrinkage_grid: tuple[float, ...], altitude_allowance: float,
 ) -> CandidateChoice:
     games = world.games
     weights = tuning.season_weights(job.seasons, job.half_life)
@@ -245,20 +266,26 @@ def _fit_job(
         )
     fit_games = [games[i] for i in idx]
     w = np.array([weights[g.result.season] for g in fit_games])
-    pre = world.team_sim(team)
-    gap, hc = pre[idx, 0], pre[idx, 1]
     margin = world.margin[idx]
 
+    # Shrinkage outermost, flat first; strictly lower MSE only, so a tie
+    # keeps the earlier (flatter) setting.
     best = None
-    for player in PLAYER_GRID:
-        for formula in FORMULAS:
-            X = world.designs[(player, formula, "final")][idx]
-            for wt in W_GRID:
-                y = margin - (1.0 - wt) * gap - hc
-                coef, mse = _weighted_lstsq(fit_games, X, y, w, season=season)
-                if best is None or mse < best[0]:
-                    best = (mse, player, formula, wt, coef)
-    _, player, formula, wt, coef = best
+    for shrinkage in shrinkage_grid:
+        home = HomeParams(shrinkage, altitude_allowance)
+        pre = world.team_sim(team, home)
+        gap, hc = pre[idx, 0], pre[idx, 1]
+        for player in PLAYER_GRID:
+            for formula in FORMULAS:
+                X = world.designs[(player, formula, "final")][idx]
+                for wt in W_GRID:
+                    y = margin - (1.0 - wt) * gap - hc
+                    coef, mse = _weighted_lstsq(fit_games, X, y, w, season=season)
+                    if best is None or mse < best[0]:
+                        best = (mse, home, player, formula, wt, coef)
+    _, home, player, formula, wt, coef = best
+    pre = world.team_sim(team, home)
+    gap, hc = pre[idx, 0], pre[idx, 1]
     coefficients = tuple(round(float(c), 6) + 0.0 for c in coef)  # never -0.0
     X = world.designs[(player, formula, "final")][idx]
     spreads = [
@@ -275,6 +302,7 @@ def _fit_job(
         feature_names=feature_names(formula),
         sigma=sigma,
         games=int(idx.size),
+        home=home,
     )
 
 
@@ -327,7 +355,7 @@ def _predict(
 ) -> None:
     """Predict the ``002`` games of ``season`` (the same games
     ``tuning.spreads_and_outcomes`` scores for the current model)."""
-    pre = world.team_sim(choice.team)
+    pre = world.team_sim(choice.team, choice.home)
     X = world.designs[(choice.player, choice.formula, call)]
     for i, g in enumerate(world.games):
         r = g.result
@@ -372,15 +400,11 @@ def _variant(
     )
 
 
-def evaluate_candidate(
-    con, current: evaluate_mod.Evaluation, progress: Callable[[str], None] | None = None
-) -> CandidateEvaluation:
-    """Walk the candidate forward over every recency variant and pick the
-    variant with ``evaluate.pick_winner`` on final-call log loss."""
-    if progress is None:
-        def progress(_message: str) -> None:
-            pass
-
+def _build_world(
+    con, progress: Callable[[str], None]
+) -> tuple[_World, SimStats, dict[str, GameFeatures], list[Listing]]:
+    """Load the games and run one player simulation per ``PLAYER_GRID``
+    entry. Shared by every fold, recency variant and home-court variant."""
     venues = VenueIndex.from_db(con)
     games = fit._load(con, venues)
     lines = PlayerLines.from_db(con)
@@ -393,7 +417,7 @@ def evaluate_candidate(
     stats: SimStats | None = None
     for n, player in enumerate(PLAYER_GRID, start=1):
         progress(f"simulating player settings {n} of {len(PLAYER_GRID)}...")
-        feats, st = simulate(games, lines, history, index, player, listings)
+        feats, st = player_sim.simulate(games, lines, history, index, player, listings)
         features[player] = feats
         # Data-quality counts (fallbacks, missing reports, unlinked names,
         # unknown statuses) do not depend on the rating settings.
@@ -420,7 +444,23 @@ def evaluate_candidate(
             [first[g.result.game_id].final.no_report for g in games], dtype=bool
         ),
     )
+    return world, stats, first, listings
 
+
+def _check_grid(shrinkage_grid: tuple[float, ...]) -> None:
+    if not shrinkage_grid or shrinkage_grid[0] != math.inf:
+        raise ValueError(
+            f"the home-court shrinkage grid must start with math.inf (flat), got "
+            f"{shrinkage_grid!r}"
+        )
+
+
+def _evaluate(
+    world: _World, stats: SimStats, first: dict[str, GameFeatures], listings: list[Listing],
+    current: evaluate_mod.Evaluation, progress: Callable[[str], None],
+    shrinkage_grid: tuple[float, ...],
+) -> CandidateEvaluation:
+    _check_grid(shrinkage_grid)
     progress("fitting the candidate on earlier seasons...")
     results: list[CandidateResult] = []
     for hl in tuning.HALF_LIVES:
@@ -433,8 +473,12 @@ def evaluate_candidate(
                 raise RuntimeError(
                     f"walk-forward fold for {season} includes {season} or a later season"
                 )
-            team = current.winner.choices[season].params
-            choice = _fit_job(world, job, team, season)
+            fold = current.winner.choices[season]
+            choice = _fit_job(
+                world, job, fold.params, season,
+                shrinkage_grid=shrinkage_grid,
+                altitude_allowance=fold.coefficients.altitude,
+            )
             choices[season] = choice
             for call, (p, d) in preds.items():
                 _predict(world, choice, season, call, p, d, parts[call])
@@ -451,9 +495,75 @@ def evaluate_candidate(
     winner = next(r for r in results if r.final_call is best)
     progress("fitting the candidate on every tuning season...")
     final = _fit_job(
-        world, tuning.Job(TUNING_SEASONS, winner.half_life), current.final.ratings, None
+        world, tuning.Job(TUNING_SEASONS, winner.half_life), current.final.ratings, None,
+        shrinkage_grid=shrinkage_grid,
+        altitude_allowance=current.final.coefficients.altitude,
     )
     return CandidateEvaluation(tuple(results), winner, final, current, first, listings)
+
+
+def _quiet(_message: str) -> None:
+    pass
+
+
+def evaluate_candidate(
+    con, current: evaluate_mod.Evaluation, progress: Callable[[str], None] | None = None,
+    *, shrinkage_grid: tuple[float, ...] = (math.inf,),
+) -> CandidateEvaluation:
+    """Walk the candidate forward over every recency variant and pick the
+    variant with ``evaluate.pick_winner`` on final-call log loss. The
+    default grid is flat home court only (plan 1)."""
+    _check_grid(shrinkage_grid)
+    progress = progress or _quiet
+    world, stats, first, listings = _build_world(con, progress)
+    return _evaluate(world, stats, first, listings, current, progress, shrinkage_grid)
+
+
+@dataclass(frozen=True)
+class HomeVariants:
+    flat: CandidateEvaluation
+    per_team: CandidateEvaluation
+
+
+def evaluate_home_variants(
+    con, current: evaluate_mod.Evaluation, progress: Callable[[str], None] | None = None
+) -> HomeVariants:
+    """The candidate with flat home court and with per-team home court
+    (shrinkage walked forward over ``SHRINKAGE_GRID``), on one shared world."""
+    progress = progress or _quiet
+    world, stats, first, listings = _build_world(con, progress)
+    progress("home court: flat...")
+    flat = _evaluate(world, stats, first, listings, current, progress, (math.inf,))
+    progress("home court: per team...")
+    per_team = _evaluate(world, stats, first, listings, current, progress, SHRINKAGE_GRID)
+    return HomeVariants(flat=flat, per_team=per_team)
+
+
+@dataclass(frozen=True)
+class TeamHomeEdge:
+    team: str
+    home_games: int
+    away_games: int
+    raw: float  # unshrunk home-minus-away residual mean
+    edge: float  # the home court the team gets (league value + shrunk edge)
+
+
+def home_edges(games: list[_Game], choice: CandidateChoice) -> list[TeamHomeEdge]:
+    """Each team's home court after every game, for the teams that played in
+    the last tuning season; highest edge first, then team."""
+    ratings = fit.final_ratings(choice.team, games, choice.home)
+    teams = {
+        t for g in games if g.result.season == TUNING_SEASONS[-1]
+        for t in (g.result.home_team, g.result.away_team)
+    }
+    out = []
+    for team in teams:
+        summary = ratings.team_home_summary(team)
+        out.append(TeamHomeEdge(
+            team, summary.home_games, summary.away_games, summary.raw,
+            ratings.home_court(team),
+        ))
+    return sorted(out, key=lambda e: (-e.edge, e.team))
 
 
 # -- the switch-over bar ---------------------------------------------------------

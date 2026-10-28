@@ -87,11 +87,17 @@ def from_json(text: str) -> ModelSettings:
         if h is None:
             home = FLAT_HOME
         else:
+            window = h["window"]
+            if isinstance(window, bool) or not isinstance(window, int):
+                raise SettingsError(
+                    f"the model settings file holds impossible values (home window "
+                    f"{window!r} is not a whole number). {hint}"
+                )
             try:
                 home = HomeParams(
                     shrinkage=float(h["shrinkage"]),
                     altitude_allowance=float(h["altitude_allowance"]),
-                    window=int(h["window"]),
+                    window=window,
                 )
             except ValueError as exc:
                 raise SettingsError(

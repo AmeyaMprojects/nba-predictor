@@ -19,7 +19,7 @@ import numpy as np
 from predictor.model import adjustments as adj
 from predictor.model.adjustments import Coefficients
 from predictor.model.fit import FitError, _Game, _simulate
-from predictor.model.ratings import RatingParams, win_probability
+from predictor.model.ratings import FLAT_HOME, HomeParams, RatingParams, win_probability
 
 GRID_K = (0.02, 0.03, 0.04, 0.05, 0.06, 0.08, 0.10, 0.12, 0.15, 0.20)
 GRID_CAP = (15.0, 20.0, 25.0, 30.0, 40.0)
@@ -82,7 +82,9 @@ def _job_rows(games: list[_Game], job: Job):
     return np.array(idx), w
 
 
-def choose(games: list[_Game], jobs: list[Job]) -> dict[Job, Choice]:
+def choose(
+    games: list[_Game], jobs: list[Job], home: HomeParams = FLAT_HOME
+) -> dict[Job, Choice]:
     """Pick the grid combination, adjustment coefficients and sigma that
     minimise each job's weighted loss, from ONE pass over the grid.
 
@@ -104,7 +106,7 @@ def choose(games: list[_Game], jobs: list[Job]) -> dict[Job, Choice]:
     best: dict[Job, tuple] = {}
     for k, cap, reg, window in product(GRID_K, GRID_CAP, GRID_REGRESSION, GRID_WINDOW):
         params = RatingParams(k, cap, reg, window)
-        pre = np.array(_simulate(params, games), dtype=float)
+        pre = np.array(_simulate(params, games, home), dtype=float)
         base = margin - pre[:, 0] - pre[:, 1]
         for job in jobs:
             idx, w = rows[job]
@@ -121,7 +123,7 @@ def choose(games: list[_Game], jobs: list[Job]) -> dict[Job, Choice]:
         _, params, coef = best[job]
         coefficients = Coefficients(*(round(float(c), 6) for c in coef))
         if params not in sims:
-            sims[params] = np.array(_simulate(params, games), dtype=float)
+            sims[params] = np.array(_simulate(params, games, home), dtype=float)
         pre = sims[params]
         idx, w = rows[job]
         spreads = [
@@ -151,9 +153,10 @@ def _best_sigma(spreads: list[float], won: list[bool], weights: np.ndarray) -> f
     return best[1]
 
 
-def spreads_and_outcomes(games, params, coefficients, seasons):
-    """Pre-game spreads and outcomes for the `002` games in `seasons`."""
-    pre = _simulate(params, games)
+def spreads_and_outcomes(games, params, coefficients, seasons, home: HomeParams = FLAT_HOME):
+    """Pre-game spreads and outcomes for the `002` games in `seasons`.
+    ``home`` is passed to ``_simulate`` (flat by default)."""
+    pre = _simulate(params, games, home)
     out = []
     for g, (gap, hc) in zip(games, pre):
         if g.result.season in seasons and g.result.game_id.startswith("002"):

@@ -49,12 +49,21 @@ def con(tmp_path):
     c.close()
 
 
-def _run(con, listings=(), params=PARAMS):
+def _run(con, listings=(), params=PARAMS, report_lag=timedelta(0)):
+    """No report lag by default, so the tests below can place reports right
+    at the call time; the lag itself is tested on its own."""
     games = fit_mod._load(con, VenueIndex.from_db(con))
     lines = PlayerLines.from_db(con)
     history = InjuryHistory.from_db(con)
     index = player_index(con)
-    return simulate(games, lines, history, index, params, list(listings))
+    return simulate(games, lines, history, index, params, list(listings),
+                    report_lag=report_lag)
+
+
+def _run_default_lag(con):
+    games = fit_mod._load(con, VenueIndex.from_db(con))
+    return simulate(games, PlayerLines.from_db(con), InjuryHistory.from_db(con),
+                    player_index(con), PARAMS, [])
 
 
 def _force_ratings(monkeypatch, star=6.0, others=2.0 / 7.0):
@@ -316,7 +325,8 @@ def test_collect_listings_marks_played(con):
     table = db.POINT_IN_TIME_TABLES["player_games"]
     con.execute(f"DELETE FROM {table} WHERE game_id = ? AND player_id = 11", [G3])
     games = fit_mod._load(con, VenueIndex.from_db(con))
-    listings = collect_listings(con, games, InjuryHistory.from_db(con), player_index(con))
+    listings = collect_listings(con, games, InjuryHistory.from_db(con), player_index(con),
+                               report_lag=timedelta(0))
     assert sorted(listings, key=lambda li: li.status) == [
         Listing(SEASON, "final", "Out", False),
         Listing(SEASON, "final", "Questionable", True),
@@ -347,3 +357,56 @@ def test_player_row_dated_differently_from_its_game_is_refused(con):
     with pytest.raises(fit_mod.FitError, match=r"0022400003.*2024-11-04.*2024-11-05|"
                                                r"0022400003.*2024-11-05.*2024-11-04"):
         _run(con)
+
+
+# -- the replay report lag (plan 3, Task 2) ------------------------------------
+
+def test_report_lag_default_is_15_minutes():
+    assert player_sim.REPLAY_REPORT_LAG == timedelta(minutes=15)
+
+
+def test_report_lag_hides_report_inside_lag(con, monkeypatch):
+    build_player_fixture(con)
+    _force_ratings(monkeypatch)
+    add_report(con, final_at(D3) - timedelta(minutes=10), D3, "BOS", STAR_NAME, "Out")
+    lagged, _ = _run_default_lag(con)
+    assert lagged[G3].final.injury_gap == {"box": 0.0, "pm": 0.0}
+    assert lagged[G3].final.no_report is True
+    no_lag, _ = _run(con, report_lag=timedelta(0))
+    assert no_lag[G3].final.injury_gap["box"] != 0.0
+
+
+def test_report_exactly_at_lag_counts(con, monkeypatch):
+    build_player_fixture(con)
+    _force_ratings(monkeypatch)
+    add_report(con, final_at(D3) - timedelta(minutes=15), D3, "BOS", STAR_NAME, "Out")
+    feats, _ = _run_default_lag(con)
+    assert feats[G3].final.injury_gap["box"] != 0.0
+    assert feats[G3].final.report_at == final_at(D3) - timedelta(minutes=15)
+    assert feats[G3].final.fallback is False
+
+
+def test_fallback_is_judged_against_lagged_time(con):
+    """A report 70 minutes before the call is 55 minutes before the lagged
+    time, so it is not a fallback; a later report inside the lag that does
+    not list the date is not seen, so it does not make it one either."""
+    build_player_fixture(con)
+    add_report(con, final_at(D3) - timedelta(minutes=70), D3, "BOS", STAR_NAME, "Out")
+    add_report(con, final_at(D3) - timedelta(minutes=5), D3 + timedelta(days=1),
+               "NYK", "Ivey,Ia", "Out")
+    feats, stats = _run_default_lag(con)
+    assert feats[G3].final.fallback is False
+    assert stats.fallback["final"][SEASON] == 0
+    feats0, _ = _run(con)
+    assert feats0[G3].final.fallback is True
+
+
+def test_collect_listings_uses_report_lag(con):
+    build_player_fixture(con)
+    add_report(con, final_at(D3) - timedelta(minutes=10), D3, "NYK", "Ivey,Ia", "Out")
+    games = fit_mod._load(con, VenueIndex.from_db(con))
+    history, index = InjuryHistory.from_db(con), player_index(con)
+    assert collect_listings(con, games, history, index) == []
+    assert collect_listings(con, games, history, index, report_lag=timedelta(0)) == [
+        Listing(SEASON, "final", "Out", True),
+    ]

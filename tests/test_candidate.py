@@ -25,7 +25,11 @@ from predictor.model import evaluate as evaluate_mod
 from predictor.model import tuning
 from predictor.model.adjustments import FEATURE_NAMES
 from predictor.model.player_ratings import PlayerParams
-from predictor.model.ratings import RatingParams
+from predictor.model import fit as fit_mod
+from predictor.model import player_sim
+from predictor.model.ratings import FLAT_HOME, SHRINKAGE_GRID, HomeParams, RatingParams
+from predictor.model.settings import TUNING_SEASONS
+from predictor.model.venues import VenueIndex
 
 FIRST_NAMES = ("Al", "Bo", "Cy", "Di", "Ed")
 TEAM_PLAYERS = {
@@ -84,18 +88,26 @@ def world(tmp_path_factory):
     con = fixture_con(tmp_path_factory.mktemp("candidate"))
     unreported = _build(con)
     current = evaluate_mod.evaluate(con)
+    # Distinct team params and altitude coefficients per fold, so the tests
+    # that they come from the current fold are not trivially true.
     choices = {
         season: dataclasses.replace(
-            c, params=dataclasses.replace(c.params, k=0.02 + 0.01 * i)
+            c, params=dataclasses.replace(c.params, k=0.02 + 0.01 * i),
+            coefficients=dataclasses.replace(c.coefficients, altitude=0.5 + 0.1 * i),
         )
         for i, (season, c) in enumerate(sorted(current.winner.choices.items()))
     }
     winner = dataclasses.replace(current.winner, choices=choices)
-    current = dataclasses.replace(current, winner=winner)
+    final = dataclasses.replace(
+        current.final,
+        coefficients=dataclasses.replace(current.final.coefficients, altitude=1.75),
+    )
+    current = dataclasses.replace(current, winner=winner, final=final)
     messages: list[str] = []
     cev = cand.evaluate_candidate(con, current, progress=messages.append)
+    variants = cand.evaluate_home_variants(con, current)
     yield {"con": con, "current": current, "cev": cev, "unreported": unreported,
-           "messages": messages, "mp": mp}
+           "messages": messages, "mp": mp, "variants": variants}
     mp.undo()
     con.close()
 
@@ -126,6 +138,25 @@ def test_fold_never_sees_its_own_season(world, monkeypatch):
     # Games with no injury report are left out of every fit.
     for _, _, ids in calls:
         assert not ids & world["unreported"]
+
+
+def test_fold_never_sees_its_own_season_per_team_grid(world, monkeypatch):
+    calls: list[tuple[str | None, set[str]]] = []
+    real = cand._weighted_lstsq
+
+    def spy(games, X, y, w, *, season):
+        calls.append((season, {g.result.season for g in games}))
+        return real(games, X, y, w, season=season)
+
+    monkeypatch.setattr(cand, "_weighted_lstsq", spy)
+    cand.evaluate_candidate(world["con"], world["current"], shrinkage_grid=SHRINKAGE_GRID)
+    fold_2223 = [c for c in calls if c[0] == "2022-23"]
+    assert len(fold_2223) == (
+        len(SHRINKAGE_GRID) * 6 * 3 * 5 * len(tuning.HALF_LIVES)
+    )
+    for season, seasons in calls:
+        if season is not None:
+            assert seasons and all(s < season for s in seasons)
 
 
 def test_choices_unchanged_when_the_season_itself_is_corrupted(world, tmp_path):
@@ -377,3 +408,144 @@ def test_switch_over_bar_equal_brier_season_is_not_better():
     assert bar.enough_seasons is False
     assert bar.met is False
     assert any("3 of 6" in r for r in bar.reasons())
+
+
+# -- home court per team, walked forward (plan 3, Task 2) ------------------------
+
+def _all_choices(ev: cand.CandidateEvaluation) -> list[cand.CandidateChoice]:
+    return [c for r in ev.variants for c in r.choices.values()] + [ev.final]
+
+
+def test_flat_grid_keeps_flat_choices(world, monkeypatch):
+    seen: list[HomeParams] = []
+    real = cand._World.team_sim
+
+    def spy(self, params, home=FLAT_HOME):
+        seen.append(home)
+        return real(self, params, home)
+
+    monkeypatch.setattr(cand._World, "team_sim", spy)
+    ev = cand.evaluate_candidate(world["con"], world["current"])
+    assert seen and all(h.flat for h in seen)
+    for c in _all_choices(ev):
+        assert c.home.flat
+    for c in _all_choices(world["cev"]):
+        assert c.home.flat
+    assert world["variants"].flat.final == world["cev"].final
+
+
+def test_flat_variant_matches_plan_one_candidate(world):
+    flat, cev = world["variants"].flat, world["cev"]
+    for a, b in zip(flat.variants, cev.variants, strict=True):
+        assert a.final_call.log_loss == b.final_call.log_loss
+        assert a.choices == b.choices
+
+
+def test_flat_must_be_first_in_the_grid(world):
+    with pytest.raises(ValueError):
+        cand.evaluate_candidate(world["con"], world["current"], shrinkage_grid=(150.0,))
+    with pytest.raises(ValueError):
+        cand.evaluate_candidate(
+            world["con"], world["current"], shrinkage_grid=(150.0, math.inf)
+        )
+
+
+def test_per_team_needs_strictly_lower_mse(world, monkeypatch):
+    real = cand._weighted_lstsq
+
+    def equal(games, X, y, w, *, season):
+        coef, _ = real(games, X, y, w, season=season)
+        return coef, 1.0
+
+    monkeypatch.setattr(cand, "_weighted_lstsq", equal)
+    variants = cand.evaluate_home_variants(world["con"], world["current"])
+    for c in _all_choices(variants.per_team):
+        assert c.home.flat
+
+
+def test_per_team_grid_searches_every_shrinkage(world, monkeypatch):
+    seen: set[float] = set()
+    real = cand._World.team_sim
+
+    def spy(self, params, home=FLAT_HOME):
+        seen.add(home.shrinkage)
+        return real(self, params, home)
+
+    monkeypatch.setattr(cand._World, "team_sim", spy)
+    cand.evaluate_candidate(world["con"], world["current"], shrinkage_grid=SHRINKAGE_GRID)
+    assert seen == set(SHRINKAGE_GRID)
+
+
+def test_altitude_allowance_comes_from_current_fold(world):
+    current, per_team = world["current"], world["variants"].per_team
+    allowances = set()
+    for result in per_team.variants:
+        for s in evaluate_mod.WALK_FORWARD_SEASONS:
+            want = current.winner.choices[s].coefficients.altitude
+            assert result.choices[s].home.altitude_allowance == want
+            allowances.add(want)
+    assert len(allowances) == len(evaluate_mod.WALK_FORWARD_SEASONS)
+    assert per_team.final.home.altitude_allowance == current.final.coefficients.altitude
+    # Stored on flat choices too.
+    for c in _all_choices(world["variants"].flat):
+        assert c.home.altitude_allowance != 0.0
+
+
+def test_per_team_prediction_uses_the_choice_home(world):
+    """Each per-team prediction's home court is the team sim of the
+    choice's own (team, home) settings."""
+    per_team = world["variants"].per_team
+    games = fit_mod._load(world["con"], VenueIndex.from_db(world["con"]))
+    pos = {g.result.game_id: i for i, g in enumerate(games)}
+    for result in per_team.variants:
+        for season, choice in result.choices.items():
+            pre = fit_mod._simulate(choice.team, games, choice.home)
+            for gid, part in result.parts["final"].items():
+                g = games[pos[gid]]
+                if g.result.season == season:
+                    assert part.home_court == pre[pos[gid]][1]
+
+
+def test_home_variants_share_one_world(world, monkeypatch):
+    calls = []
+    real = player_sim.simulate
+
+    def spy(*args, **kwargs):
+        calls.append(args)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(player_sim, "simulate", spy)
+    variants = cand.evaluate_home_variants(world["con"], world["current"])
+    assert len(calls) == len(cand.PLAYER_GRID)
+    assert isinstance(variants, cand.HomeVariants)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        variants.flat = variants.per_team
+
+
+def test_home_edges_cover_last_season_teams(world):
+    con = world["con"]
+    games = fit_mod._load(con, VenueIndex.from_db(con))
+    want = {
+        t for g in games if g.result.season == TUNING_SEASONS[-1]
+        for t in (g.result.home_team, g.result.away_team)
+    }
+    flat_choice = world["cev"].final
+    edges = cand.home_edges(games, flat_choice)
+    assert {e.team for e in edges} == want
+    assert len(edges) == len(want)
+    league = fit_mod.final_ratings(flat_choice.team, games, flat_choice.home).home_court()
+    for e in edges:
+        assert e.edge == pytest.approx(league)
+        assert e.home_games > 0 and e.away_games > 0
+
+    per_team = dataclasses.replace(flat_choice, home=HomeParams(5.0, 0.5))
+    edges = cand.home_edges(games, per_team)
+    ratings = fit_mod.final_ratings(per_team.team, games, per_team.home)
+    assert [e.edge for e in edges] == sorted((e.edge for e in edges), reverse=True)
+    for e in edges:
+        summary = ratings.team_home_summary(e.team)
+        assert e == cand.TeamHomeEdge(
+            e.team, summary.home_games, summary.away_games, summary.raw,
+            ratings.home_court(e.team),
+        )
+    assert len({round(e.edge, 9) for e in edges}) > 1

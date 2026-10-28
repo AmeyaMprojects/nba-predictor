@@ -77,7 +77,7 @@ from predictor.model.player_sim import (
     collect_listings,
     simulate,
 )
-from predictor.model.ratings import Result, win_probability
+from predictor.model.ratings import FLAT_HOME, Result, win_probability
 from predictor.model.settings import TEST_SEASONS, TUNING_SEASONS, ModelSettings
 from predictor.model.stage1 import Stage1Predictor
 from predictor.model.venues import VenueIndex
@@ -351,7 +351,9 @@ def correction_rows(
     index = load_player_index(con)
     listings = collect_listings(con, games, history, index)
     feats, _ = simulate(games, lines, history, index, settings.player, listings)
-    pre = fit._simulate(settings.team, games)
+    # Home court per team: PlayerModelSettings gains ``home`` in plan 3
+    # Task 3; until then every settings file is flat.
+    pre = fit._simulate(settings.team, games, getattr(settings, "home", FLAT_HOME))
     coef = settings.coefficient_tuple()
     out: dict[str, list[tuple[tuple[float, ...], float]]] = defaultdict(list)
     for g, (gap, hc) in zip(games, pre, strict=True):

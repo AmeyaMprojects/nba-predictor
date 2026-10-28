@@ -15,7 +15,9 @@ twice), over its last `HomeParams.window` games per side, shrunk toward 0
 by `n_eff / (n_eff + shrinkage)`. Infinite shrinkage (`FLAT_HOME`, the
 default) is the flat league value, byte-identical to the old model. Every
 residual is recorded by `apply`, so a team's edge read before a game on
-date D uses only results already applied (games before D).
+date D uses only results already applied (games before D). Team edges carry
+across seasons without regression (only ratings regress at a new season);
+the only thing that ages them is the per-side window.
 """
 
 from __future__ import annotations
@@ -144,7 +146,12 @@ class Ratings:
         self.enter_season(result.season)
         gap = self.rating(result.home_team) - self.rating(result.away_team)
         league = self.home_court()
-        home_court = 0.0 if result.neutral else self.home_court(result.home_team)
+        if result.neutral:
+            home_court = 0.0
+        elif self.home.flat:
+            home_court = league
+        else:
+            home_court = league + self.deviation(result.home_team)
         predicted = gap + home_court
         margin = result.home_points - result.away_points
         cap = self.params.margin_cap

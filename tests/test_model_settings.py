@@ -136,6 +136,9 @@ def test_committed_settings_file_round_trips_byte_identical():
     [('"shrinkage": 150.0', '"shrinkage": -1.0'),
      ('"shrinkage": 150.0', '"shrinkage": NaN'),
      ('"window": 164', '"window": 0'),
+     ('"window": 164', '"window": 164.5'),
+     ('"window": 164', '"window": "164"'),
+     ('"window": 164', '"window": true'),
      ('"altitude_allowance": 0.658231', '"altitude_allowance": NaN')],
 )
 def test_settings_rejects_negative_shrinkage(old, new):
