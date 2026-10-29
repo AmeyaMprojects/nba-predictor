@@ -402,6 +402,8 @@ def test_raw_kept_only_when_the_upload_failed(tmp_path):
     # Only the raw responses are kept; the database and outputs are not.
     assert (only / "raw" / "espn" / "blob.json").exists()
     assert sorted(p.name for p in only.iterdir()) == ["raw"]
+    # Odds responses are never kept, whatever the workflow's upload filter does.
+    assert sorted(p.name for p in (only / "raw").iterdir()) == ["espn"]
     for d in fake.data_dirs:
         assert not d.exists()
 

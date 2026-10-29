@@ -66,7 +66,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from predictor import config
-from predictor.cloud import run
+from predictor.cloud import archive, run
 from predictor.model import publish
 
 MARK_OFFSET_MINUTES = 7
@@ -313,6 +313,10 @@ def run_loop(
                 kept = base_dir / KEPT_DIRNAME / name
                 kept.mkdir(parents=True, exist_ok=True)
                 if (data_dir / "raw").exists():
+                    # Odds responses may not be republished (licensing), so they
+                    # are dropped here, not only by the workflow's path filter.
+                    for source in archive.EXCLUDED_SOURCES:
+                        shutil.rmtree(data_dir / "raw" / source, ignore_errors=True)
                     shutil.move(str(data_dir / "raw"), str(kept / "raw"))
                 raw_kept = True
                 set_output("raw_kept", "true")
