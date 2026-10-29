@@ -8,6 +8,7 @@ from predictor import db
 from predictor.asof import AsOfView
 from predictor.backtest.baselines import GameToPredict
 from predictor.model.adjustments import Coefficients
+from predictor.model.calls import CALL_CUTOFF
 from predictor.model.live import (
     START_BUFFER,
     LogError,
@@ -331,15 +332,16 @@ def test_predicted_line_matches_a_fresh_predictor_call(tmp_path):
 def test_start_buffer_boundary(tmp_path):
     con = fixture_con(tmp_path)
     now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
-    assert START_BUFFER == timedelta(minutes=30)
+    # One cutoff for every call (plan 3): callable iff now < tip - 15 min.
+    assert START_BUFFER == CALL_CUTOFF == timedelta(minutes=15)
     insert_schedule_row(con, "0022600201", date(2026, 11, 10), "PHI", "NYK",
-                         now + timedelta(minutes=20), season=SEASON)
+                         now + timedelta(minutes=10), season=SEASON)
     insert_schedule_row(con, "0022600202", date(2026, 11, 10), "BOS", "MIA",
-                         now + timedelta(minutes=31), season=SEASON)
-    # Exactly on the buffer boundary: `tip - START_BUFFER == now`, which is
-    # `<= now` -- still "already started (or within 30 minutes)".
+                         now + timedelta(minutes=16), season=SEASON)
+    # Exactly on the boundary: `tip - CALL_CUTOFF == now` is no longer
+    # callable -- "already started (or within 15 minutes)".
     insert_schedule_row(con, "0022600203", date(2026, 11, 10), "DEN", "LAL",
-                         now + START_BUFFER, season=SEASON)
+                         now + CALL_CUTOFF, season=SEASON)
 
     result = predict_today(con, S, tmp_path / "repo", now)
     assert result.predicted == 1
@@ -349,7 +351,7 @@ def test_start_buffer_boundary(tmp_path):
     early = by_id["0022600201"]
     assert early["status"] == "not_predicted"
     assert early["reason"] == (
-        "game had already started (or was within 30 minutes of tip-off) when "
+        "game had already started (or was within 15 minutes of tip-off) when "
         "the prediction run happened"
     )
     assert early["spread"] is None and early["p_home"] is None and early["sentence"] is None
@@ -1146,8 +1148,8 @@ def test_market_odds_not_due_when_every_game_has_started(tmp_path):
 
     now = datetime(2026, 11, 10, 12, 0, tzinfo=UTC)
     con = fixture_con(tmp_path)
-    # Inside START_BUFFER: logged as not_predicted, so no market line needed.
-    _slate_game(con, now, tip=now + timedelta(minutes=20))
+    # Inside the 15-minute cutoff: logged as not_predicted, so no market line needed.
+    _slate_game(con, now, tip=now + timedelta(minutes=10))
     assert market_odds_due(con, now) is False
 
 

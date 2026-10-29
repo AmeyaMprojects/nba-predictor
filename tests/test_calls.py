@@ -117,6 +117,24 @@ def test_final_window_holds_two_loop_marks():
         assert any(final_due(tip, m) for m in inside[1:])
 
 
+def test_every_tip_minute_has_two_callable_final_marks():
+    # One cutoff for every call: both final marks are also callable (early,
+    # revision and final alike), for every tip minute of a day.
+    from predictor.model.live import START_BUFFER
+
+    assert START_BUFFER == CALL_CUTOFF
+    for minute in range(24 * 60):
+        tip = dt("2026-11-05T12:00Z") + timedelta(minutes=minute)
+        marks, mark = [], next_mark(tip - timedelta(hours=2), 15)
+        while mark < tip:
+            marks.append(mark)
+            mark = next_mark(mark, 15)
+        inside = [m for m in marks if final_due(tip, m)]
+        assert len(inside) == 2, (minute, inside)
+        assert all(still_callable(tip, m) for m in inside)
+        assert all(tip - START_BUFFER > m for m in inside)
+
+
 # ---------------------------------------------------------------- chains
 
 

@@ -177,7 +177,7 @@ def test_v2_early_line_records_report_and_availability(env2):
 
 
 def test_v2_not_predicted_line_carries_player_settings_and_no_report(env2):
-    env2.game(tip=at("12:50"))
+    env2.game(tip=at("12:45"))
     env2.report(at("12:30"))
     (line,) = env2.run(at("12:37")).lines_written
     assert line["status"] == "not_predicted"
@@ -237,8 +237,30 @@ def test_missed_final_logged_after_cutoff(env):
     assert env.run(at("02:07", 6)).lines_written == []
 
 
+def test_no_missed_final_for_a_legacy_chain(env):
+    # A chain first called before calls existed (no call_type) never had a
+    # final to miss.
+    env.game()
+    legacy = {k: v for k, v in env.run(at("12:37"), calls=EARLY_ONLY).lines_written[0].items()
+              if k not in ("call_type", "supersedes", "revision_reason", "injury_report_at",
+                           "availability", "model_version")}
+    path = log_path(env.repo, SEASON)
+    path.write_text(json.dumps(legacy, sort_keys=True) + "\n")
+    assert env.run(at("23:52")).lines_written == []
+    assert env.run(at("23:59")).lines_written == []
+
+
+def test_legacy_chain_still_gets_a_final_call_in_its_window(env):
+    env.game()
+    legacy = {k: v for k, v in env.run(at("12:37"), calls=EARLY_ONLY).lines_written[0].items()
+              if k != "call_type"}
+    log_path(env.repo, SEASON).write_text(json.dumps(legacy, sort_keys=True) + "\n")
+    (final,) = env.run(at("23:22")).lines_written
+    assert final["call_type"] == "final" and final["status"] == "predicted"
+
+
 def test_missed_final_needs_a_predicted_call(env):
-    env.game(tip=at("12:50"))
+    env.game(tip=at("12:45"))
     (too_late,) = env.run(at("12:37")).lines_written
     assert too_late["status"] == "not_predicted"
     assert env.run(at("12:52")).lines_written == []
@@ -254,9 +276,9 @@ def test_missed_final_for_a_backfill_day_game(env):
 
 
 def test_early_and_final_in_one_run_grade_the_final(env):
-    # Tip 13:15Z (not 13:00Z: with the 30-minute START_BUFFER a 12:37 run
-    # could not make the early call of a 13:00 game).
-    env.game(tip=at("13:15"))
+    # Tip 13:00Z: one 15-minute cutoff for every call, so a 12:37 run makes
+    # both the early call and the final call.
+    env.game(tip=at("13:00"))
     env.p[(None, "final")] = 0.40
     result = env.run(at("12:37"))
     early, final = result.lines_written

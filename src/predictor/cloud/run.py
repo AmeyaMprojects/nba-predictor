@@ -29,7 +29,7 @@ that is not due has ``due=False``)::
   never fails the run.
 
 The run never seals a call at or after tip-off: `live.predict_today` only
-predicts a game that tips more than ``START_BUFFER`` after ``now``, and
+calls a game while ``now < tip - CALL_CUTOFF`` (15 minutes), and
 ``now`` is re-read after the fetches.
 """
 

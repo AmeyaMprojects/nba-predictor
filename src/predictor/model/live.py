@@ -66,7 +66,12 @@ from predictor.model.venues import competitive_sql
 
 EASTERN = ZoneInfo("America/New_York")
 IST = ZoneInfo("Asia/Kolkata")
-START_BUFFER = timedelta(minutes=30)
+# One cutoff for every call (plan 3): a game is callable -- early, revision
+# or final -- iff ``now < tip - CALL_CUTOFF`` (15 minutes). The old
+# 30-minute early-call buffer overlapped the final window
+# ``[tip - 45, tip - 15)`` and left it one loop mark wide. Kept as a name
+# for the odds windows and older callers; it IS ``CALL_CUTOFF``.
+START_BUFFER = CALL_CUTOFF
 
 # `slate_date`: a run's slate is the ET calendar date of (now - this). A
 # catch-up run in the small hours after ET midnight (a laptop that slept
@@ -97,7 +102,7 @@ RESULTS_MISSING_GRACE = timedelta(hours=12)
 RESULTS_MISSING_WINDOW = timedelta(days=3)
 
 _NOT_PREDICTED_REASON = (
-    "game had already started (or was within 30 minutes of tip-off) when "
+    "game had already started (or was within 15 minutes of tip-off) when "
     "the prediction run happened"
 )
 _MISSED_REASON = (
@@ -183,7 +188,7 @@ def odds_window_due(
 
     ``first_tip`` is the earliest tip of ``slate_for(con, now)``; an empty
     slate is never due. A window is due when ``opens <= now < closes``, a
-    slate game still tips more than ``START_BUFFER`` after ``now``, fewer
+    slate game is still callable (``now < tip - CALL_CUTOFF``), fewer
     than ``ODDS_MAX_ATTEMPTS`` attempts are recorded at or after ``opens``,
     no attempt in the window is marked ``downloaded`` (its body was
     archived, so its credits were spent) or ``ok``, and ``remaining`` (the
@@ -201,7 +206,7 @@ def odds_window_due(
     slate = slate_for(con, now)
     if not slate:
         return None
-    if not any(g.tip_off_utc - START_BUFFER > now for g in slate):
+    if not any(still_callable(g.tip_off_utc, now) for g in slate):
         return None
     first_tip = min(g.tip_off_utc for g in slate)
     early_opens = early_call_at(slate_date(now))
@@ -552,12 +557,12 @@ def market_label(observed_at: datetime) -> str:
 def market_odds_due(con, now: datetime) -> bool:
     """Whether predict-today should fetch the live market line itself: the
     slate has at least one game it will actually predict (tip-off more
-    than ``START_BUFFER`` away) and no live (``theoddsapi``) snapshot was
+    than ``CALL_CUTOFF`` away) and no live (``theoddsapi``) snapshot was
     observed within ``MARKET_FRESH`` before ``now``. An empty slate --
     off-season, or a day without games -- is never due, so no Odds API
     request (500 a month) is spent on it."""
     db.require_utc(now, "now")
-    if not any(g.tip_off_utc - START_BUFFER > now for g in slate_for(con, now)):
+    if not any(still_callable(g.tip_off_utc, now) for g in slate_for(con, now)):
         return False
     table = db.POINT_IN_TIME_TABLES["odds_snapshots"]
     (fresh,) = con.execute(
@@ -619,8 +624,8 @@ def predict_today(
     game that could not be called.
 
     **Early** (always): each slate game's first call. ``predicted`` if it
-    tips off more than ``START_BUFFER`` after ``now``, else ``not_predicted``
-    (too late). A slate game whose tip-off is still TBD gets a provisional
+    is still callable (``now < tip - CALL_CUTOFF``, the one cutoff for every
+    call), else ``not_predicted`` (too late). A slate game whose tip-off is still TBD gets a provisional
     ``not_predicted`` line (``_TBD_REASON``) that does NOT block a later
     early call once the tip is announced. Games dated within
     ``BACKFILL_DAYS`` before the slate date that already tipped off (or are
@@ -637,7 +642,9 @@ def predict_today(
     final** (``"final" in calls``): a game dated in ``[slate -
     BACKFILL_DAYS, slate]`` with a predicted line, no final, and ``now >=
     tip - CALL_CUTOFF`` gets one ``not_predicted`` final line
-    (``_MISSED_FINAL_REASON``). Nothing is ever written for a game at or
+    (``_MISSED_FINAL_REASON``), but only when the chain's first predicted
+    line has a ``call_type`` (legacy chains never had a final to miss).
+    Nothing is ever written for a game at or
     after ``tip - CALL_CUTOFF`` except that missed-final line.
 
     Each game's model is ``kind_for_game`` (a game keeps the model of its
@@ -831,7 +838,7 @@ def predict_today(
 
         # Early: once per game (a TBD line does not count).
         if chain is None or chain.early is None:
-            if tip - START_BUFFER <= now:
+            if not still_callable(tip, now):
                 write(g, not_predicted_line(g, kind, chain, _NOT_PREDICTED_REASON))
                 not_predicted += 1
             else:
@@ -874,6 +881,10 @@ def predict_today(
                 continue
             chain = chain_of(g)
             if chain is None or chain.latest_predicted is None or chain.final is not None:
+                continue
+            # Only chains this code began: a game first called before calls
+            # existed (no call_type) never had a final call to miss.
+            if "call_type" not in chain.first_predicted:
                 continue
             write(g, not_predicted_line(g, kinds[(g.game_id, g.game_date)], chain,
                                         _MISSED_FINAL_REASON, call_type="final",

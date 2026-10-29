@@ -121,9 +121,10 @@ def test_odds_pre_tip_window(tmp_path):
 
 def test_odds_pre_tip_window_needs_a_game_still_to_predict(tmp_path):
     con = _slate(tmp_path)
-    # 22:31 is within START_BUFFER of the only tip
-    assert odds_window_due(con, dt("2026-11-10T22:31Z"), [], None) is None
-    assert odds_window_due(con, dt("2026-11-10T22:29Z"), [], None).name == "pre_tip"
+    # 22:46 is within the 15-minute call cutoff of the only tip
+    assert odds_window_due(con, dt("2026-11-10T22:46Z"), [], None) is None
+    assert odds_window_due(con, dt("2026-11-10T22:45Z"), [], None) is None
+    assert odds_window_due(con, dt("2026-11-10T22:44Z"), [], None).name == "pre_tip"
 
 
 def test_early_window_closes_at_the_pre_tip_lead_for_an_early_first_tip(tmp_path):
