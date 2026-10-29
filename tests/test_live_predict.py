@@ -309,6 +309,22 @@ def test_predicted_line_matches_a_fresh_predictor_call(tmp_path):
     # rounding could never be observed on the wire.
     assert round(fresh.spread, 6) != fresh.spread or round(fresh.p_home, 6) != fresh.p_home
 
+    # Plan 3: the old fields are unchanged; the call fields are added.
+    old_keys = {"predicted_at", "game_id", "season", "game_date", "tip_off_utc", "home_team",
+                "away_team", "settings", "stale_results", "last_result_capture",
+                "code_version", "code_dirty", "state_version", "status", "reason", "spread",
+                "p_home", "sentence", "terms", "market_p_home", "market_spread",
+                "market_books", "market_observed_at", "market_label"}
+    new_keys = {"call_type", "supersedes", "revision_reason", "injury_report_at",
+                "availability", "model_version"}
+    assert set(line) == old_keys | new_keys
+    assert line["settings"] == _SETTINGS_JSON
+    assert line["predicted_at"] == now.isoformat()
+    assert line["call_type"] == "early"
+    assert line["model_version"] == "v1"
+    assert line["supersedes"] is None and line["revision_reason"] is None
+    assert line["injury_report_at"] is None and line["availability"] is None
+
 
 # --- 3. the start buffer -------------------------------------------------
 
@@ -645,6 +661,63 @@ def test_grade_uses_the_latest_predicted_line_before_tip(tmp_path):
     assert grades[0]["predicted_at"] == (now + timedelta(minutes=30)).isoformat()
     assert grades[0]["p_home"] == 0.8
     assert grades[0]["correct"] is True
+
+
+def test_grade_tie_on_predicted_at_goes_to_the_later_line(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    tip = now + timedelta(hours=2)
+    insert_schedule_row(con, "0022600921", date(2026, 11, 10), "PHI", "NYK", tip, season=SEASON)
+    early = _hand_predicted_line("0022600921", "PHI", "NYK", tip, 0.8, now)
+    final = {**_hand_predicted_line("0022600921", "PHI", "NYK", tip, 0.3, now),
+             "call_type": "final"}
+    _append_raw_line(log_path(repo_dir, SEASON), early)
+    _append_raw_line(log_path(repo_dir, SEASON), final)
+    later = tip + timedelta(hours=1)
+    _insert_final(con, "0022600921", SEASON, date(2026, 11, 10), "PHI", "NYK",
+                  110, 100, observed_at=later, reconstructed=False)
+
+    assert grade(con, repo_dir, SEASON, later) == 1
+    (g,) = read_log(grades_path(repo_dir, SEASON))
+    assert g["call_type"] == "final" and g["p_home"] == 0.3 and g["correct"] is False
+    assert g["early_predicted_at"] == now.isoformat()
+    assert g["early_p_home"] == 0.8 and g["early_correct"] is True
+
+
+def test_grade_of_an_old_line_names_it_early(tmp_path):
+    con = fixture_con(tmp_path)
+    repo_dir = tmp_path / "repo"
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    tip = now + timedelta(hours=2)
+    insert_schedule_row(con, "0022600922", date(2026, 11, 10), "PHI", "NYK", tip, season=SEASON)
+    insert_schedule_row(con, "0022600923", date(2026, 11, 10), "BOS", "MIA", tip, season=SEASON)
+    _append_raw_line(log_path(repo_dir, SEASON),
+                      _hand_predicted_line("0022600922", "PHI", "NYK", tip, 0.5, now))
+    # A chain whose early call was too late: no early-call result.
+    too_late = {**_hand_predicted_line("0022600923", "BOS", "MIA", tip, None, now),
+                "status": "not_predicted", "call_type": "early"}
+    revision = {**_hand_predicted_line("0022600923", "BOS", "MIA", tip, 0.4,
+                                       now + timedelta(minutes=5)), "call_type": "revision"}
+    _append_raw_line(log_path(repo_dir, SEASON), too_late)
+    _append_raw_line(log_path(repo_dir, SEASON), revision)
+    later = tip + timedelta(hours=1)
+    _insert_final(con, "0022600922", SEASON, date(2026, 11, 10), "PHI", "NYK",
+                  100, 110, observed_at=later, reconstructed=False)
+    _insert_final(con, "0022600923", SEASON, date(2026, 11, 10), "BOS", "MIA",
+                  100, 110, observed_at=later, reconstructed=False)
+
+    assert grade(con, repo_dir, SEASON, later) == 2
+    grades = {g["game_id"]: g for g in read_log(grades_path(repo_dir, SEASON))}
+    old = grades["0022600922"]
+    assert old["call_type"] == "early"
+    assert old["early_predicted_at"] == old["predicted_at"]
+    # Home picked on exactly 0.5; away won.
+    assert old["early_p_home"] == 0.5 and old["early_correct"] is False
+    other = grades["0022600923"]
+    assert other["call_type"] == "revision" and other["correct"] is True
+    assert other["early_predicted_at"] is None and other["early_p_home"] is None
+    assert other["early_correct"] is None
 
 
 def test_grade_requires_the_final_rows_game_date_to_match_the_line(tmp_path):

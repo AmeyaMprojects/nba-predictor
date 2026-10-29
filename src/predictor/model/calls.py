@@ -21,7 +21,7 @@ reason text shows the report time in IST.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -108,8 +108,10 @@ def still_callable(tip: datetime, now: datetime) -> bool:
     return now < tip - CALL_CUTOFF
 
 
-def _norm(status: str | None) -> str | None:
-    return status.strip().lower() if status is not None else None
+def _norm(status: str | None) -> str:
+    """A player missing from a report (None) reads "available", so an
+    "Available" listing that drops off the report is not a change."""
+    return status.strip().lower() if status is not None else "available"
 
 
 @dataclass(frozen=True)
@@ -136,7 +138,8 @@ def status_changes(
 ) -> list[StatusChange]:
     """Status changes for the two teams between two reports, ordered by the
     team's position in ``teams``, then player. A player missing from a
-    report counts as None; statuses compare after ``strip().lower()``."""
+    report counts as None (and compares as "available"); statuses compare
+    after ``strip().lower()``."""
     old = before.statuses if before is not None else {}
     new = after.statuses if after is not None else {}
     order = {team: i for i, team in enumerate(teams)}
@@ -149,8 +152,12 @@ def status_changes(
     return out
 
 
-def _as_datetime(value: datetime | str) -> datetime:
-    return value if isinstance(value, datetime) else datetime.fromisoformat(value)
+def as_utc(value: datetime | str) -> datetime:
+    """An ISO string or datetime as an aware UTC datetime; a naive value is
+    read as UTC."""
+    out = value if isinstance(value, datetime) else datetime.fromisoformat(
+        value.replace("Z", "+00:00"))
+    return out.replace(tzinfo=UTC) if out.tzinfo is None else out.astimezone(UTC)
 
 
 def revision_due(
@@ -161,7 +168,7 @@ def revision_due(
     if report_at is None or not changes:
         return False
     previous = latest.get("injury_report_at")
-    if previous is not None and _as_datetime(previous) >= report_at:
+    if previous is not None and as_utc(previous) >= as_utc(report_at):
         return False
     return round(abs(new_p - latest["p_home"]), 6) >= REVISION_MIN_MOVE
 

@@ -332,3 +332,30 @@ def test_revision_reason_text():
     assert text.endswith(" and 2 more")
     three = five[:3]
     assert not revision_reason(dt("2026-11-05T23:30Z"), three).endswith("more")
+
+
+# ---------------------------------------------------------------- carried from the Task 5 review
+
+
+def test_available_to_missing_is_not_a_change():
+    # A player listed "Available" who then drops off the report reads
+    # "available" both times: no change, so no revision.
+    before = snap("2026-11-05T22:30Z", {("DEN", "Murray, Jamal"): "Available"})
+    after = snap("2026-11-05T23:30Z", {})
+    assert status_changes(before, after, ("DEN", "BOS")) == []
+    # ...and a newly listed "Available" player is no change either.
+    assert status_changes(after, before, ("DEN", "BOS")) == []
+    # A real status dropping off still reads "available".
+    out_before = snap("2026-11-05T22:30Z", {("DEN", "Murray, Jamal"): "Out"})
+    assert [c.text() for c in status_changes(out_before, after, ("DEN", "BOS"))] == [
+        "Murray (DEN) available"]
+
+
+def test_revision_due_tolerates_a_naive_report_time_as_utc():
+    report = dt("2026-11-05T23:30Z")
+    naive_same = {"p_home": 0.61, "injury_report_at": "2026-11-05T23:30:00"}
+    naive_older = {"p_home": 0.61, "injury_report_at": "2026-11-05T22:30:00"}
+    assert not revision_due(naive_same, 0.50, report, [MURRAY_OUT])
+    assert revision_due(naive_older, 0.50, report, [MURRAY_OUT])
+    assert calls.as_utc("2026-11-05T22:30:00") == dt("2026-11-05T22:30Z")
+    assert calls.as_utc(datetime(2026, 11, 5, 22, 30)) == dt("2026-11-05T22:30Z")
