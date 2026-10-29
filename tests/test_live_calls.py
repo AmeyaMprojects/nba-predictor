@@ -26,6 +26,7 @@ from predictor.model.live import (
     latest_report_at,
     log_path,
     predict_today,
+    read_id_links,
     read_log,
 )
 from predictor.model.live_model import (
@@ -622,18 +623,17 @@ def test_latest_report_at_is_point_in_time(env):
 
 
 def test_calls_due(env):
-    # 12:00-12:30Z (EST) is the only stretch where the new slate's early call
-    # is not yet due; then a game in the slate's range tipping after
-    # now - 1h makes it due.
+    # Before 18:00 IST (12:30Z in EST) only an earlier slate's game still to
+    # tip makes a run due; today's own games wait for the early call.
     assert not live.early_call_due(at("12:10"))
-    env.game(gid="0022600499", tip=at("00:00"), game_date=date(2026, 11, 4))
+    env.game(tip=at("02:00", 6))  # today's game
     assert not calls_due(env.con, at("12:10"))
     assert calls_due(env.con, at("12:30"))
+    env.game(gid="0022600499", tip=at("00:00"), game_date=date(2026, 11, 4))
+    assert not calls_due(env.con, at("12:10"))  # tipped long ago
     env.game(gid="0022600498", tip=at("11:30"), game_date=date(2026, 11, 4))
-    assert calls_due(env.con, at("12:10"))
+    assert calls_due(env.con, at("12:10"))  # tipped within the hour
     assert not calls_due(env.con, datetime(2026, 11, 6, 12, 10, tzinfo=UTC))
-    env.game(tip=at("02:00", 6))
-    assert calls_due(env.con, at("12:10"))
 
 
 def test_early_only_constant_is_the_default():
@@ -643,3 +643,88 @@ def test_early_only_constant_is_the_default():
     assert sig.parameters["calls"].default == EARLY_ONLY
     assert sig.parameters["live_model"].default == LiveModel.team()
     assert sig.parameters["id_links"].default is None
+
+
+# --- review fixes (Task 7 review) ---------------------------------------------------
+
+
+def test_sealing_inside_the_cutoff_raises_even_without_asserts(env, monkeypatch):
+    """The guard is an explicit raise, so it survives ``python -O``."""
+    env.game()
+    env.run(at("12:37"))
+    before = log_path(env.repo, SEASON).read_bytes()
+    monkeypatch.setattr(live, "final_due", lambda tip, now: True)
+    with pytest.raises(RuntimeError, match="cutoff"):
+        env.run(at("23:50"))
+    assert log_path(env.repo, SEASON).read_bytes() == before
+
+
+def test_tip_moved_later_reopens_the_final(env):
+    env.game()
+    env.run(at("12:37"))
+    (missed,) = env.run(at("23:52")).lines_written
+    assert missed["status"] == "not_predicted" and missed["call_type"] == "final"
+    # The tip moves an hour later: the new window [00:15, 00:45) is open again.
+    env.game(tip=at("01:00", 6), observed_at=at("23:55"))
+    (final,) = env.run(at("00:22", 6)).lines_written
+    assert final["status"] == "predicted" and final["call_type"] == "final"
+    assert final["tip_off_utc"] == at("01:00", 6).isoformat()
+    assert env.run(at("00:37", 6)).lines_written == []
+    assert env.run(at("00:52", 6)).lines_written == []
+
+
+def test_a_missed_final_at_the_current_tip_still_counts(env):
+    env.game()
+    env.run(at("12:37"))
+    env.run(at("23:52"))
+    assert env.run(at("00:07", 6)).lines_written == []
+
+
+def test_chains_and_caller_use_the_one_id_links_argument(env2):
+    """The cloud passes its links once: the chain key of a provisional game
+    and the player caller's rows use the same map, even when the season's
+    predictions id-link file does not have the link yet."""
+    prov, nba = "espn:401705556", "0042600102"
+    env2.game(gid=prov)
+    links = {prov: nba}
+    (early,) = env2.run(at("12:37"), id_links=links).lines_written
+    assert early["game_id"] == prov
+    env2.game(gid=nba, observed_at=at("14:00"))
+    assert not read_id_links(env2.repo, SEASON)  # only the argument knows the link
+    (final,) = env2.run(at("23:22"), id_links=links).lines_written
+    assert final["call_type"] == "final" and final["game_id"] == prov
+    assert [made for _kind, made in env2.made] == [links, links]
+
+
+def test_without_an_id_links_argument_the_log_links_serve_both(env2):
+    prov, nba = "espn:401705557", "0042600103"
+    env2.game(gid=prov)
+    env2.run(at("12:37"))
+    append_id_links(env2.repo, [{"provisional_id": prov, "game_id": nba,
+                                 "linked_at": at("14:00").isoformat()}])
+    env2.game(gid=nba, observed_at=at("14:00"))
+    (final,) = env2.run(at("23:22")).lines_written
+    assert final["game_id"] == prov
+    assert env2.made[-1][1] == {prov: nba}
+
+
+def test_no_early_lines_when_early_is_not_in_calls(env):
+    env.game()
+    env.game(gid="0022600498", tip=at("00:00"), game_date=date(2026, 11, 4))
+    late_only = frozenset({"revision", "final"})
+    assert env.run(at("12:10"), calls=late_only).lines_written == []
+    assert env.run(at("12:37"), calls=late_only).lines_written == []
+    assert len(env.run(at("12:37")).lines_written) == 2  # early + back-fill
+
+
+def test_final_across_the_dst_change(env):
+    """2026-11-01: EDT -> EST at 06:00Z. The slate and the final window are
+    computed in UTC terms and stay right."""
+    nov1 = date(2026, 11, 1)
+    env.game(tip=datetime(2026, 11, 2, 0, 0, tzinfo=UTC), game_date=nov1)
+    (early,) = env.run(datetime(2026, 11, 1, 12, 37, tzinfo=UTC)).lines_written
+    assert early["game_date"] == "2026-11-01"
+    assert env.run(datetime(2026, 11, 1, 23, 7, tzinfo=UTC)).lines_written == []
+    (final,) = env.run(datetime(2026, 11, 1, 23, 22, tzinfo=UTC)).lines_written
+    assert final["call_type"] == "final" and final["status"] == "predicted"
+    assert env.run(datetime(2026, 11, 1, 23, 52, tzinfo=UTC)).lines_written == []

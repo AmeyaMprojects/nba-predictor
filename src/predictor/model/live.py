@@ -594,8 +594,15 @@ def latest_report_at(con, now: datetime) -> datetime | None:
 
 def calls_due(con, now: datetime) -> bool:
     """Whether a run at ``now`` may have a call to write: the early call is
-    due, or a game dated in ``[slate - BACKFILL_DAYS, slate]`` tips after
-    ``now - 1 hour`` (a revision, a final or a missed final may be due)."""
+    due (from 18:00 IST on the slate date: the slate's early, revision and
+    final calls), or a game dated in ``[slate - BACKFILL_DAYS, slate)`` -- an
+    earlier slate -- tips after ``now - 1 hour`` (its final or missed final
+    may be due).
+
+    Today's own games never make a run due before the early call: they have
+    no call yet, so nothing but the early call could be written for them.
+    So the only stretch that is not due is from the slate change (07:00 ET)
+    to 18:00 IST, once the previous slate's last game is an hour gone."""
     db.require_utc(now, "now")
     if early_call_due(now):
         return True
@@ -603,7 +610,23 @@ def calls_due(con, now: datetime) -> bool:
     return any(
         g.tip_off_utc is not None and g.tip_off_utc > now - timedelta(hours=1)
         for g in _competitive_games(con, today - timedelta(days=BACKFILL_DAYS), today)
+        if g.game_date < today
     )
+
+
+def _has_final(chain: GameChain, tip: datetime | None) -> bool:
+    """Whether the chain already has its final call. A missed-final line
+    logged under an earlier tip-off than the game's current one does not
+    count: the tip moved later, so the final window opened again."""
+    for line in chain.lines:
+        if call_type_of(line) != "final":
+            continue
+        if line.get("status") == "predicted":
+            return True
+        logged = line.get("tip_off_utc")
+        if logged is None or tip is None or as_utc(logged) >= tip:
+            return True
+    return False
 
 
 def predict_today(
@@ -623,7 +646,8 @@ def predict_today(
     """Make the slate's calls and log an honest not_predicted line for every
     game that could not be called.
 
-    **Early** (always): each slate game's first call. ``predicted`` if it
+    **Early** (``"early" in calls``; both callers always pass it once the
+    early call is due): each slate game's first call. ``predicted`` if it
     is still callable (``now < tip - CALL_CUTOFF``, the one cutoff for every
     call), else ``not_predicted`` (too late). A slate game whose tip-off is still TBD gets a provisional
     ``not_predicted`` line (``_TBD_REASON``) that does NOT block a later
@@ -649,8 +673,8 @@ def predict_today(
 
     Each game's model is ``kind_for_game`` (a game keeps the model of its
     first call); one caller is built per model per run (``make_caller``,
-    with ``id_links``: the cloud's provisional-id links, for the player
-    model's ESPN rows), and all calls read ``AsOfView(con, now)``, so a
+    with the run's provisional-id links, for the player model's ESPN
+    rows), and all calls read ``AsOfView(con, now)``, so a
     result observed after ``now`` cannot reach any call. Player settings
     are loaded here (``live_model.load_player_settings``) when a game needs
     the player model and none were passed -- e.g. a game first called by v2
@@ -660,8 +684,15 @@ def predict_today(
     The log is append-only: lines are only ever added. Every later call of
     a game (revision, final, missed final) is written under the ``game_id``
     of the game's first line (``GameChain.game_id``), and a logged line
-    under a provisional ``espn:`` id that ``read_id_links`` maps to an NBA
-    id covers that NBA id too.
+    under a provisional ``espn:`` id that the run's links map to an NBA id
+    covers that NBA id too. The run's links are ``id_links`` when given
+    (the cloud passes ``cloud.state.read_id_links(state_dir)``), else the
+    logs' ``read_id_links`` of every season in range; the chains and the
+    player caller always use the same map.
+
+    A final call is not counted as made by a missed-final line logged under
+    an earlier tip-off than the game's current one (``_has_final``): when
+    the tip moves later, the final window opens again.
 
     Every line carries ``state_version`` (the cloud state commit the run
     was computed from; None on the Mac) and the ``code_version`` of
@@ -683,19 +714,26 @@ def predict_today(
                             else publish.code_version(code_dir or repo_dir))
     view = AsOfView(con, now)
 
-    # Per season: the log's chains and the provisional-id links.
+    # One provisional-id map serves the chains and the player caller alike,
+    # so a provisional game's chain key and its ESPN rows always agree: the
+    # caller's ``id_links`` (the cloud's), else the logs' links of every
+    # season in range.
+    if id_links is not None:
+        links: dict[str, str] = dict(id_links)
+    else:
+        links = {}
+        for season in sorted({g.season for g in range_games}):
+            links.update(read_id_links(repo_dir, season))
+
+    # Per season: the log's chains.
     season_chains: dict[str, dict[tuple[str, str], GameChain]] = {}
-    season_links: dict[str, dict[str, str]] = {}
 
     def load_season(season: str) -> None:
         if season not in season_chains:
-            links = read_id_links(repo_dir, season)
-            season_links[season] = links
             season_chains[season] = chains(read_log(log_path(repo_dir, season)), links)
 
     def chain_key(season: str, game_id: str, game_date: str) -> tuple[str, str]:
         load_season(season)
-        links = season_links[season]
         return (links.get(game_id, game_id), game_date)
 
     def chain_of(g: SlateGame) -> GameChain | None:
@@ -716,7 +754,7 @@ def predict_today(
     def call(kind: ModelKind, g: SlateGame, call_type: str) -> CallOutcome:
         if kind not in callers:
             callers[kind] = _lm.make_caller(con, kind, settings, player_settings,
-                                            id_links=id_links)
+                                            id_links=links)
         game = GameToPredict(g.game_id, g.season, g.game_date, g.home_team, g.away_team)
         return callers[kind].call(game, view, call_type)  # type: ignore[attr-defined]
 
@@ -808,16 +846,23 @@ def predict_today(
 
     def write(g: SlateGame, line: dict) -> None:
         if line["call_type"] != "early" and line["status"] == "predicted":
-            # Nothing is sealed at or after tip - CALL_CUTOFF.
-            assert g.tip_off_utc is not None and now < g.tip_off_utc - CALL_CUTOFF
+            # Nothing is sealed at or after tip - CALL_CUTOFF. An explicit
+            # raise (not an assert), so it survives ``python -O``.
+            if g.tip_off_utc is None or now >= g.tip_off_utc - CALL_CUTOFF:
+                raise RuntimeError(
+                    f"refusing to seal a {line['call_type']} call of {line['game_id']} at "
+                    f"{now.isoformat()}: inside the {CALL_CUTOFF} cutoff before tip-off "
+                    f"({g.tip_off_utc})"
+                )
         _append_line(log_path(repo_dir, g.season), line)
         lines_written.append(line)
         key = chain_key(g.season, line["game_id"], line["game_date"])
         chain = season_chains[g.season].get(key)
         season_chains[g.season][key] = GameChain((chain.lines if chain else ()) + (line,))
 
+    early = "early" in calls
     for g in backfill_games:
-        if chain_of(g) is not None:
+        if not early or chain_of(g) is not None:
             continue
         write(g, not_predicted_line(g, kinds[(g.game_id, g.game_date)], None, _MISSED_REASON))
         not_predicted += 1
@@ -827,7 +872,7 @@ def predict_today(
         kind = kinds[(g.game_id, g.game_date)]
         chain = chain_of(g)
         if g.tip_off_utc is None:
-            if chain is not None:
+            if chain is not None or not early:
                 skipped_duplicates += 1
                 continue
             write(g, not_predicted_line(g, kind, None, _TBD_REASON))
@@ -837,7 +882,7 @@ def predict_today(
         wrote = False
 
         # Early: once per game (a TBD line does not count).
-        if chain is None or chain.early is None:
+        if early and (chain is None or chain.early is None):
             if not still_callable(tip, now):
                 write(g, not_predicted_line(g, kind, chain, _NOT_PREDICTED_REASON))
                 not_predicted += 1
@@ -850,7 +895,7 @@ def predict_today(
 
         latest = chain.latest_predicted if chain is not None else None
         if latest is not None:
-            if "final" in calls and chain.final is None and final_due(tip, now):
+            if "final" in calls and not _has_final(chain, tip) and final_due(tip, now):
                 out = call(kind, g, "final")
                 reason = None
                 if kind == "player":
@@ -880,7 +925,8 @@ def predict_today(
             if g.tip_off_utc is None or now < g.tip_off_utc - CALL_CUTOFF:
                 continue
             chain = chain_of(g)
-            if chain is None or chain.latest_predicted is None or chain.final is not None:
+            if (chain is None or chain.latest_predicted is None
+                    or _has_final(chain, g.tip_off_utc)):
                 continue
             # Only chains this code began: a game first called before calls
             # existed (no call_type) never had a final call to miss.
