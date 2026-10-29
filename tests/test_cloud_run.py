@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tarfile
 from dataclasses import replace
 from datetime import UTC, date, datetime
@@ -195,13 +196,18 @@ def point_data_dir(path: Path, monkeypatch) -> Settings:
 def world(tmp_path, monkeypatch):
     """remote.git (main + cloud-shadow), seed (the code checkout, on main)
     and work (the state checkout, a clone on cloud-shadow)."""
+    return _make_world(tmp_path, monkeypatch)
+
+
+def _make_world(tmp_path, monkeypatch):
     for var in ("GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"):
         monkeypatch.setenv(var, "Predictor Bot")
     for var in ("GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"):
         monkeypatch.setenv(var, "bot@example.invalid")
     monkeypatch.setenv("HOME", str(tmp_path / "home"))  # never the real key file
     monkeypatch.setenv("ODDS_API_KEY", FAKE_KEY)
-    for var in ("GITHUB_STEP_SUMMARY", "GITHUB_OUTPUT", "PREDICTOR_PUBLISH_BRANCH"):
+    for var in ("GITHUB_STEP_SUMMARY", "GITHUB_OUTPUT", "PREDICTOR_PUBLISH_BRANCH",
+                "PREDICTOR_ODDS_CACHE"):
         monkeypatch.delenv(var, raising=False)
     point_data_dir(tmp_path / "data", monkeypatch)
 
@@ -904,7 +910,7 @@ def _in_process_child(world, monkeypatch, fx, before=None):
         with monkeypatch.context() as m:
             for key in ("PREDICTOR_DATA_DIR", "PREDICTOR_PUBLISH_BRANCH", "GITHUB_OUTPUT",
                         "GITHUB_STEP_SUMMARY", "PREDICTOR_CODE_VERSION",
-                        "PREDICTOR_CODE_DIRTY"):
+                        "PREDICTOR_CODE_DIRTY", "PREDICTOR_ODDS_CACHE"):
                 if key in env:
                     m.setenv(key, env[key])
                 else:
@@ -991,3 +997,216 @@ def test_every_call_in_a_loop_records_the_code_version_the_loop_started_with(wor
     assert lines
     assert all(line["code_version"] == start_sha and line["code_dirty"] is False
                for line in lines)
+
+
+# --- plan 3: calls every run, the live-model flag, the odds cache ---------------
+
+NOV_GAMES = [("0022600101", "401909201", date(2026, 11, 5), "2026-11-06T00:00Z", "BOS", "NYK")]
+NOV_EARLY = datetime(2026, 11, 5, 12, 37, tzinfo=UTC)
+NOV_FINAL = datetime(2026, 11, 5, 23, 22, tzinfo=UTC)
+
+
+@pytest.fixture
+def nov_world(tmp_path, monkeypatch):
+    """The same world with one game on the 2026-11-05 slate (tip 00:00Z)."""
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "GAMES", NOV_GAMES)
+    monkeypatch.setattr(module, "FINALS", {})
+    return _make_world(tmp_path, monkeypatch)
+
+
+def _flag(work: Path, text: str) -> None:
+    path = work / "state" / "settings" / "live_model.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_predict_step_writes_finals_after_the_early_call(nov_world):
+    work, seed = nov_world["work"], nov_world["seed"]
+    first = run_once(work, seed, branch="cloud-shadow", fetchers=fetchers(clock=lambda: NOV_EARLY))
+    assert "1 early" in step(first, "predict").detail
+    (early,) = read_log(work / "predictions" / f"{SEASON}.jsonl")
+    assert early["call_type"] == "early" and early["status"] == "predicted"
+
+    report = run_once(work, seed, branch="cloud-shadow",
+                      fetchers=fetchers(clock=lambda: NOV_FINAL))
+    assert subjects(work, 1) == ["predictions: 2026-11-05 slate"]
+    detail = step(report, "predict").detail
+    assert detail.startswith("slate 2026-11-05 (model v1): 0 early, 0 revision(s), 1 final, "
+                             "0 missed final, 0 not predicted"), detail
+    assert "1 final" in detail
+    assert report.pushed and all(s.ok for s in report.steps), report.steps
+    lines = read_log(work / "predictions" / f"{SEASON}.jsonl")
+    (final,) = [ln for ln in lines if ln.get("call_type") == "final"]
+    assert final["status"] == "predicted" and final["game_id"] == "0022600101"
+    assert final["supersedes"] == early["predicted_at"]
+    assert final["model_version"] == "v1"
+    assert final["state_version"] == report.state_commit
+    assert dt(final["predicted_at"]) < dt(final["tip_off_utc"]) - cloud_run.live.CALL_CUTOFF
+    # One final only: the next mark writes nothing.
+    again = run_once(work, seed, branch="cloud-shadow", fetchers=fetchers(
+        clock=lambda: datetime(2026, 11, 5, 23, 37, tzinfo=UTC)))
+    assert read_log(work / "predictions" / f"{SEASON}.jsonl") == lines
+    assert "0 final" in step(again, "predict").detail
+
+
+def test_no_early_call_before_1800_ist_even_with_later_games_due(world):
+    """Today's games make the predict step due only from 18:00 IST, as before."""
+    early = datetime(2026, 10, 22, 12, 22, tzinfo=UTC)
+    report = run_once(world["work"], world["seed"], branch="cloud-shadow",
+                      fetchers=fetchers(clock=lambda: early))
+    assert step(report, "predict") == cloud_run.StepOutcome(
+        "predict", False, True, "the early call is due from 12:30 UTC")
+
+
+def test_bad_live_model_flag_fails_the_step_without_lines(nov_world, monkeypatch):
+    work, seed = nov_world["work"], nov_world["seed"]
+    run_once(work, seed, branch="cloud-shadow", fetchers=fetchers(clock=lambda: NOV_EARLY))
+    log = work / "predictions" / f"{SEASON}.jsonl"
+    before = log.read_bytes()
+    _flag(work, '{"model": "plyer"}')
+    reports = []
+    real = cloud_run.run_once
+
+    def spy(*args, **kwargs):
+        reports.append(real(*args, **kwargs))
+        return reports[-1]
+
+    monkeypatch.setattr(cloud_run, "run_once", spy)
+    result = _invoke(nov_world, monkeypatch, fetchers(clock=lambda: NOV_FINAL))
+    assert result.exit_code == 0, result.output
+    predict = step(reports[0], "predict")
+    assert predict.ok is False and predict.due is True
+    assert predict.detail.startswith("live model flag unusable: ")
+    assert "Fix state/settings/live_model.json." in predict.detail
+    assert log.read_bytes() == before
+    assert step(reports[0], "grade").ok
+
+
+def _fake_v2(made):
+    from predictor.model import live_model
+
+    class Caller:
+        def call(self, game, view, kind):
+            return live_model.CallOutcome(
+                spread=-3.0, p_home=0.6, sentence=f"fake {kind}", terms={"rating": 1.0},
+                availability=[], model_version="v2", settings={"fake": True}, sigma=13.0)
+
+    def make_caller(con, kind, settings, player_settings, *, id_links=None):
+        made.append((kind, player_settings, id_links))
+        return Caller()
+
+    return make_caller
+
+
+def test_flag_on_makes_v2_calls_on_its_slate(nov_world, monkeypatch):
+    from predictor.model import live_model
+
+    work, seed = nov_world["work"], nov_world["seed"]
+    _flag(work, '{"model": "player", "from_slate": "2026-11-05"}')
+    links_file = work / "state" / state.ID_LINKS_PATH
+    state.append_records(links_file, [{"provisional_id": "espn:1", "game_id": "0022600999",
+                                       "linked_at": "2026-11-05T12:00:00+00:00"}])
+    made: list = []
+    loaded: list = []
+    real_load = live_model.load_player_settings
+
+    def load():
+        loaded.append(True)
+        return real_load()
+
+    monkeypatch.setattr(live_model, "make_caller", _fake_v2(made))
+    monkeypatch.setattr(live_model, "load_player_settings", load)
+    first = run_once(work, seed, branch="cloud-shadow", fetchers=fetchers(clock=lambda: NOV_EARLY))
+    assert "(model v2): 1 early" in step(first, "predict").detail
+    second = run_once(work, seed, branch="cloud-shadow",
+                      fetchers=fetchers(clock=lambda: NOV_FINAL))
+    assert "(model v2)" in step(second, "predict").detail
+    lines = read_log(work / "predictions" / f"{SEASON}.jsonl")
+    assert [(ln["call_type"], ln["model_version"]) for ln in lines] == [
+        ("early", "v2"), ("final", "v2")]
+    assert [kind for kind, _ps, _links in made] == ["player", "player"]
+    assert all(ps is not None for _kind, ps, _links in made)
+    assert loaded == [True, True]
+    # The cloud's own id links (state/schedule), not the predictions' ones.
+    assert {"espn:1": "0022600999"} == state.read_id_links(work / "state")
+    assert all(links == {"espn:1": "0022600999"} for _kind, _ps, links in made)
+
+
+def test_flag_for_a_later_slate_keeps_v1_and_loads_no_player_settings(nov_world, monkeypatch):
+    from predictor.model import live_model
+
+    work = nov_world["work"]
+    _flag(work, '{"model": "player", "from_slate": "2026-11-06"}')
+
+    def boom():
+        raise AssertionError("player settings must not be loaded")
+
+    monkeypatch.setattr(live_model, "load_player_settings", boom)
+    report = run_once(work, nov_world["seed"], branch="cloud-shadow",
+                      fetchers=fetchers(clock=lambda: NOV_EARLY))
+    assert step(report, "predict").ok, report.steps
+    (line,) = read_log(work / "predictions" / f"{SEASON}.jsonl")
+    assert line["model_version"] == "v1"
+
+
+def test_odds_cache_holds_no_key(world, monkeypatch):
+    cache = world["tmp"] / "loop" / "odds-cache"
+    monkeypatch.setenv("PREDICTOR_ODDS_CACHE", str(cache))
+    report = run_once(world["work"], world["seed"], branch="cloud-shadow", fetchers=fetchers())
+    assert step(report, "odds").ok, report.steps
+    files = [p for p in cache.rglob("*") if p.is_file()]
+    names = sorted(p.name for p in files)
+    assert len(names) == 2 and "latest.json" in names
+    key = FAKE_KEY.lower()
+    for path in files:
+        assert key.encode() not in path.read_bytes().lower(), path
+        assert key not in path.name.lower()
+    assert not cache.is_relative_to(config.settings.data_dir)
+
+
+def test_a_later_run_restores_the_cached_odds(world, monkeypatch):
+    """A later loop iteration (a fresh data dir and DB) sees the cached live
+    line without another download; its raw archive has no odds member."""
+    cache = world["tmp"] / "loop" / "odds-cache"
+    monkeypatch.setenv("PREDICTOR_ODDS_CACHE", str(cache))
+    work, seed = world["work"], world["seed"]
+    run_once(work, seed, branch="cloud-shadow", fetchers=fetchers())
+
+    point_data_dir(world["tmp"] / "data2", monkeypatch)
+    downloads = []
+
+    def failing(key, now):
+        downloads.append(now)
+        raise odds.OddsFetchError("unreachable")
+
+    gh = FakeGh()
+    later = datetime(2026, 10, 22, 22, 22, tzinfo=UTC)
+    report = run_once(work, seed, branch="cloud-shadow",
+                      fetchers=fetchers(clock=lambda: later, odds_download=failing, gh_runner=gh))
+    assert "1 cached odds row(s) restored" in step(report, "rebuild").detail
+    assert len(downloads) == 1 and not step(report, "odds").ok
+    con = db.connect(config.settings.db_path)
+    try:
+        from predictor.model import market
+        assert market.live_lines(con, "0022600002", later)
+    finally:
+        con.close()
+    lines = read_log(work / "predictions" / f"{SEASON}.jsonl")
+    (final,) = [ln for ln in lines if ln.get("call_type") == "final"]
+    assert final["game_id"] == "0022600002" and final["market_p_home"] is not None
+    assert final["market_observed_at"] == NOW.isoformat()
+    for asset in gh.assets:
+        with tarfile.open(asset) as tar:
+            assert not any(n.startswith("raw/odds") for n in tar.getnames())
+
+
+def test_a_broken_odds_cache_is_only_a_note(world, monkeypatch):
+    cache = world["tmp"] / "oc"
+    cache.mkdir()
+    (cache / "latest.json").write_text("{broken", encoding="utf-8")
+    monkeypatch.setenv("PREDICTOR_ODDS_CACHE", str(cache))
+    report = run_once(world["work"], world["seed"], branch="cloud-shadow", fetchers=fetchers())
+    assert step(report, "rebuild").ok and not report.unexpected
+    assert any(n.startswith("odds cache: not restored") for n in report.notes)
+    assert all(s.ok for s in report.steps), report.steps

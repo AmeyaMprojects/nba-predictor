@@ -16,6 +16,11 @@ cloud made are listed for the owner but never fail the comparison.
 strict on purpose, so a cloud that believed a later (wrong) tip cannot pass
 on its own say-so.
 
+Only early calls are compared (``calls.call_type_of(line) == "early"``;
+lines from before calls existed are early): the Mac makes early calls only,
+so the cloud's revisions, finals and missed finals are never paired with
+them.
+
 Pure functions only: the CLI reads both logs (``git show``) and passes the
 parsed lines in.
 """
@@ -24,6 +29,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
+
+from predictor.model.calls import call_type_of
 
 MIN_SHADOW_DAYS = 3
 MAX_P_DIFF = 0.01
@@ -35,6 +42,7 @@ _TBD = "tip-off time not announced"
 _CATEGORIES = (
     ("too late", "already started"),
     ("missed run", "no prediction was made before tip-off"),
+    ("missed final", "no final call was made"),
 )
 
 
@@ -104,6 +112,8 @@ def _when(x: datetime | None) -> str:
 def _group(lines: list[dict], since: date, links: dict[str, str]) -> dict[tuple, list[dict]]:
     out: dict[tuple, list[dict]] = {}
     for line in lines:
+        if call_type_of(line) != "early":
+            continue  # the Mac makes early calls only
         day = date.fromisoformat(line["game_date"])
         if day < since:
             continue

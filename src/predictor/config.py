@@ -33,6 +33,19 @@ def _default_data_dir() -> Path:
 settings = Settings(data_dir=_default_data_dir())
 
 
+# The cloud loop's odds cache: a directory outside every iteration's data
+# dir (``<base_dir>/odds-cache``), so a later iteration still has the latest
+# live odds. Never committed or archived; lost when the job ends.
+ODDS_CACHE_ENV = "PREDICTOR_ODDS_CACHE"
+
+
+def odds_cache_dir() -> Path | None:
+    """The odds cache dir from env ``PREDICTOR_ODDS_CACHE``; None when unset
+    or blank (a single cloud-run, the Mac)."""
+    value = os.environ.get(ODDS_CACHE_ENV, "").strip()
+    return Path(value).expanduser() if value else None
+
+
 _PUBLISH_BRANCHES = ("main", "cloud-shadow")
 
 

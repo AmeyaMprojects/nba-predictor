@@ -386,3 +386,30 @@ def test_cli_reports_a_failed_fetch(tmp_path, monkeypatch):
     result = runner.invoke(cli.app, ["compare-shadow"])
     assert result.exit_code == 1
     assert "could not fetch" in result.output
+
+
+def test_compare_shadow_ignores_revisions_and_finals():
+    """Only early calls are compared: the Mac makes early calls only, so a
+    cloud revision or final (another p) is never held against it."""
+    mac, cloud = _same_calls(3)
+    final = dict(cloud[2], call_type="final", predicted_at=f"{_days(3)[2]}T22:22:00+00:00",
+                 p_home=round(cloud[2]["p_home"] + 0.2, 6))
+    revision = dict(cloud[1], call_type="revision",
+                    predicted_at=f"{_days(3)[1]}T20:07:00+00:00",
+                    p_home=round(cloud[1]["p_home"] - 0.1, 6))
+    missed = dict(cloud[0], call_type="final", status="not_predicted", p_home=None,
+                  reason="no final call", predicted_at=f"{_days(3)[0]}T23:52:00+00:00")
+    cloud[2]["call_type"] = "early"
+    report = compare_logs(mac, [*cloud, final, revision, missed], SINCE, {})
+    assert report.ok, report.reasons
+    assert report.max_abs_dp == 0.0
+    assert len(report.pairs) == 3
+
+
+def test_missed_final_reason_has_its_own_category():
+    from predictor.cloud.compare import reason_category
+    from predictor.model.live import _MISSED_FINAL_REASON
+
+    assert reason_category(_MISSED_FINAL_REASON) == "missed final"
+    assert reason_category(_MISSED_REASON) == "missed run"
+    assert reason_category(_NOT_PREDICTED_REASON) == "too late"

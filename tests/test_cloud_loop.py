@@ -500,3 +500,71 @@ def test_cli_cloud_loop_refuses_without_a_publish_branch(tmp_path, monkeypatch):
     result = CliRunner().invoke(cli.app, ["cloud-loop", "--state-repo", str(tmp_path)])
     assert result.exit_code == 1
     assert called == []
+
+
+# --- the odds cache across iterations -------------------------------------------
+
+
+def test_odds_cache_outside_iteration_data_dir(tmp_path, monkeypatch):
+    """Every child gets the loop's cache dir, outside its own data dir: the
+    first iteration saves odds there, the second (a fresh data dir and DB)
+    restores them, and its raw archive bundle still has no odds member. The
+    loop removes the cache at the end."""
+    import json
+    import tarfile
+
+    from predictor import db, raw_store
+    from predictor.cloud import archive, odds_cache
+    from predictor.config import Settings
+    from predictor.sources import odds
+
+    t = FakeTime()
+    seen: list[dict] = []
+    bundles: list[list[str]] = []
+    restored: list[int] = []
+
+    def child(argv, *, env, cwd, timeout):
+        seen.append(dict(env))
+        data_dir = Path(env["PREDICTOR_DATA_DIR"])
+        cache = Path(env["PREDICTOR_ODDS_CACHE"])
+        with monkeypatch.context() as m:
+            s = Settings(data_dir=data_dir)
+            s.ensure_dirs()
+            m.setattr(raw_store, "settings", s)
+            if len(seen) == 1:
+                body = json.dumps([{
+                    "id": "e1", "commence_time": "2026-10-27T00:00:00Z",
+                    "home_team": "Boston Celtics", "away_team": "New York Knicks",
+                    "bookmakers": [{"key": "book", "markets": []}],
+                }]).encode()
+                raw_store.store(odds.RAW_SOURCE, "odds_aaaa.json", body, t.now)
+                odds_cache.save(cache, odds.OddsDownload("odds_aaaa.json", t.now, "480"))
+            else:
+                con = db.connect(data_dir / "predictor.duckdb")
+                db.migrate(con)
+                restored.append(odds_cache.restore(con, cache, t.now))
+                con.close()
+                assert raw_store.exists(odds.RAW_SOURCE, "odds_aaaa.json")
+                (s.raw_dir / "espn").mkdir(parents=True, exist_ok=True)
+                (s.raw_dir / "espn" / "x.json").write_text("{}", encoding="utf-8")
+                out = archive.bundle(s.raw_dir, data_dir / "bundle.tar.gz")
+                with tarfile.open(out) as tar:
+                    bundles.append(tar.getnames())
+        t.now += timedelta(minutes=3)
+        Path(env["GITHUB_OUTPUT"]).write_text(
+            "site_changed=false\nraw_upload_failed=false\nsecret_leak=false\n",
+            encoding="utf-8")
+        return 0
+
+    result, _, _ = _loop(tmp_path, t, child, max_minutes=30)
+    assert result.iterations == 2 and result.ok
+    caches = {e["PREDICTOR_ODDS_CACHE"] for e in seen}
+    assert caches == {str(tmp_path / "data" / "odds-cache")}
+    for env in seen:
+        cache, data_dir = Path(env["PREDICTOR_ODDS_CACHE"]), Path(env["PREDICTOR_DATA_DIR"])
+        assert not cache.is_relative_to(data_dir)
+        assert not data_dir.is_relative_to(cache)
+    assert restored == [1]
+    assert bundles and all(not n.startswith("raw/odds") for n in bundles[0])
+    assert "raw/espn/x.json" in bundles[0]
+    assert not (tmp_path / "data" / "odds-cache").exists()

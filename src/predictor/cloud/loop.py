@@ -29,6 +29,13 @@ job loops internally instead of relying on one start per slot.
   is dispatched (``gh workflow run site.yml --ref main``); a failed dispatch
   fails the loop at the end.
 
+The odds cache, ``<base_dir>/odds-cache`` (env ``PREDICTOR_ODDS_CACHE`` in
+every child), holds the latest odds body across iterations, so a later
+iteration's revision and final calls still see a live line without an
+extra download. It sits outside every iteration's data dir, so no raw
+archive ever includes it; it is never committed and is removed when the
+loop ends.
+
 Which code runs, and which code is recorded: the code checkout's (sha,
 dirty) is read once, at the start, and every child records it on its
 prediction and grade lines (``PREDICTOR_CODE_VERSION``/``_DIRTY``). Each
@@ -72,6 +79,7 @@ OUTPUT_FILENAME = "github_output"
 SUMMARY_FILENAME = "step_summary.md"
 CODE_VERSION_ENV = "PREDICTOR_CODE_VERSION"
 CODE_DIRTY_ENV = "PREDICTOR_CODE_DIRTY"
+ODDS_CACHE_DIRNAME = "odds-cache"
 
 # The child: the job's interpreter, importing predictor.cli from whatever
 # PYTHONPATH puts first (the pinned code).
@@ -194,7 +202,7 @@ def _dispatch_site(gh_runner: Callable, state_repo: Path) -> str | None:
 
 
 def _child_env(data_dir: Path, branch: str, code_root: Path,
-               sha: str | None, dirty: bool) -> dict[str, str]:
+               sha: str | None, dirty: bool, odds_cache: Path) -> dict[str, str]:
     env = dict(os.environ)
     env.update(
         PREDICTOR_DATA_DIR=str(data_dir), PREDICTOR_PUBLISH_BRANCH=branch,
@@ -203,6 +211,7 @@ def _child_env(data_dir: Path, branch: str, code_root: Path,
         PYTHONPATH=os.pathsep.join(
             p for p in (str(code_root / "src"), os.environ.get("PYTHONPATH", "")) if p),
     )
+    env[config.ODDS_CACHE_ENV] = str(odds_cache)  # the loop's, not the iteration's
     if sha is not None:
         env[CODE_VERSION_ENV] = sha
         env[CODE_DIRTY_ENV] = "true" if dirty else "false"
@@ -242,6 +251,7 @@ def run_loop(
     base_dir.mkdir(parents=True, exist_ok=True)
     sha, dirty = publish.code_version(code_dir)
     code_root, worktree, pin_note = _pin_code(code_dir, state_repo, base_dir, sha)
+    odds_cache = base_dir / ODDS_CACHE_DIRNAME
     if pin_note:
         emit(f"# cloud-loop\n\n{pin_note}\n\n")
     count = 0
@@ -268,7 +278,8 @@ def run_loop(
             text = f"# Loop iteration {count} — {started:%Y-%m-%d %H:%M} UTC\n\n"
             argv = [*CHILD_PREFIX, "cloud-run", "--state-repo", str(state_repo)]
             try:
-                status = child(argv, env=_child_env(data_dir, branch, code_root, sha, dirty),
+                status = child(argv, env=_child_env(data_dir, branch, code_root, sha, dirty,
+                                                    odds_cache),
                                cwd=code_root, timeout=iteration_timeout.total_seconds())
             except Exception as exc:  # noqa: BLE001 -- one bad iteration never stops the loop
                 failed = True
@@ -316,6 +327,8 @@ def run_loop(
                     text += f"\nSITE DISPATCH FAILED — gh workflow run site.yml: {problem}\n"
             emit(text + "\n")
     finally:
+        # Odds content is never kept past the job (licensing).
+        shutil.rmtree(odds_cache, ignore_errors=True)
         if worktree is not None:
             _git(code_dir, "worktree", "remove", "--force", str(worktree))
     set_output("raw_kept", "true" if raw_kept else "false")

@@ -28,6 +28,15 @@ that is not due has ``due=False``)::
   of the listed steps). Each feed's failure is shown in the summary and
   never fails the run.
 
+The ``predict`` step runs whenever ``live.calls_due``: from 18:00 IST it
+makes the slate's early calls and every revision and final call due
+(``calls.ALL_CALLS``), with the model the live-model flag
+(``state/settings/live_model.json``) names; an unusable flag fails the step
+and writes nothing. Odds are kept across loop iterations in the loop's
+odds cache (``cloud/odds_cache.py``, env ``PREDICTOR_ODDS_CACHE``):
+restored after the rebuild, saved after a successful odds load, never
+committed or archived; the two-downloads-a-day budget is unchanged.
+
 The run never seals a call at or after tip-off: `live.predict_today` only
 calls a game while ``now < tip - CALL_CUTOFF`` (15 minutes), and
 ``now`` is re-read after the fetches.
@@ -44,8 +53,9 @@ from pathlib import Path
 import requests
 
 from predictor import config, db
-from predictor.cloud import archive, games, injuries, macsync, players, state
-from predictor.model import live, publish
+from predictor.cloud import archive, games, injuries, macsync, odds_cache, players, state
+from predictor.model import live, live_model, publish
+from predictor.model.calls import ALL_CALLS
 from predictor.sources import espn, injury_report, news_rss, odds
 
 STEP_NAMES = (
@@ -287,7 +297,19 @@ def _rebuild(run: _Run) -> tuple[bool, bool, str]:
     report = state.rebuild_db(run.state_dir, db_path)
     run.con = db.connect(db_path)
     total = sum(report.rows.values())
-    return True, True, f"{total} rows from state in {report.seconds:.1f} s"
+    detail = f"{total} rows from state in {report.seconds:.1f} s"
+    cache = config.odds_cache_dir()
+    if cache is not None:
+        # The loop's odds cache: a later iteration still sees the latest
+        # live line. Display-only data, so a failure is only a note.
+        try:
+            restored = odds_cache.restore(run.con, cache, run.started)
+        except Exception as exc:  # noqa: BLE001 -- never fails the step
+            run.notes.append(_plain(f"odds cache: not restored ({type(exc).__name__}: {exc})"))
+        else:
+            if restored:
+                detail += f"; {restored} cached odds row(s) restored"
+    return True, True, detail
 
 
 def _scoreboard(run: _Run) -> tuple[bool, bool, str]:
@@ -420,6 +442,7 @@ def _odds(run: _Run) -> tuple[bool, bool, str]:
         # public; the attempt line below records no odds content.
         summary = odds.load(run.con, downloaded)
         attempt["ok"] = True
+        _save_odds_cache(run, downloaded)
     except odds.OddsQuotaExceeded as exc:
         attempt["remaining"] = _to_int(exc.requests_remaining)
         raise
@@ -429,6 +452,18 @@ def _odds(run: _Run) -> tuple[bool, bool, str]:
     left = f", {attempt['remaining']} requests left" if attempt["remaining"] is not None else ""
     return True, True, (f"{window.name} window: {summary.rows} row(s), "
                         f"{summary.linked}/{summary.events} event(s) linked{left}")
+
+
+def _save_odds_cache(run: _Run, downloaded: odds.OddsDownload) -> None:
+    """Keep the loaded odds for later loop iterations (no cache dir: a
+    single run, nothing kept). A failure is only a note."""
+    cache = config.odds_cache_dir()
+    if cache is None:
+        return
+    try:
+        odds_cache.save(cache, downloaded)
+    except Exception as exc:  # noqa: BLE001 -- the odds step already succeeded
+        run.notes.append(_plain(f"odds cache: not saved ({type(exc).__name__}: {exc})"))
 
 
 def _news(run: _Run) -> None:
@@ -535,19 +570,38 @@ def _state_committed(run: _Run) -> bool:
 
 def _predict(run: _Run) -> tuple[bool, bool, str]:
     now = run.clock()  # re-read after the fetches
+    due = live.calls_due(run.con, now)
     if not _state_committed(run):
-        return live.early_call_due(now), False, "not run: state commit failed"
-    if not live.early_call_due(now):
+        return due, False, "not run: state commit failed"
+    if not due:
         _id_links(run)
         return False, True, f"the early call is due from {live.early_call_at(live.slate_date(now)):%H:%M} UTC"
     from predictor.model import settings as model_settings
 
     _id_links(run)  # before predicting: a linked provisional call covers its game
-    loaded = model_settings.load(state.settings_path(run.state_dir))
-    result = live.predict_today(run.con, loaded, run.state_repo, now, code_dir=run.code_dir,
-                                state_version=publish.head_sha(run.state_repo),
-                                code_version=run.code_version)
-    detail = (f"slate {live.slate_date(now)}: {result.predicted} predicted, "
+    slate = live.slate_date(now)
+    # Early calls only from 18:00 IST; before that only an earlier slate's
+    # final (or missed final) can be due.
+    calls = ALL_CALLS if live.early_call_due(now) else ALL_CALLS - {"early"}
+    try:
+        flag = live_model.load_live_model(run.state_dir)
+        # The slate's model needs player settings up front; a game first
+        # called by v2 under a team flag makes predict_today load them.
+        player = (live_model.load_player_settings()
+                  if live_model.kind_for_slate(flag, slate) == "player" else None)
+        loaded = model_settings.load(state.settings_path(run.state_dir))
+        result = live.predict_today(run.con, loaded, run.state_repo, now, code_dir=run.code_dir,
+                                    state_version=publish.head_sha(run.state_repo),
+                                    code_version=run.code_version, calls=calls,
+                                    live_model=flag, player_settings=player,
+                                    id_links=state.read_id_links(run.state_dir))
+    except live_model.LiveModelError as exc:
+        # No lines were written, and v1 is never a silent fallback.
+        return True, False, f"live model flag unusable: {exc}"
+    versions = ", ".join(sorted(result.model_versions)) or "none"
+    detail = (f"slate {slate} (model {versions}): {result.predicted} early, "
+              f"{result.revisions} revision(s), {result.finals} final, "
+              f"{result.missed_finals} missed final, "
               f"{result.not_predicted} not predicted, "
               f"{result.skipped_duplicates} duplicate(s) skipped")
     if result.stale:
