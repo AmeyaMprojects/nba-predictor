@@ -33,6 +33,7 @@ from predictor import db
 from predictor.asof import AsOfView
 from predictor.backtest.baselines import GameToPredict
 from predictor.model import market, publish
+from predictor.model.calls import TBD_REASON
 from predictor.model.settings import ModelSettings
 from predictor.model.stage1 import Stage1Predictor
 from predictor.model.venues import competitive_sql
@@ -78,8 +79,9 @@ _MISSED_REASON = (
     "happen in time)"
 )
 # A TBD line is provisional: it never blocks a later prediction of the same
-# game once its tip-off is announced (see predict_today's dedupe).
-_TBD_REASON = "tip-off time not announced when the prediction run happened"
+# game once its tip-off is announced (see predict_today's dedupe). The text
+# lives in ``calls`` so ``calls`` never imports ``live``.
+_TBD_REASON = TBD_REASON
 
 # The live odds job (com.predictor.odds) runs at 17:30 IST, half an hour
 # before predict-today -- but when it missed (a sleeping Mac), predict-today
