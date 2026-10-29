@@ -91,7 +91,7 @@ const gradeFile = file.replace('.jsonl', '-grades.jsonl');
 
   <Record record={record} pendingTonight={pending} />
 
-  {days.length > 0 && <Ledger days={days} />}
+  {days.length > 0 && <Ledger days={days} modelSwitch={record.modelSwitch} />}
 
   <section class="how" id="how" aria-labelledby="how-h">
     <h2 id="how-h" class="h2">How a call is sealed</h2>

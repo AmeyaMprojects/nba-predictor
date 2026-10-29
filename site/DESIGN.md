@@ -8,7 +8,7 @@
 - **Language:** English. Times are shown in India time (IST) first, with US Eastern as the secondary label (owner decision 2026-10-21). Game dates stay the league's US date; each tip-off also shows its India date.
 - **Honesty rules (from the project spec):**
   - Never claim the model beats the market. Over the 2020-21 to 2025-26 walk-forward test the market picked 67.9% and the model 65.4% (7,227 games).
-  - The model does not know injuries or lineups.
+  - Model v1 does not know injuries or lineups; model v2 reads the injury report. The site says which model made each call.
   - Early-season records are small samples, and the page says so.
   - No betting advice.
 - **Assumptions:**

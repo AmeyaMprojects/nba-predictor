@@ -30,4 +30,7 @@ export const backtest = {
   marketLeadRange: '0.9 to 3.6',
 };
 
+// The player model (v2) over the same walk-forward test; filled in at the switch (plan 3, Task 11).
+export const backtestV2: null | { games: number; model: { accuracy: number; brier: number; logLoss: number } } = null;
+
 export const SMALL_SAMPLE = 100;

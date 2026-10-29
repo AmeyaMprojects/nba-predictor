@@ -6,11 +6,13 @@ import { modelSpread, TERM_LABELS, termText } from '../lib/format';
 interface Props { game: Game }
 const { game: g } = Astro.props;
 const terms = g.terms!;
-const scale = Math.max(8, ...TERM_LABELS.map(([k]) => Math.abs(terms[k] ?? 0)), Math.abs(g.spread ?? 0));
+// Only the terms this call's model logged: v1 lines have no roster or injuries term.
+const labels = TERM_LABELS.filter(([k]) => terms[k] != null);
+const scale = Math.max(8, ...labels.map(([k]) => Math.abs(terms[k] ?? 0)), Math.abs(g.spread ?? 0));
 const w = (v: number) => Math.min(1, Math.abs(v) / scale) / 2;
 // Only terms that move the line get a bar; the rest fold into one "even" line.
-const moving = TERM_LABELS.filter(([k]) => Math.abs(terms[k] ?? 0) >= 0.05);
-const flat = TERM_LABELS.filter(([k]) => Math.abs(terms[k] ?? 0) < 0.05).map(([, l]) => l);
+const moving = labels.filter(([k]) => Math.abs(terms[k] ?? 0) >= 0.05);
+const flat = labels.filter(([k]) => Math.abs(terms[k] ?? 0) < 0.05).map(([, l]) => l);
 const flatText = flat.length ? `${flat.map((l, i) => (i ? l.toLowerCase() : l)).join(', ')}: even` : null;
 ---
 <div class="terms">

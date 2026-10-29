@@ -5,7 +5,8 @@ import { site } from '../data/site';
 import { dayHref } from '../lib/url';
 import { duration, gameDate, gameMonth, timeMain } from '../lib/format';
 
-interface Props { days: Day[] }
+interface Props { days: Day[]; modelSwitch?: string | null }
+const { modelSwitch = null } = Astro.props;
 const days = [...Astro.props.days].reverse();
 const months = new Map<string, Day[]>();
 for (const d of days) {
@@ -39,6 +40,10 @@ const tally = (t: { right: number; of: number }) => (t.of ? `${t.right}/${t.of}`
           {list.map((d) => {
             const lead = d.seal ? Date.parse(d.firstTip) - Date.parse(d.seal.time) : null;
             return (
+              <>
+              {d.date === modelSwitch && (
+                <tr class="table__marker"><th scope="row" colspan="7">Model v2 from {gameDate(d.date)}: the model also reads the official injury report</th></tr>
+              )}
               <tr class="table__row">
                 <th scope="row"><a class="rowlink" href={dayHref(d.date)}>{gameDate(d.date, 'long').slice(0, -5)}<span class="yr"> {d.date.slice(0, 4)}</span></a></th>
                 <td class="num">{d.called.length}{d.games.length > d.called.length && <span class="muted"> of {d.games.length}</span>}</td>
@@ -48,6 +53,7 @@ const tally = (t: { right: number; of: number }) => (t.of ? `${t.right}/${t.of}`
                 <td class="opt">{lead == null ? '' : lead >= 0 ? duration(lead) : <span class="late">{duration(lead)} after</span>}</td>
                 <td>{d.seal ? <a class="hash" href={site.commit(d.seal.hash)}>{d.seal.short}</a> : <span class="muted">none</span>}</td>
               </tr>
+              </>
             );
           })}
         </tbody>

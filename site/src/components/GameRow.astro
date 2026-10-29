@@ -3,9 +3,11 @@
 // The model's orange dot and the market's slate ring sit where each puts the home team's chance
 // (left end = away certain, centre = 50/50, right end = home certain). After the final, the ball
 // settles at the winner's end.
-import type { Game } from '../lib/data';
+import type { CallEntry, Game } from '../lib/data';
+import { site } from '../data/site';
 import { teamName } from '../lib/teams';
-import { disagree, marketPick, marketSpread, modelPick, modelSpread, timeET, timeIST, dayMain, winner } from '../lib/format';
+import { callTypeOf } from '../lib/calls';
+import { disagree, lean, marketPick, marketSpread, modelPick, modelSpread, timeET, timeIST, dayMain, winner } from '../lib/format';
 
 interface Props { game: Game; size?: 'slate' | 'day'; headingLevel?: 'h3' | 'h2' }
 const { game: g, size = 'slate', headingLevel = 'h3' } = Astro.props;
@@ -25,6 +27,15 @@ const score = gr
     ? `${g.home_team} ${gr.home_points}, ${g.away_team} ${gr.away_points}`
     : `${g.away_team} ${gr.away_points}, ${g.home_team} ${gr.home_points}`
   : null;
+// The call history: every log line of this game, oldest first. Shown once a game has more than one.
+const KIND = { early: 'Early', revision: 'Revision', final: 'Final' } as const;
+const kindOf = (c: CallEntry) =>
+  callTypeOf(c) === 'final' && c.status !== 'predicted' ? 'Missed final' : KIND[callTypeOf(c)];
+const pickOf = (c: CallEntry) => {
+  const l = c.status === 'predicted' ? lean(g, c.p_home) : null;
+  return l ? `${l.team} ${l.pct}%` : 'no call';
+};
+const history = g.calls.length > 1 ? g.calls : [];
 ---
 <li class:list={['game', `game--${size}`, { 'is-graded': !!gr, 'is-nocall': !called, 'is-split': split }]} data-game>
   <H class="game__teams">
@@ -97,5 +108,18 @@ const score = gr
   </dl>
   {split && <p class="game__flag">Model and market pick different winners</p>}
   {called && g.sealedBeforeTip === false && <p class="game__flag game__flag--late">This line was committed after tip-off, so its seal proves nothing</p>}
+  {g.note && <p class="game__note">{g.note}</p>}
+  {history.length > 0 && (
+    <details class="game__history">
+      <summary>Call history ({history.length})</summary>
+      <ol>
+        {history.map((c) => (
+          <li>
+            {kindOf(c)} · <time datetime={c.predicted_at}>{timeIST(c.predicted_at)}</time> ({timeET(c.predicted_at)}) · {pickOf(c)}{c === g.graded && ' · graded'}{c.seal && <> · <a class="hash" href={site.commit(c.seal.hash)}>{c.seal.short}</a></>}
+          </li>
+        ))}
+      </ol>
+    </details>
+  )}
   <slot />
 </li>

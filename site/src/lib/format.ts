@@ -93,10 +93,12 @@ export function termText(g: Game, v: number) {
 }
 export const TERM_LABELS: [keyof Terms, string][] = [
   ['rating', 'Team rating'],
+  ['roster', 'Roster'],
   ['home', 'Home court'],
   ['rest', 'Rest'],
   ['travel', 'Travel'],
   ['altitude', 'Altitude'],
+  ['injuries', 'Injuries'],
 ];
 
 export const nf = (n: number) => n.toLocaleString('en-US');

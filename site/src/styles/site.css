@@ -195,6 +195,7 @@ html.frame-away .frame { translate: 0 -100%; }
 .stamp__tz { font-size: 0.22em; letter-spacing: 0.02em; color: var(--c-fg); margin-left: 0.15em; vertical-align: 0.15em; }
 .stamp__lead { margin-top: 0.7rem; font-family: var(--f-mono); font-size: 0.9rem; font-weight: 500; display: flex; flex-wrap: wrap; gap: 4px 14px; }
 .stamp__et { color: var(--c-muted); font-weight: 400; }
+.stamp__rev { display: block; margin-top: 0.35rem; font-family: var(--f-mono); font-size: var(--t-xs); color: var(--c-muted); }
 .stamp--open { border-style: dashed; --st-r: 0deg; }
 .stamp--open:not(.stamp--lost) .stamp__time { color: var(--c-fg); font-size: clamp(3rem, 1rem + 8vw, 8rem); line-height: 0.9; letter-spacing: -0.02em; }
 .stamp--open .stamp__lead { max-width: 36ch; }
@@ -309,6 +310,13 @@ html.frame-away .frame { translate: 0 -100%; }
 .game__flag { grid-column: 1 / 4; font-family: var(--f-mono); font-size: 0.78rem; display: flex; align-items: center; gap: 8px; }
 .game__flag::before { content: ''; width: 14px; height: 2px; background: var(--c-market); flex: none; }
 .game__flag--late::before { background: var(--c-accent); }
+/* calls (plan 3): the revision note and the call history, in the flag's mono voice */
+.game__note { grid-column: 1 / 4; font-family: var(--f-mono); font-size: var(--t-xs); max-width: 80ch; }
+.game__history { grid-column: 1 / 4; font-family: var(--f-mono); font-size: var(--t-xs); }
+.game__history summary { cursor: pointer; color: var(--c-muted); width: fit-content; }
+.game__history summary:focus-visible { outline: 2px solid var(--c-fg); outline-offset: 2px; }
+.game__history ol { margin-top: 8px; display: grid; gap: 4px; list-style: none; padding: 0; }
+.game__history li { overflow-wrap: anywhere; }
 @media (hover: hover) {
   .game--slate:hover .court__dot { scale: 1.18; }
 }
@@ -361,6 +369,7 @@ html.frame-away .frame { translate: 0 -100%; }
 .refrail__tick span { position: absolute; top: -2px; white-space: nowrap; font-family: var(--f-mono); font-size: 0.76rem; font-weight: 500; background: var(--c-bg); padding: 0 6px; }
 .refrail__tick--model span { right: 6px; }
 .refrail__tick--home span, .refrail__tick--market span { left: 6px; }
+.record__sub { margin-top: 12px; font-family: var(--f-mono); font-size: var(--t-s); max-width: 60ch; }
 .record__note { margin-top: 18px; font-size: 0.98rem; max-width: 60ch; color: var(--c-fg); }
 
 /* ---------- ledger ---------- */
@@ -378,6 +387,7 @@ html.frame-away .frame { translate: 0 -100%; }
   font-family: var(--f-display); font-stretch: 64%; font-variation-settings: 'wdth' 64; font-weight: 750;
   font-size: 1.15rem; letter-spacing: 0.01em; padding-top: 22px; padding-bottom: 8px; border-bottom: 1px solid var(--c-line-strong);
 }
+.table__marker th { font-weight: 500; font-size: var(--t-xs); padding-block: 10px; border-bottom: 1px solid var(--c-fg); white-space: normal; }
 .table__row { position: relative; border-bottom: 1px solid var(--c-line); transition: background-color 0.25s; }
 .table__row th { font-weight: 500; position: relative; }
 .table__row th::before {
@@ -563,7 +573,7 @@ pre code { font-size: 0.82rem; }
   .proof .stamp-link { justify-self: start; align-self: start; }
   .game { grid-template-columns: var(--code) minmax(0, 1fr) var(--code); }
   .game__read { grid-column: 1 / -1; grid-row: auto; grid-template-columns: repeat(4, minmax(0, 1fr)); }
-  .game__flag { grid-column: 1 / -1; }
+  .game__flag, .game__note, .game__history { grid-column: 1 / -1; }
   .record__left, .record__right { grid-column: 1 / -1; }
   .dayhero__title, .dayhero__side { grid-column: 1 / -1; }
   .detail { grid-template-columns: 1fr; }

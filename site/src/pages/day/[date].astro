@@ -93,6 +93,7 @@ const h1 = `${gameDate(day.date, 'weekday')} ${gameDayNum(day.date)} ${gameMonth
                     : 'not yet committed'}
                 </dd>
               </div>}
+              {g.model_version && <div><dt>Model</dt><dd>{g.model_version}{g.model_version === 'v2' ? ', reads the injury report' : ', no injuries or lineups'}</dd></div>}
               <div><dt>Line</dt><dd><a class="ulink" href={`${site.rawFile(g.file)}#L${g.line}`}><Path path={g.file} /> line {g.line}</a></dd></div>
               {g.status === 'predicted' && !sharedMarket && <div><dt>Market</dt><dd>{mkt(g)}</dd></div>}
               {g.grade && <div><dt>Grade</dt><dd>{g.grade.correct ? 'model right' : 'model wrong'}{g.grade.market_correct != null && `, market ${g.grade.market_correct ? 'right' : 'wrong'}`}{!(sharedGraded && day.graded === called.length) && `, graded ${timeMain(g.grade.graded_at)}`}</dd></div>}

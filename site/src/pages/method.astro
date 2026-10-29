@@ -2,8 +2,8 @@
 import Base from '../layouts/Base.astro';
 import Arrow from '../components/Arrow.astro';
 import { backtest, site } from '../data/site';
-import { latestDay } from '../lib/data';
-import { nf } from '../lib/format';
+import { getData, latestDay } from '../lib/data';
+import { gameDate, nf } from '../lib/format';
 import { href } from '../lib/url';
 import Path from '../components/Path.astro';
 
@@ -11,6 +11,8 @@ const day = latestDay();
 const file = day?.games[0]?.file ?? 'predictions/2026-27.jsonl';
 const hash = day?.seal?.short ?? 'e14df79';
 const b = backtest;
+const sw = getData().record.modelSwitch;
+const swDate = sw ? gameDate(sw) : null;
 ---
 <Base
   title="Method and backtest"
@@ -40,9 +42,15 @@ const b = backtest;
 
     <section aria-labelledby="m-not">
       <h2 id="m-not" class="h3">What it does not know</h2>
+      {swDate ? (
+        <p>
+          Until {swDate} (model v1) the model did not know injuries or lineups. From {swDate} (model v2) it also rates players from box scores and reads the official NBA injury report. Each game gets an early call at 18:00 IST, a final call in the 45 minutes before tip-off, and a revision whenever a new injury report moves the home team's chance by 2 points or more. The record grades the last call sealed before tip-off; early calls have their own line.
+        </p>
+      ) : (
       <p>
         The model does not know injuries, rest days for stars, or starting lineups. The market does, right up to tip-off. When a star sits, the market moves and the model does not. That gap is most of the reason the market is ahead, and it is the obvious next thing to add.
       </p>
+      )}
     </section>
 
     <section aria-labelledby="m-test">

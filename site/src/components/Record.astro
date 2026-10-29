@@ -1,8 +1,10 @@
 ---
-// The running record: model right / market right, always with n.
+// The running record: model right / market right, always with n. The headline counts the graded
+// call of each game (the last call sealed before tip-off); the early calls get their own line, and
+// once model v2 is live the record is split by model.
 import type { Totals } from '../lib/data';
 import { backtest, SMALL_SAMPLE } from '../data/site';
-import { nf, pct } from '../lib/format';
+import { gameDate, nf, pct, pctText } from '../lib/format';
 import { href } from '../lib/url';
 
 interface Props { record: Totals; pendingTonight: number }
@@ -13,6 +15,7 @@ const rows = [
   { key: 'market', label: 'Market', t: r.market, ref: backtest.market.accuracy, refLabel: `backtest ${backtest.market.accuracy}%` },
 ];
 const missingMarket = r.graded - r.market.of;
+const of = (t: { right: number; of: number }) => `${nf(t.right)} of ${nf(t.of)}`;
 ---
 {none ? (
 <section class="record record--empty" id="record" aria-labelledby="record-h">
@@ -81,6 +84,8 @@ const missingMarket = r.graded - r.market.of;
         );
       })}
     </ul>
+    {r.early.of > 0 && <p class="record__sub">Early calls (18:00 IST): {nf(r.early.right)} of {nf(r.early.of)} right ({pctText(r.early)}).</p>}
+    {r.modelSwitch && <p class="record__sub">Model v2 from {gameDate(r.modelSwitch)}: v1 {of(r.v1)}, v2 {of(r.v2)}.</p>}
     <p class="record__note">
       {r.graded === 0
         ? <>Nothing is graded yet, so there is no live record to read. The thin ticks mark what each line scored over the six-season backtest of {nf(backtest.games)} games (<a class="ilink" href={href('/method/')}>method</a>).</>
