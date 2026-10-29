@@ -34,6 +34,7 @@ from predictor.asof import AsOfView
 from predictor.backtest.baselines import GameToPredict
 from predictor.model import market, publish
 from predictor.model.calls import TBD_REASON
+from predictor.model.live_model import team_settings_dict as _settings_dict
 from predictor.model.settings import ModelSettings
 from predictor.model.stage1 import Stage1Predictor
 from predictor.model.venues import competitive_sql
@@ -471,17 +472,6 @@ def read_log(path: Path) -> list[dict]:
                 "it was not modified -- inspect and repair it by hand"
             ) from None
     return lines
-
-
-def _settings_dict(settings: ModelSettings) -> dict:
-    return {
-        "k": settings.ratings.k,
-        "margin_cap": settings.ratings.margin_cap,
-        "season_regression": settings.ratings.season_regression,
-        "hca_window": settings.ratings.hca_window,
-        "sigma": settings.sigma,
-        "half_life": settings.half_life,
-    }
 
 
 def _r6(value: float) -> float:
