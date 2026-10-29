@@ -23,3 +23,4 @@
 {"away_points":111,"away_team":"WAS","game_date":"2026-10-28","game_id":"0022600133","home_points":121,"home_team":"CLE","observed_at":"2026-10-29T02:37:15.518298+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
 {"away_points":89,"away_team":"CHA","game_date":"2026-10-28","game_id":"0022600134","home_points":97,"home_team":"DET","observed_at":"2026-10-29T02:37:15.518298+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
 {"away_points":114,"away_team":"PHI","game_date":"2026-10-28","game_id":"0022600135","home_points":109,"home_team":"IND","observed_at":"2026-10-29T02:37:15.518298+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
+{"away_points":99,"away_team":"ORL","game_date":"2026-10-28","game_id":"0022600136","home_points":129,"home_team":"TOR","observed_at":"2026-10-29T03:07:15.430543+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
