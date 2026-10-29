@@ -821,6 +821,32 @@ def predict_today_cmd(
                 )
             raise typer.Exit(code=1) from None
 
+    # Stand down before any capture, odds fetch, prediction or grading if the
+    # cloud owns this slate (the player model, or it already publishes main).
+    from predictor.model import live_model
+
+    slate_day = slate_date(now)
+    try:
+        published = live_model.read_published(repo_dir, slate_day, season_label(now))
+    except live_model.LiveModelError as exc:
+        typer.echo(f"predict-today: {exc}")
+        raise typer.Exit(code=1) from None
+    if not published.fetched:
+        typer.echo("predict-today: could not reach origin; checked the local copy only.")
+    if live_model.kind_for_slate(published.live, slate_day) == "player":
+        typer.echo(
+            f"predict-today: from {published.live.from_slate} the live model is the "
+            "player model, which only the cloud runs. This Mac made no calls and "
+            f"graded nothing for {slate_day}."
+        )
+        raise typer.Exit(code=1)
+    if published.cloud_lines:
+        typer.echo(
+            "predict-today: the cloud already publishes main (it has calls for "
+            f"{slate_day}). This Mac made no calls and graded nothing."
+        )
+        raise typer.Exit(code=1)
+
     con = open_read_only()
 
     # Catch up first: if recent results are missing (a capture-results run

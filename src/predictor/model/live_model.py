@@ -24,7 +24,9 @@ belongs to the replay only.
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
@@ -110,6 +112,67 @@ def load_live_model(state_dir: Path) -> LiveModel:
     except (OSError, UnicodeDecodeError) as exc:
         raise _error(f"could not read the live-model flag at {path} ({exc}).") from None
     return parse_live_model(text)
+
+
+@dataclass(frozen=True)
+class Published:
+    """What ``main`` publishes: the live-model flag, whether the cloud already
+    has calls for the slate, and whether origin could be reached."""
+
+    live: LiveModel
+    cloud_lines: bool
+    fetched: bool = True
+
+
+_FETCH_TIMEOUT = 60.0
+_SHOW_TIMEOUT = 30.0
+
+
+def read_published(
+    repo_dir: Path, slate: date, season: str, runner=None,
+) -> Published:
+    """The flag and the slate's cloud lines as ``origin/main`` has them (after
+    a fetch). If the fetch fails the local ``HEAD`` files are read instead and
+    ``fetched`` is False. Never prompts and never hangs (timeouts, no tty).
+    Missing files mean the team model / no lines; a broken flag raises
+    ``LiveModelError``."""
+    from predictor.model.publish import _GIT_ENV_OVERRIDES
+
+    run = runner if runner is not None else subprocess.run
+    env = {**os.environ, **_GIT_ENV_OVERRIDES}
+
+    def git(args: list[str], timeout: float):
+        try:
+            return run(
+                ["git", *args], cwd=repo_dir, capture_output=True, text=True,
+                timeout=timeout, stdin=subprocess.DEVNULL, env=env,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+
+    r = git(["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"], _FETCH_TIMEOUT)
+    fetched = r is not None and r.returncode == 0
+    ref = "origin/main" if fetched else "HEAD"
+
+    def show(path: str) -> str | None:
+        out = git(["show", f"{ref}:{path}"], _SHOW_TIMEOUT)
+        return out.stdout if out is not None and out.returncode == 0 else None
+
+    flag = show("state/settings/live_model.json")
+    live = parse_live_model(flag) if flag is not None else LiveModel.team()
+    log = show(f"predictions/{season}.jsonl") or ""
+    day = slate.isoformat()
+    cloud = False
+    for raw in log.splitlines():
+        try:
+            line = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if (isinstance(line, dict) and line.get("game_date") == day
+                and line.get("state_version") is not None):
+            cloud = True
+            break
+    return Published(live, cloud, fetched)
 
 
 def kind_for_slate(live: LiveModel, slate: date) -> ModelKind:

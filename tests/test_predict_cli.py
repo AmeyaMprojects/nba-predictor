@@ -15,6 +15,7 @@ runs on every subsequent `predict-today` invocation.
 
 from __future__ import annotations
 
+import json
 import subprocess
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -1061,3 +1062,140 @@ def test_predict_today_appends_no_grade_for_a_game_capture_results_graded(tmp_pa
     assert second.exit_code == 0, second.output
     assert "grades appended: 0" in second.output
     assert grades_path(repo_dir, SEASON).read_text(encoding="utf-8") == before
+
+
+# --- Task 9: the Mac stands down once v2 is live or the cloud publishes main --
+
+_PLAYER_FLAG = '{"model": "player", "from_slate": "2026-11-10"}\n'
+
+
+def _publish_from_elsewhere(tmp_path, remote_dir, files: dict[str, str]) -> None:
+    """Commit `files` to the bare remote's main through a second clone."""
+    other = tmp_path / "other"
+    assert subprocess.run(
+        ["git", "clone", "-q", str(remote_dir), str(other)], capture_output=True
+    ).returncode == 0
+    for rel, text in files.items():
+        p = other / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+        assert _git(other, "add", rel).returncode == 0
+    assert _git(other, "commit", "-m", "cloud").returncode == 0
+    assert _git(other, "push", "origin", "main").returncode == 0
+
+
+def _one_game_wired(tmp_path, monkeypatch):
+    now = datetime(2026, 11, 10, 20, 0, tzinfo=UTC)
+    con, repo_dir, remote_dir = _wire(tmp_path, monkeypatch, now)
+    insert_schedule_row(
+        con, "0022600001", date(2026, 11, 10), "PHI", "NYK",
+        now + timedelta(hours=2), season=SEASON,
+    )
+    con.close()
+    return now, repo_dir, remote_dir
+
+
+def _head(repo_dir):
+    return _git(repo_dir, "rev-parse", "HEAD").stdout.strip()
+
+
+def test_mac_refuses_when_flag_says_player(tmp_path, monkeypatch):
+    _, repo_dir, remote_dir = _one_game_wired(tmp_path, monkeypatch)
+    _publish_from_elsewhere(
+        tmp_path, remote_dir, {"state/settings/live_model.json": _PLAYER_FLAG}
+    )
+    before = _head(repo_dir)
+
+    result = runner.invoke(cli.app, ["predict-today"])
+
+    assert result.exit_code == 1
+    assert (
+        "predict-today: from 2026-11-10 the live model is the player model, which only "
+        "the cloud runs. This Mac made no calls and graded nothing for 2026-11-10."
+    ) in result.output
+    assert not log_path(repo_dir, SEASON).exists()
+    assert _head(repo_dir) == before
+
+
+def test_mac_refuses_when_cloud_lines_on_origin_main(tmp_path, monkeypatch):
+    _, repo_dir, remote_dir = _one_game_wired(tmp_path, monkeypatch)
+    line = _predicted_line(
+        "0022600001", SEASON, "2026-11-10",
+        datetime(2026, 11, 10, 22, 0, tzinfo=UTC), datetime(2026, 11, 10, 15, 0, tzinfo=UTC),
+    )
+    line["state_version"] = "abc1234"
+    _publish_from_elsewhere(
+        tmp_path, remote_dir,
+        {f"predictions/{SEASON}.jsonl": json.dumps(line) + "\n"},
+    )
+    before = _head(repo_dir)
+
+    result = runner.invoke(cli.app, ["predict-today"])
+
+    assert result.exit_code == 1
+    assert (
+        "predict-today: the cloud already publishes main (it has calls for 2026-11-10). "
+        "This Mac made no calls and graded nothing."
+    ) in result.output
+    assert not log_path(repo_dir, SEASON).exists()
+    assert _head(repo_dir) == before
+
+
+def test_mac_predicts_as_today_when_flag_team(tmp_path, monkeypatch):
+    _, repo_dir, remote_dir = _one_game_wired(tmp_path, monkeypatch)
+    _publish_from_elsewhere(
+        tmp_path, remote_dir, {"state/settings/live_model.json": '{"model": "team"}\n'}
+    )
+
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    log = read_log(log_path(repo_dir, SEASON))
+    assert [(x["call_type"], x["model_version"]) for x in log] == [("early", "v1")]
+
+
+def test_mac_fetch_failure_falls_back_to_local_flag(tmp_path, monkeypatch):
+    _, repo_dir, _remote = _one_game_wired(tmp_path, monkeypatch)
+    flag = repo_dir / "state/settings/live_model.json"
+    flag.parent.mkdir(parents=True)
+    flag.write_text(_PLAYER_FLAG, encoding="utf-8")
+    assert _git(repo_dir, "add", "state").returncode == 0
+    assert _git(repo_dir, "commit", "-m", "flag").returncode == 0
+
+    real_run = subprocess.run
+
+    def failing_fetch(cmd, *a, **kw):
+        if "fetch" in cmd:
+            return subprocess.CompletedProcess(cmd, 128, "", "fatal: unreachable")
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", failing_fetch)
+
+    result = runner.invoke(cli.app, ["predict-today"])
+
+    assert result.exit_code == 1
+    assert "predict-today: could not reach origin; checked the local copy only." in result.output
+    assert "the live model is the player model, which only the cloud runs" in result.output
+    assert not log_path(repo_dir, SEASON).exists()
+
+
+def test_mac_fetch_timeout_does_not_hang_and_checks_local(tmp_path, monkeypatch):
+    _, repo_dir, _remote = _one_game_wired(tmp_path, monkeypatch)
+    real_run = subprocess.run
+    seen = {}
+
+    def timing_out(cmd, *a, **kw):
+        if "fetch" in cmd:
+            seen["timeout"] = kw.get("timeout")
+            seen["stdin"] = kw.get("stdin")
+            raise subprocess.TimeoutExpired(cmd, kw.get("timeout"))
+        return real_run(cmd, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", timing_out)
+
+    result = runner.invoke(cli.app, ["predict-today", "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert "could not reach origin; checked the local copy only." in result.output
+    assert seen["timeout"] == 60.0
+    assert seen["stdin"] == subprocess.DEVNULL
