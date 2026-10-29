@@ -33,6 +33,7 @@ from player_fixtures import (
     player_index,
     report_name,
 )
+from predictor import db
 from predictor.asof import AsOfView
 from predictor.backtest.baselines import GameToPredict
 from predictor.model import candidate as cand
@@ -406,3 +407,23 @@ def test_uses_the_settings_availability_table(con, monkeypatch):
     assert hard.injuries > soft.injuries > 0.0
     assert hard.injuries - soft.injuries > 0.01
     assert hard.roster == soft.roster
+
+
+def test_predictor_passes_id_links_to_espn_rows(con):
+    table = db.POINT_IN_TIME_TABLES["player_boxscores"]
+    seen = datetime(2024, 11, 2, 5, 0, tzinfo=UTC)
+    con.execute(
+        f"INSERT INTO {table} (game_id, season, game_date, team, player_id,"
+        " espn_player_id, player_name, starter, did_not_play, minutes, points,"
+        " rebounds, assists, plus_minus, source, observed_at)"
+        " VALUES ('espn:77', '2024-25', DATE '2024-11-01', 'BOS', '1', '91',"
+        " 'Al Adams', TRUE, FALSE, 30.0, 10, 5, 3, 4, 'espn', ?)",
+        [seen],
+    )
+    at = datetime(2024, 11, 3, 0, 0, tzinfo=UTC)
+    plain = ps1.PlayerStage1Predictor(con, _settings())
+    assert plain._state_for(AsOfView(con, at), date(2024, 11, 3)).lines.espn.unlinked_games == 1
+    linked = ps1.PlayerStage1Predictor(con, _settings(), id_links={"espn:77": "0022400099"})
+    lines = linked._state_for(AsOfView(con, at), date(2024, 11, 3)).lines
+    assert lines.espn.unlinked_games == 0
+    assert lines.espn.games == 1

@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import dataclasses
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -190,12 +190,18 @@ class PlayerStage1Predictor:
     def __init__(
         self, con, settings: PlayerModelSettings, venues: VenueIndex | None = None,
         *, report_lag: timedelta = timedelta(0),
+        id_links: Mapping[str, str] | None = None,
     ) -> None:
         # Live calls use no lag (they read every report the view shows); the
         # replay parity uses ``player_sim.REPLAY_REPORT_LAG``.
         if report_lag < timedelta(0):
             raise ValueError(f"report_lag must not be negative, got {report_lag}")
         self.report_lag = report_lag
+        # Provisional ``espn:`` game id -> NBA game id, so ESPN box rows
+        # stored under a provisional id count once under the NBA game
+        # (``player_sim.espn_rows``). The live caller passes the cloud's
+        # links; without them an unlinked provisional game's rows are left out.
+        self.id_links: dict[str, str] = dict(id_links or {})
         self.settings = settings
         self.venues = venues if venues is not None else VenueIndex.from_db(con)
         self._team = Stage1Predictor(con, _stage1_settings(settings), self.venues)
@@ -222,7 +228,7 @@ class PlayerStage1Predictor:
         key = (view.as_of, game_date)
         if self._state_key == key and self._state is not None:
             return self._state
-        lines = PlayerLines.from_view(view, before=game_date)
+        lines = PlayerLines.from_view(view, before=game_date, id_links=self.id_links)
         games = [
             _Game(
                 Result(gid, season, gd, home, away, hp, ap, self._neutral(gid)),

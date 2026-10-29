@@ -56,7 +56,7 @@ from __future__ import annotations
 import dataclasses
 import math
 from collections import Counter, defaultdict, deque
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, time, timedelta
 
@@ -159,21 +159,29 @@ def _played(row: PlayerGameRow) -> bool:
 
 DayRows = list[tuple[PlayerGameRow, bool]]  # (row, feeds ratings and minutes)
 
-# A player id in player_boxscores that no NBA player link resolved.
+# A player id in player_boxscores that no NBA player link resolved, and a
+# game id ESPN gave a game before it was linked to an NBA id.
 UNLINKED_PREFIX = "espn:"
 
 
 @dataclass(frozen=True)
 class EspnMergeStats:
-    """What ``espn_rows`` merged: games and rows used, and rows skipped
-    because their athlete has no NBA player id (``espn:<id>``)."""
+    """What ``espn_rows`` merged: games and rows used, rows skipped because
+    their athlete has no NBA player id (``espn:<id>``), and games skipped
+    because their provisional ``espn:<event>`` id has no NBA id link."""
 
     games: int = 0
     rows: int = 0
     unlinked: int = 0
+    unlinked_games: int = 0
 
 
 def _espn_season_type(game_id: str) -> str:
+    """Stored season-type tag from an NBA game id's prefix. Preseason
+    (``001``) rows feed rosters only, never ratings or minutes
+    (``RATING_SEASON_TYPES``)."""
+    if game_id.startswith("001"):
+        return "preseason"
     if game_id.startswith("004"):
         return "playoffs"
     if game_id.startswith("005"):
@@ -182,12 +190,22 @@ def _espn_season_type(game_id: str) -> str:
 
 
 def espn_rows(
-    view, before: date, nba_games: set[str]
+    view, before: date, nba_games: set[str],
+    id_links: Mapping[str, str] | None = None,
 ) -> tuple[list[tuple[PlayerGameRow, str]], EspnMergeStats]:
     """ESPN box rows (``player_boxscores``) as box-incomplete player rows.
 
     Reads only ``view.latest("player_boxscores")`` (latest per game, player
     and source), so a row observed after the view's cutoff is never used.
+
+    A provisional ``espn:<event>`` game id is first mapped to its NBA id
+    through ``id_links`` (provisional id -> NBA game id, as the cloud keeps
+    them). Classifying and deduping use the mapped id, so a game whose rows
+    sit under both ids, or whose NBA rows exist, is counted once. A game id
+    still provisional after mapping is excluded (its season type is not
+    known: the table stores none) and counted in ``unlinked_games``. When
+    one player has rows under both ids, the latest observation wins.
+
     Keeps games dated strictly before ``before`` that have no NBA
     ``player_games`` row (``nba_games``): an NBA row always replaces ESPN.
     Did-not-play rows are skipped. A player id still ``espn:<id>`` (no NBA
@@ -198,18 +216,33 @@ def espn_rows(
     Rows carry points, assists, minutes and plus-minus only; every other
     box field is None and ``box_complete`` is False, so they update the
     plus-minus rating, minutes and rosters but never the box rating.
+    Season type comes from the NBA game id (``_espn_season_type``).
     """
+    links = dict(id_links or {})
     raw = view.latest("player_boxscores").project(
         "game_id, season, game_date, player_id, player_name, team, did_not_play, "
-        "minutes, points, assists, plus_minus"
+        "minutes, points, assists, plus_minus, observed_at"
     ).fetchall()
+    latest: dict[tuple[str, str], tuple] = {}
+    unlinked_games: set[str] = set()
+    for row in raw:
+        gid = links.get(row[0], row[0])
+        if row[2] >= before or gid in nba_games:
+            continue
+        if gid.startswith(UNLINKED_PREFIX):
+            unlinked_games.add(gid)
+            continue
+        key = (gid, str(row[3]))
+        seen = latest.get(key)
+        if seen is None or row[-1] > seen[-1]:
+            latest[key] = (gid, *row[1:])
     out: list[tuple[PlayerGameRow, str]] = []
     games: set[str] = set()
     unlinked = 0
-    for gid, season, gd, pid, name, team, dnp, mins, pts, ast, pm in sorted(
-        raw, key=lambda r: (r[2], r[0], str(r[3]))
+    for gid, season, gd, pid, name, team, dnp, mins, pts, ast, pm, _obs in sorted(
+        latest.values(), key=lambda r: (r[2], r[0], str(r[3]))
     ):
-        if gd >= before or gid in nba_games or dnp:
+        if dnp:
             continue
         if str(pid).startswith(UNLINKED_PREFIX):
             unlinked += 1
@@ -225,7 +258,10 @@ def espn_rows(
             _espn_season_type(gid),
         ))
         games.add(gid)
-    return out, EspnMergeStats(games=len(games), rows=len(out), unlinked=unlinked)
+    return out, EspnMergeStats(
+        games=len(games), rows=len(out), unlinked=unlinked,
+        unlinked_games=len(unlinked_games),
+    )
 
 
 class PlayerLines:
@@ -283,7 +319,10 @@ class PlayerLines:
         return cls(_parse_lines(rows), tipoff_mod.tipoff_index(con))
 
     @classmethod
-    def from_view(cls, view, before: date, *, espn: bool = True) -> PlayerLines:
+    def from_view(
+        cls, view, before: date, *, espn: bool = True,
+        id_links: Mapping[str, str] | None = None,
+    ) -> PlayerLines:
         """What an ``AsOfView`` shows: the latest-observed visible row per
         (game_id, player_id), for games dated strictly before ``before``.
 
@@ -294,7 +333,9 @@ class PlayerLines:
 
         With ``espn`` (the default), games with no visible NBA row add their
         ESPN box rows (``espn_rows``: box-incomplete), and ``self.espn``
-        counts them. ``from_db`` (the replay) never reads ESPN rows.
+        counts them. ``id_links`` maps provisional ``espn:`` game ids to NBA
+        ids first (see ``espn_rows``). ``from_db`` (the replay) never reads
+        ESPN rows.
         """
         rows = view.table("player_games").project(
             f"{_LINE_COLUMNS}, observed_at"
@@ -312,7 +353,7 @@ class PlayerLines:
         stats = EspnMergeStats()
         if espn:
             nba_games = {row[0] for row in rows}
-            extra, stats = espn_rows(view, before, nba_games)
+            extra, stats = espn_rows(view, before, nba_games, id_links)
             parsed.extend(extra)
         lines = cls(parsed, include_test_seasons=True)
         lines.espn = stats

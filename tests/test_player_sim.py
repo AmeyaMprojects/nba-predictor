@@ -548,3 +548,46 @@ def test_espn_season_type_from_game_id(con):
     assert types == {"0042600101": "playoffs", "0022600101": "regular",
                      "0052600101": "playin"}
     assert stats == EspnMergeStats(games=3, rows=3, unlinked=0)
+
+
+def test_preseason_espn_row_never_feeds_ratings_or_minutes(con):
+    _espn(con, "0012600001", 2, name="Bo Baker")
+    lines = _lines_at(con, LATE)
+    day = [entry for d in lines.by_date.values() for entry in d]
+    assert [(row.game_id, rates) for row, rates in day] == [("0012600001", False)]
+    got, _ = espn_rows(AsOfView(con, LATE), AFTER, set())
+    assert [st for _, st in got] == ["preseason"]
+    book = PlayerBook(PARAMS)
+    player_sim._replay([], lines, lambda g, r: None, book, allow_test_seasons=True)
+    assert book.recent_minutes(2) == []
+
+
+def test_provisional_game_linked_to_nba_id_counted_once(con):
+    nba = "0022600050"
+    add_player_row(con, nba, ED, 1, "BOS", season=LIVE_SEASON, observed_at=SEEN)
+    _espn(con, "espn:401", 1)
+    _espn(con, "espn:401", 2, name="Bo Baker")
+    links = {"espn:401": nba}
+    lines = PlayerLines.from_view(AsOfView(con, LATE), AFTER, id_links=links)
+    rows = _rows(lines)
+    assert [(r.game_id, r.player_id, r.box_complete) for r in rows] == [(nba, 1, True)]
+    assert lines.espn == EspnMergeStats(games=0, rows=0, unlinked=0, unlinked_games=0)
+
+
+def test_provisional_game_linked_without_nba_rows_uses_nba_id(con):
+    nba = "0022600050"
+    _espn(con, "espn:401", 2, name="Bo Baker", minutes=20.0, observed_at=SEEN)
+    # The same row reloaded after the link landed, under the NBA id.
+    _espn(con, nba, 2, name="Bo Baker", minutes=22.0,
+          observed_at=SEEN + timedelta(hours=1))
+    got, stats = espn_rows(AsOfView(con, LATE), AFTER, set(), {"espn:401": nba})
+    assert [(r.game_id, r.minutes, st) for r, st in got] == [(nba, 22.0, "regular")]
+    assert stats == EspnMergeStats(games=1, rows=1, unlinked=0, unlinked_games=0)
+
+
+def test_unlinked_provisional_game_excluded_and_counted(con):
+    _espn(con, "espn:402", 2, name="Bo Baker")
+    _espn(con, "espn:402", 3, name="Cy Cole")
+    lines = _lines_at(con, LATE)
+    assert _rows(lines) == []
+    assert lines.espn == EspnMergeStats(games=0, rows=0, unlinked=0, unlinked_games=1)
