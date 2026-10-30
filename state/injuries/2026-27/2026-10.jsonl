@@ -1150,3 +1150,4 @@
 {"game_date":"2026-10-30","game_time":"10:00(ET)","kind":"set","matchup":"DEN@PHX","player":"Ighodaro,Oso","player_display":"Ighodaro,Oso","reason":"Injury/Illness-RightObliqueStrain","status":"Questionable","team":"PHX","team_display":"PhoenixSuns"}
 {"game_date":"2026-10-30","game_time":"10:00(ET)","kind":"set","matchup":"DEN@PHX","player":"Timme,Drew","player_display":"Timme,Drew","reason":"GLeague-Two-Way","status":"Out","team":"PHX","team_display":"PhoenixSuns"}
 {"game_date":"2026-10-30","game_time":"10:00(ET)","kind":"set","matchup":"DEN@PHX","player":"Williams,Mark","player_display":"Williams,Mark","reason":"Injury/Illness-LeftShoulderSurgery","status":"Out","team":"PHX","team_display":"PhoenixSuns"}
+{"content_sha":"840e487f77e602e6e51b4240b4a67886be75d78ff6ed3afd06dfeb49728b3c66","fetched_at":"2026-10-30T00:37:00.463453+00:00","kind":"report","report_at":"2026-10-30T00:30:00+00:00","rows":112,"source_key":"Injury-Report_2026-10-29_08_30PM.pdf","v":1}
