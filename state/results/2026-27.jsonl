@@ -34,3 +34,4 @@
 {"away_points":111,"away_team":"CLE","game_date":"2026-10-29","game_id":"0022600144","home_points":114,"home_team":"ATL","observed_at":"2026-10-30T03:37:15.780448+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
 {"away_points":120,"away_team":"SAC","game_date":"2026-10-29","game_id":"0022600145","home_points":132,"home_team":"NOP","observed_at":"2026-10-30T03:37:15.780448+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
 {"away_points":124,"away_team":"MEM","game_date":"2026-10-29","game_id":"0022600146","home_points":103,"home_team":"POR","observed_at":"2026-10-30T05:37:16.274631+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
+{"away_points":79,"away_team":"CHA","game_date":"2026-10-30","game_id":"0022600015","home_points":95,"home_team":"WAS","observed_at":"2026-10-31T02:37:17.469716+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
