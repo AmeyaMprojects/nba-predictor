@@ -135,3 +135,4 @@
 {"game_date":"2026-11-02","game_time":"08:30(ET)","kind":"set","matchup":"BOS@HOU","player":"Copeland,Quadir","player_display":"Copeland,Quadir","reason":"GLeague-Two-Way","status":"Out","team":"HOU","team_display":"HoustonRockets"}
 {"game_date":"2026-11-02","game_time":"08:30(ET)","kind":"set","matchup":"BOS@HOU","player":"Phillips,Julian","player_display":"Phillips,Julian","reason":"GLeague-Two-Way","status":"Out","team":"HOU","team_display":"HoustonRockets"}
 {"game_date":"2026-11-02","game_time":"08:30(ET)","kind":"set","matchup":"BOS@HOU","player":"Sheppard,Reed","player_display":"Sheppard,Reed","reason":"Injury/Illness-LowBackStrain","status":"Questionable","team":"HOU","team_display":"HoustonRockets"}
+{"content_sha":"ceb78adf2e7dff7c44e667c8df1e563d8f22ddb7f3d206b2180ca27223f3288c","fetched_at":"2026-11-01T20:52:00.484407+00:00","kind":"report","report_at":"2026-11-01T20:45:00+00:00","rows":48,"source_key":"Injury-Report_2026-11-01_03_45PM.pdf","v":1}
