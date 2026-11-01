@@ -45,3 +45,4 @@
 {"away_points":95,"away_team":"LAL","game_date":"2026-10-30","game_id":"0022600023","home_points":112,"home_team":"GSW","observed_at":"2026-10-31T05:37:17.540937+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
 {"away_points":127,"away_team":"DEN","game_date":"2026-10-30","game_id":"0022600024","home_points":120,"home_team":"PHX","observed_at":"2026-10-31T05:37:17.540937+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
 {"away_points":112,"away_team":"POR","game_date":"2026-10-31","game_id":"0022600147","home_points":90,"home_team":"UTA","observed_at":"2026-10-31T22:37:13.725818+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
+{"away_points":109,"away_team":"PHI","game_date":"2026-10-31","game_id":"0022600148","home_points":104,"home_team":"CHA","observed_at":"2026-11-01T01:37:11.811234+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
