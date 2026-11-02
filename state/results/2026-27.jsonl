@@ -52,3 +52,4 @@
 {"away_points":111,"away_team":"MIN","game_date":"2026-10-31","game_id":"0022600152","home_points":121,"home_team":"SAS","observed_at":"2026-11-01T03:37:17.482614+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
 {"away_points":98,"away_team":"OKC","game_date":"2026-10-31","game_id":"0022600153","home_points":119,"home_team":"HOU","observed_at":"2026-11-01T04:07:16.917873+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
 {"away_points":108,"away_team":"BOS","game_date":"2026-11-01","game_id":"0022600154","home_points":97,"home_team":"ORL","observed_at":"2026-11-02T00:07:12.931082+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
+{"away_points":98,"away_team":"BKN","game_date":"2026-11-01","game_id":"0022600155","home_points":90,"home_team":"IND","observed_at":"2026-11-02T01:37:12.333955+00:00","reconstructed":false,"season":"2026-27","source":"espn","status":"FINAL"}
