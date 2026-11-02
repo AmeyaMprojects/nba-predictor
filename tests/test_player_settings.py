@@ -68,14 +68,15 @@ def test_settings_rejects_wrong_version():
         assert str(exc.value).endswith("Run: predictor fit-player-model")
 
 
-def test_settings_v1_file_loads_with_flat_home():
-    """The committed (plan 1, version 1) file has no "home" key and loads as
-    flat home court."""
+def test_settings_v1_document_loads_with_flat_home():
+    """A plan 1 (version 1) document has no "home" key and loads as flat home
+    court. Built inline: the committed file is no longer version 1."""
     import json
 
-    text = pset.SETTINGS_PATH.read_text()
-    assert json.loads(text)["version"] == 1
-    s = pset.from_json(text)
+    doc = json.loads(pset.to_json(_settings()))
+    doc["version"] = 1
+    doc.pop("home", None)
+    s = pset.from_json(json.dumps(doc))
     assert s.home.flat is True
     assert s.home == FLAT_HOME
 
