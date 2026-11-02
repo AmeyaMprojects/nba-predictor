@@ -47,6 +47,7 @@ jobs:
         run: |
           # runner.temp is not available in job-level env, so the data dir is set here.
           echo "PREDICTOR_DATA_DIR=$RUNNER_TEMP/predictor-data" >> "$GITHUB_ENV"
+          echo "LOOP_STARTED=$(date +%s)" >> "$GITHUB_ENV"
           git config --global user.name "nba-predictor-bot"
           git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -95,10 +96,18 @@ jobs:
 
       # GitHub's timer can leave hours between starts (gaps of 45-111 minutes
       # measured 2026-11-01), so each job starts its successor as it ends. The
-      # new run queues behind this one in the `live` concurrency group. Never
-      # after a secret leak or a cancel: those stop on purpose for a person.
+      # new run queues behind this one in the `live` concurrency group. Only
+      # after the cloud step ran for at least 30 minutes, so a fast failure
+      # cannot re-dispatch forever (cron restarts it instead). Not after a
+      # cancel. A secret leak stops this chain, but cron (7,37) still starts
+      # jobs, so a person must disable the workflow to stop it fully.
       - name: Start the next job
-        if: ${{ !cancelled() && steps.cloud.outputs.secret_leak != 'true' }}
-        run: gh workflow run live.yml --ref main
+        if: ${{ !cancelled() && steps.cloud.outcome != 'skipped' && steps.cloud.outputs.secret_leak != 'true' }}
+        run: |
+          if [ $(( $(date +%s) - LOOP_STARTED )) -ge 1800 ]; then
+            gh workflow run live.yml --ref main
+          else
+            echo "The loop ran under 30 minutes; cron will restart it."
+          fi
         env:
           GH_TOKEN: ${{ github.token }}

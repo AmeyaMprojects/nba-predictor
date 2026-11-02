@@ -142,13 +142,22 @@ def test_site_dispatched_only_from_the_loop():
     assert not any(s.get("name") == "Rebuild site" for s in _steps())
 
 
-def test_each_job_starts_the_next_unless_stopped_on_purpose():
-    # GitHub's timer alone left gaps of up to 111 minutes between jobs.
+def test_each_job_starts_the_next_only_after_a_long_run():
+    # GitHub's timer alone left gaps of up to 111 minutes between jobs. A job
+    # that failed fast must not re-dispatch forever, so the next job starts
+    # only if the cloud step ran for at least 30 minutes.
     step = _named("Start the next job")
     assert step == _steps()[-1]
-    assert step["run"].strip() == "gh workflow run live.yml --ref main"
-    assert "!cancelled()" in step["if"]
-    assert "steps.cloud.outputs.secret_leak != 'true'" in step["if"]
+    assert step["if"] == (
+        "${{ !cancelled() && steps.cloud.outcome != 'skipped' "
+        "&& steps.cloud.outputs.secret_leak != 'true' }}"
+    )
+    run = step["run"]
+    assert "gh workflow run live.yml --ref main" in run
+    assert "$(( $(date +%s) - LOOP_STARTED )) -ge 1800" in run
+    assert "cron will restart" in run
+    identity = _named("Git identity")["run"]
+    assert 'echo "LOOP_STARTED=$(date +%s)" >> "$GITHUB_ENV"' in identity
     assert _live()["concurrency"]["cancel-in-progress"] == "false"
 
 
