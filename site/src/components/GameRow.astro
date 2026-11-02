@@ -6,7 +6,7 @@
 import type { CallEntry, Game } from '../lib/data';
 import { site } from '../data/site';
 import { teamName } from '../lib/teams';
-import { callTypeOf } from '../lib/calls';
+import { callTypeOf, isStale } from '../lib/calls';
 import { disagree, lean, marketPick, marketSpread, modelPick, modelSpread, timeET, timeIST, dayMain, winner } from '../lib/format';
 
 interface Props { game: Game; size?: 'slate' | 'day'; headingLevel?: 'h3' | 'h2' }
@@ -101,7 +101,7 @@ const history = g.calls.length > 1 ? g.calls : [];
       called && (
         <div class="read read--status">
           <dt>Status</dt>
-          <dd data-status data-tip={tipMs}>Sealed, waiting for tip-off</dd>
+          <dd data-status data-tip={tipMs}>{isStale(tipMs, Date.now()) ? 'No final score recorded' : 'Sealed, waiting for tip-off'}</dd>
         </div>
       )
     )}

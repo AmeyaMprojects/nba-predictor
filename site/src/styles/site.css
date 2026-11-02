@@ -387,7 +387,7 @@ html.frame-away .frame { translate: 0 -100%; }
   font-family: var(--f-display); font-stretch: 64%; font-variation-settings: 'wdth' 64; font-weight: 750;
   font-size: 1.15rem; letter-spacing: 0.01em; padding-top: 22px; padding-bottom: 8px; border-bottom: 1px solid var(--c-line-strong);
 }
-.table__marker th { font-weight: 500; font-size: var(--t-xs); padding-block: 10px; border-bottom: 1px solid var(--c-fg); white-space: normal; }
+.table__marker th { font-weight: 500; font-size: var(--t-xs); padding-block: 10px; border-block: 2px solid var(--c-fg); white-space: normal; }
 .table__row { position: relative; border-bottom: 1px solid var(--c-line); transition: background-color 0.25s; }
 .table__row th { font-weight: 500; position: relative; }
 .table__row th::before {
@@ -465,7 +465,7 @@ html.frame-away .frame { translate: 0 -100%; }
 .logline { background: #e6e7e2; padding: 12px 14px; }
 .logline code { font-size: 0.8rem; overflow-wrap: anywhere; }
 .facts { margin-top: 18px; display: grid; gap: 8px; font-family: var(--f-mono); font-size: 0.82rem; }
-.facts > div { display: grid; grid-template-columns: 6rem 1fr; gap: 12px; }
+.facts > div { display: grid; grid-template-columns: 9.5rem 1fr; gap: 12px; }
 .facts dt { color: var(--c-muted); }
 .facts dd { overflow-wrap: anywhere; }
 .pager { display: flex; justify-content: space-between; gap: 20px; padding-block: 40px 80px; }
@@ -607,7 +607,7 @@ pre code { font-size: 0.82rem; }
   .term { grid-template-columns: 6.6rem 1fr; }
   .term dd { grid-template-columns: 1fr 5.6rem; }
   .terms__axis { margin-left: 6.6rem; margin-right: 5.6rem; }
-  .facts > div { grid-template-columns: 5rem 1fr; }
+  .facts > div { grid-template-columns: 7.5rem 1fr; }
 }
 @media (min-width: 1700px) {
   :root { --maxw: 1600px; }

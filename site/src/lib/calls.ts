@@ -96,6 +96,20 @@ export function modelSwitchDate(lines: { game_date: string; model_version?: stri
   return first;
 }
 
+/**
+ * The ledger's v1/v2 boundary sits under this day: the first day of model v2, when an older day
+ * exists to divide it from. Null with no switch, or when every listed day is already v2.
+ */
+export function modelBoundaryDay(dates: string[], switchDate: string | null): string | null {
+  if (!switchDate || !dates.some((d) => d < switchDate)) return null;
+  const v2 = dates.filter((d) => d >= switchDate).sort();
+  return v2[0] ?? null;
+}
+
+/** A game this long past its tip-off with no grade will not get one in the normal run of things. */
+export const STALE_AFTER_MS = 36 * 3600e3;
+export const isStale = (tipMs: number, nowMs: number): boolean => nowMs - tipMs > STALE_AFTER_MS;
+
 /** How many revision lines a game has. */
 export const revisionCount = (calls: { call_type?: CallType | null }[]): number =>
   calls.filter((l) => callTypeOf(l) === 'revision').length;

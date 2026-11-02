@@ -5,6 +5,8 @@ import assert from 'node:assert/strict';
 import {
   callTypeOf,
   earlyCorrect,
+  isStale,
+  modelBoundaryDay,
   gradedCall,
   groupCalls,
   latestCall,
@@ -115,6 +117,25 @@ test('modelSwitchDate', () => {
   const v2b = line({ game_date: '2026-11-12', model_version: 'v2' });
   assert.equal(modelSwitchDate([v1, v2b, v2]), '2026-11-10');
   assert.equal(modelSwitchDate([v1, line({ game_date: '2026-11-09' })]), null);
+});
+
+test('modelBoundaryDay is the first v2 day, when an older day exists', () => {
+  const days = ['2026-11-12', '2026-11-10', '2026-11-08'];
+  assert.equal(modelBoundaryDay(days, '2026-11-10'), '2026-11-10');
+  // No day on the switch date itself: the oldest v2 day still carries the boundary.
+  assert.equal(modelBoundaryDay(days, '2026-11-09'), '2026-11-10');
+  // Nothing to divide.
+  assert.equal(modelBoundaryDay(days, '2026-11-08'), null);
+  assert.equal(modelBoundaryDay(days, '2026-11-20'), null);
+  assert.equal(modelBoundaryDay(days, null), null);
+});
+
+test('isStale only after 36 hours past tip-off', () => {
+  const tip = Date.parse('2026-11-05T00:00:00Z');
+  const hour = 3600e3;
+  assert.equal(isStale(tip, tip - hour), false);
+  assert.equal(isStale(tip, tip + 36 * hour), false);
+  assert.equal(isStale(tip, tip + 36 * hour + 1), true);
 });
 
 test('revisionCount counts only revisions', () => {

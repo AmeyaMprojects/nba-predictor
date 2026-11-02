@@ -98,6 +98,7 @@ export type Day = {
   games: Game[];
   called: Game[];
   seal: Seal; // earliest commit among the day's early calls
+  writtenAt: string | null; // when the slate's first early call was written
   unsealed: number; // calls not yet in a commit
   revisions: number;
   firstTip: string;
@@ -271,12 +272,18 @@ function load() {
       .map((c) => c.seal)
       .filter((s): s is NonNullable<Seal> => !!s);
     earlySeals.sort((a, b) => a.time.localeCompare(b.time));
+    const earlyTimes = called
+      .flatMap((g) => g.calls)
+      .filter((c) => c.status === 'predicted' && callTypeOf(c) === 'early')
+      .map((c) => c.predicted_at)
+      .sort((a, b) => Date.parse(a) - Date.parse(b));
     const tips = games.map((g) => g.tip_off_utc).sort();
     return {
       date,
       games,
       called,
       seal: earlySeals[0] ?? null,
+      writtenAt: earlyTimes[0] ?? null,
       unsealed: called.filter((g) => !g.seal).length,
       revisions: games.reduce((n, g) => n + g.revisions, 0),
       firstTip: tips[0],

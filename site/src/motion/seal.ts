@@ -6,6 +6,7 @@
 import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 import { ease, onPage, prefersReducedMotion, quickIntro } from '../engine';
+import { isStale } from '../lib/calls';
 
 gsap.registerPlugin(ScrollTrigger);
 
@@ -113,7 +114,8 @@ export function startSeal() {
       for (const m of marks) m.el.classList.toggle('is-past', m.ms <= t);
       for (const s of statuses) {
         set(s.el,
-          t < s.tip ? `Tips in ${hm(s.tip - t)}`
+          isStale(s.tip, t) ? 'No final score recorded'
+          : t < s.tip ? `Tips in ${hm(s.tip - t)}`
           : t < s.tip + FINAL_AFTER ? 'In play'
           : 'Played, the grade comes with the next update');
       }

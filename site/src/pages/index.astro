@@ -15,7 +15,7 @@ import { dayMain, gameDate, timeET, timeIST, timeMain } from '../lib/format';
 const { days, record } = getData();
 const day = latestDay();
 const pending = day ? day.called.length - day.graded : 0;
-const written = day?.called[0]?.predicted_at ?? null;
+const written = day?.writtenAt ?? null; // the slate's first early call, not a later revision or final
 const file = day?.games[0]?.file ?? 'predictions/';
 const gradeFile = file.replace('.jsonl', '-grades.jsonl');
 ---
@@ -99,7 +99,7 @@ const gradeFile = file.replace('.jsonl', '-grades.jsonl');
       <li class="step" data-reveal="up">
         <span class="step__n" aria-hidden="true">1</span>
         <h3 class="step__t">Written</h3>
-        <p>Once a day, before the first game, the model writes one line per game into <Path path={file} />: its chance for each side, its margin, and the market line it could see at that moment.</p>
+        <p>At 18:00 IST the model writes an early call for each game into <Path path={file} />: its chance for each side, its margin, and the market line it could see at that moment. A final call follows 45 to 15 minutes before tip-off. {record.modelSwitch ? 'A new injury report that moves the home team\'s chance by 2 points or more adds a revision.' : 'Once model v2 is live, a new injury report that moves the home team\'s chance by 2 points or more adds a revision.'} Every call is a new line.</p>
         {written && <p class="step__today">Latest: written {timeMain(written)}</p>}
       </li>
       <li class="step" data-reveal="up" data-delay="0.06">

@@ -9,6 +9,7 @@ import Path from '../../components/Path.astro';
 import { getData, type Day } from '../../lib/data';
 import { site } from '../../data/site';
 import { dayHref, href } from '../../lib/url';
+import { callTypeOf } from '../../lib/calls';
 import { dayMain, gameDate, gameDayNum, gameMonth, marketWhen, modelPick, timeMain } from '../../lib/format';
 
 export function getStaticPaths() {
@@ -27,7 +28,11 @@ const year = day.date.slice(0, 4);
 // Provenance shared by every call of the day goes in the header once; a game only lists what differs.
 const same = <T,>(xs: T[]) => (xs.length && xs.every((x) => x === xs[0]) ? xs[0] : null);
 const called = day.called;
-const sharedWritten = same(called.map((g) => g.predicted_at));
+// The header speaks for the day's early calls; a game with later calls labels its own facts.
+const multi = day.games.some((g) => g.calls.length > 1);
+const earlyAt = (g: typeof called[number]) => g.calls.find((c) => c.status === 'predicted' && callTypeOf(c) === 'early')?.predicted_at ?? g.predicted_at;
+const sharedWritten = same(called.map(earlyAt));
+const latest = (g: typeof called[number], label: string) => (g.calls.length > 1 ? `Latest call ${label.toLowerCase()}` : label);
 const sharedCode = same(called.map((g) => `${g.code_version ?? ''}|${!!g.code_dirty}`));
 const code = called[0]?.code_version;
 const dirty = called[0]?.code_dirty;
@@ -52,11 +57,11 @@ const h1 = `${gameDate(day.date, 'weekday')} ${gameDayNum(day.date)} ${gameMonth
       <div class="dayhero__side" data-reveal="fade" data-intro data-delay="0.2">
         <Stamp day={day} size="page" />
         <dl class="proof__facts">
-          <div><dt>Commit</dt><dd>{day.seal ? <a class="hash" href={site.commit(day.seal.hash)}>{day.seal.short}</a> : 'not yet committed'}</dd></div>
+          <div><dt>{multi ? 'Early call commit' : 'Commit'}</dt><dd>{day.seal ? <a class="hash" href={site.commit(day.seal.hash)}>{day.seal.short}</a> : 'not yet committed'}</dd></div>
           <div><dt>Graded</dt><dd>{day.graded} of {day.called.length}{day.graded > 0 && `, model ${day.model.right} right`}</dd></div>
           {day.graded > 0 && day.market.of > 0 && <div><dt>Market right</dt><dd>{day.market.right} of {day.market.of}</dd></div>}
-          {sharedWritten && <div><dt>Written</dt><dd>{timeMain(sharedWritten)}, {dayMain(sharedWritten)}</dd></div>}
-          {sharedMarket && <div><dt>Market line</dt><dd>{sharedMarket}</dd></div>}
+          {sharedWritten && <div><dt>{multi ? 'Early calls written' : 'Written'}</dt><dd>{timeMain(sharedWritten)}, {dayMain(sharedWritten)}</dd></div>}
+          {sharedMarket && <div><dt>{multi ? 'Latest market line' : 'Market line'}</dt><dd>{sharedMarket}</dd></div>}
           {sharedGraded && day.graded === called.length && <div><dt>Graded at</dt><dd>{timeMain(sharedGraded)}, {dayMain(sharedGraded)}</dd></div>}
           {sharedCode && code && <div><dt>Code</dt><dd><a class="hash" href={site.commit(code)}>{code}</a>{dirty && ' with uncommitted changes'}</dd></div>}
         </dl>
@@ -84,9 +89,9 @@ const h1 = `${gameDate(day.date, 'weekday')} ${gameDayNum(day.date)} ${gameMonth
               </>
             )}
             <dl class="facts">
-              {!sharedWritten && <div><dt>Written</dt><dd>{timeMain(g.predicted_at)}, {dayMain(g.predicted_at)}</dd></div>}
+              {(!sharedWritten || g.calls.length > 1) && <div><dt>{latest(g, 'Written')}</dt><dd>{timeMain(g.predicted_at)}, {dayMain(g.predicted_at)}</dd></div>}
               {g.seal?.hash !== day.seal?.hash && <div>
-                <dt>Sealed</dt>
+                <dt>{g.graded && g.calls.length > 1 ? 'Graded call sealed' : latest(g, 'Sealed')}</dt>
                 <dd>
                   {g.seal
                     ? <><a class="hash" href={site.commit(g.seal.hash)}>{g.seal.short}</a> at {timeMain(g.seal.time)}, {dayMain(g.seal.time)}</>
@@ -94,9 +99,9 @@ const h1 = `${gameDate(day.date, 'weekday')} ${gameDayNum(day.date)} ${gameMonth
                 </dd>
               </div>}
               {g.model_version && <div><dt>Model</dt><dd>{g.model_version}{g.model_version === 'v2' ? ', reads the injury report' : ', no injuries or lineups'}</dd></div>}
-              <div><dt>Line</dt><dd><a class="ulink" href={`${site.rawFile(g.file)}#L${g.line}`}><Path path={g.file} /> line {g.line}</a></dd></div>
-              {g.status === 'predicted' && !sharedMarket && <div><dt>Market</dt><dd>{mkt(g)}</dd></div>}
-              {g.grade && <div><dt>Grade</dt><dd>{g.grade.correct ? 'model right' : 'model wrong'}{g.grade.market_correct != null && `, market ${g.grade.market_correct ? 'right' : 'wrong'}`}{!(sharedGraded && day.graded === called.length) && `, graded ${timeMain(g.grade.graded_at)}`}</dd></div>}
+              <div><dt>{latest(g, 'Line')}</dt><dd><a class="ulink" href={`${site.rawFile(g.file)}#L${g.line}`}><Path path={g.file} /> line {g.line}</a></dd></div>
+              {g.status === 'predicted' && !sharedMarket && <div><dt>{latest(g, 'Market')}</dt><dd>{mkt(g)}</dd></div>}
+              {g.grade && <div><dt>{g.calls.length > 1 ? 'Graded call' : 'Grade'}</dt><dd>{g.graded && g.calls.length > 1 && `${callTypeOf(g.graded)} call, `}{g.grade.correct ? 'model right' : 'model wrong'}{g.grade.market_correct != null && `, market ${g.grade.market_correct ? 'right' : 'wrong'}`}{!(sharedGraded && day.graded === called.length) && `, graded ${timeMain(g.grade.graded_at)}`}</dd></div>}
               {!sharedCode && g.code_version && <div><dt>Code</dt><dd><a class="hash" href={site.commit(g.code_version)}>{g.code_version}</a>{g.code_dirty && ' with uncommitted changes'}</dd></div>}
             </dl>
           </div>
