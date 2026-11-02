@@ -8,6 +8,7 @@ import {
   isStale,
   modelBoundaryDay,
   gradedCall,
+  hasEarlyEra,
   groupCalls,
   latestCall,
   modelSwitchDate,
@@ -141,4 +142,11 @@ test('isStale only after 36 hours past tip-off', () => {
 test('revisionCount counts only revisions', () => {
   assert.equal(revisionCount([early, revision, { ...revision, predicted_at: '2026-11-05T20:00:00+00:00' }, final]), 2);
   assert.equal(revisionCount([early]), 0);
+});
+
+test('hasEarlyEra: only grades with a call_type count, not legacy-only records', () => {
+  assert.equal(hasEarlyEra([]), false);
+  assert.equal(hasEarlyEra([{}, {}]), false);
+  assert.equal(hasEarlyEra([{}, { call_type: 'final' }]), true);
+  assert.equal(hasEarlyEra([{ call_type: 'early' }]), true);
 });

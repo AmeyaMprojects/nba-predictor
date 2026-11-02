@@ -6,7 +6,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { callTypeOf, earlyCorrect, gradedCall, groupCalls, latestCall, modelSwitchDate, revisionCount, revisionNote, type CallType } from './calls';
+import { callTypeOf, earlyCorrect, gradedCall, groupCalls, hasEarlyEra, latestCall, modelSwitchDate, revisionCount, revisionNote, type CallType } from './calls';
 
 /** Points terms. v1 lines carry the first five; v2 lines add roster and injuries. */
 export type Terms = { rating?: number; roster?: number; home?: number; rest?: number; travel?: number; altitude?: number; injuries?: number };
@@ -119,6 +119,8 @@ export type Totals = {
   market: Tally;
   /** The early calls (18:00 IST) of the same graded games. */
   early: Tally;
+  /** True once a grade carries a call_type (plan 3 era): only then is the early-call line meaningful. */
+  earlyEra: boolean;
   v1: Tally;
   v2: Tally;
   /** First game date with a model v2 call; null while every call is v1. */
@@ -304,6 +306,7 @@ function load() {
     home: tally(called, (r) => r.home_won),
     market: tally(called, (r) => r.market_correct),
     early: tally(called, (_, g) => g.early),
+    earlyEra: hasEarlyEra(called.flatMap((g) => (g.grade ? [g.grade] : []))),
     v1: tally(called, (r, g) => ((g.graded ?? g).model_version ?? 'v1') === 'v1' ? r.correct : null),
     v2: tally(called, (r, g) => (g.graded ?? g).model_version === 'v2' ? r.correct : null),
     modelSwitch: modelSwitchDate(lines),

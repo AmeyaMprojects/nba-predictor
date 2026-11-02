@@ -113,3 +113,6 @@ export const isStale = (tipMs: number, nowMs: number): boolean => nowMs - tipMs 
 /** How many revision lines a game has. */
 export const revisionCount = (calls: { call_type?: CallType | null }[]): number =>
   calls.filter((l) => callTypeOf(l) === 'revision').length;
+
+/** Show the early-call line only once some grade comes from the call_type era; legacy-only records have no real early calls. */
+export const hasEarlyEra = (grades: { call_type?: CallType | null }[]): boolean => grades.some((g) => g.call_type != null);
