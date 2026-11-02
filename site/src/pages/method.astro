@@ -1,7 +1,7 @@
 ---
 import Base from '../layouts/Base.astro';
 import Arrow from '../components/Arrow.astro';
-import { backtest, site } from '../data/site';
+import { backtest, backtestV2, homeCourtReplay, homeEdges, site } from '../data/site';
 import { getData, latestDay } from '../lib/data';
 import { gameDate, nf } from '../lib/format';
 import { href } from '../lib/url';
@@ -13,6 +13,8 @@ const hash = day?.seal?.short ?? 'e14df79';
 const b = backtest;
 const sw = getData().record.modelSwitch;
 const swDate = sw ? gameDate(sw) : null;
+const edges = homeEdges;
+const signed = (x: number) => `${x > 0 ? '+' : x < 0 ? '\u2212' : ''}${Math.abs(x).toFixed(1)}`;
 ---
 <Base
   title="Method and backtest"
@@ -91,6 +93,25 @@ const swDate = sw ? gameDate(sw) : null;
         <li>Against the closing spread, the result landed on the model's side in {b.againstSpread.model.toFixed(1)}% of {nf(b.againstSpread.games)} games. That is a coin flip: no edge.</li>
       </ul>
       <p>The fair summary: within about 2.5 points of the closing market, from free data, before tip-off.</p>
+      {backtestV2 && (
+        <p>
+          Adding player ratings and the official injury report lifted the same replay to {backtestV2.model.accuracy}% of winners (Brier score {backtestV2.model.brier.toFixed(4)}, log loss {backtestV2.model.logLoss.toFixed(4)}), about one point behind the closing market. That is model v2{swDate ? `, live from ${swDate}` : ', not live yet'}.
+        </p>
+      )}
+    </section>
+
+    <section aria-labelledby="m-home">
+      <h2 id="m-home" class="h3">Home court, team by team</h2>
+      <p>
+        Teams do differ in how much better they do at home. Over each team's last 164 home and 164 away games, the gap runs from {edges[0].team} at {signed(edges[0].points)} to {edges[edges.length - 1].team} at {signed(edges[edges.length - 1].points)} points against the league value. Those gaps turned out to be mostly noise: giving each team its own value scored slightly worse in the six-season replay (Brier score {homeCourtReplay.perTeam.toFixed(4)} against {homeCourtReplay.flat.toFixed(4)}), so the model uses one league-wide value. The team-by-team option is re-tested as seasons are added.
+      </p>
+      <table class="table">
+        <caption class="small">Measured home edge in points, against the league value. Shown for information; not used by the model.</caption>
+        <thead><tr><th scope="col">Team</th><th scope="col" class="num">Edge</th></tr></thead>
+        <tbody>
+          {edges.map((e) => <tr><th scope="row">{e.team}</th><td class="num">{signed(e.points)}</td></tr>)}
+        </tbody>
+      </table>
     </section>
 
     <section aria-labelledby="m-small">

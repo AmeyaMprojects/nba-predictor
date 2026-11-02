@@ -1,34 +1,39 @@
 {
   "availability": {
     "early": {
-      "Available": 0.8534322820037106,
-      "Doubtful": 0.06113843991567112,
-      "Out": 0.016004315770544866,
-      "Probable": 0.8767861957400916,
-      "Questionable": 0.5185148218385068
+      "Available": 0.8609206660137121,
+      "Doubtful": 0.06240713224368499,
+      "Out": 0.01640429253533778,
+      "Probable": 0.8736931336535745,
+      "Questionable": 0.5194914363770096
     },
     "final": {
-      "Available": 0.8548204693242861,
-      "Doubtful": 0.020454545454545454,
-      "Out": 0.001503626393065629,
-      "Probable": 0.917750439367311,
-      "Questionable": 0.5339608979000724
+      "Available": 0.847758761206194,
+      "Doubtful": 0.022792022792022793,
+      "Out": 0.0016948639569020307,
+      "Probable": 0.915475055608516,
+      "Questionable": 0.5339569451563301
     }
   },
   "coefficients": {
-    "altitude": -0.071932,
-    "back_to_back": -1.804111,
-    "injury_box": 0.654118,
-    "injury_pm": 1.086772,
-    "roster_box": 0.257845,
-    "roster_pm": 0.52112,
-    "third_in_four": -0.397948,
-    "travel_per_1000km": 0.168196,
-    "tz_per_hour": -0.49656
+    "altitude": -0.11411,
+    "back_to_back": -1.849149,
+    "injury_box": 0.625391,
+    "injury_pm": 1.138801,
+    "roster_box": 0.254454,
+    "roster_pm": 0.524257,
+    "third_in_four": -0.375674,
+    "travel_per_1000km": 0.164267,
+    "tz_per_hour": -0.491903
   },
   "correction": null,
   "formula": "both",
   "half_life": null,
+  "home": {
+    "altitude_allowance": 0.65823,
+    "shrinkage": null,
+    "window": 164
+  },
   "player": {
     "half_life_minutes": 4000.0,
     "season_regression": 0.4
@@ -41,6 +46,6 @@
     "season_regression": 0.5
   },
   "tuning_games": 7998,
-  "version": 1,
+  "version": 2,
   "w": 0.25
 }

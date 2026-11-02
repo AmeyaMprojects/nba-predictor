@@ -230,3 +230,18 @@ Home-court advantage must not be one flat league-wide value; it differs by team.
 - **Shrinkage strength:** chosen walk-forward on earlier seasons only, like every other setting. Infinite strength means the flat value, so per-team can only ship if it scores at least as well.
 - **Altitude:** stays a separate term, so it is not counted twice.
 - **Where it ships:** part of plan 3's model upgrade. It is evaluated with the same replay and switch-over bar, and the report shows each team's estimated home edge.
+
+## Replay result (plan 3), 2026-11-02
+
+Walk-forward 2020-21..2025-26 on 7,230 games, with the 15-minute report lag (a report counts only 15 minutes after its header time).
+
+| | Current model | Player model (v2) | Closing market (7,227 games) |
+|---|---|---|---|
+| Picked the winner | 65.4% | 66.9% | 67.9% |
+| Brier | 0.2158 | 0.2109 | 0.2051 |
+| Log loss | 0.6205 | 0.6093 | 0.5960 |
+
+- **Switch-over bar: MET.** v2 is lower on Brier in 6 of 6 seasons, calibration is within 3.9 points, and it has both roster and injury terms. The correction model was dropped again (Brier 0.2134).
+- **Early call (12:30 UTC):** 66.7%, Brier 0.2119. Many early calls fall back to the previous evening's report, because the backfill stored reports at the call time, not 15 minutes before. So these numbers lean pessimistic.
+- **Home court per team: dropped by the evidence; owner chose to keep one league-wide value (2026-11-02).** Per team scored 0.2110 against flat 0.2109. Settings chosen on earlier seasons picked flat in 5 of 6 seasons and for 2026-27 (shrinkage 150 in 2020-21 only). Raw team edges run from OKC +3.8 to PHI -4.8 points but do not predict well. The code stays and is re-tested as seasons are added. The Method page shows the measured edges.
+- **Settings:** `player_settings.json` v2: formula both, w 0.25, half-life 4000 min, regression 0.4, sigma 12.90, flat home, no correction.
