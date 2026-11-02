@@ -109,10 +109,10 @@ def test_gh_token_only_on_the_steps_that_call_gh():
     assert "env" not in _live()
     with_token = [s for s in _steps() if "GH_TOKEN" in s.get("env", {})]
     # The loop step uploads raw archives and dispatches site.yml itself.
-    assert [s.get("id") for s in with_token] == ["cloud"]
+    assert [s.get("id") or s.get("name") for s in with_token] == ["cloud", "Start the next job"]
     for step in with_token:
         assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
-    assert (WORKFLOWS / "live.yml").read_text().count("github.token") == 1
+    assert (WORKFLOWS / "live.yml").read_text().count("github.token") == 2
 
 
 def test_job_has_a_timeout_and_python_314_via_cached_uv():
@@ -138,8 +138,18 @@ def test_state_worktree_lives_outside_the_code_checkout():
 def test_site_dispatched_only_from_the_loop():
     # cloud-loop dispatches site.yml after an iteration that changed main
     # (tests/test_cloud_loop.py); no workflow step calls gh itself.
-    assert not any("gh workflow run" in s.get("run", "") for s in _steps())
+    assert not any("gh workflow run site.yml" in s.get("run", "") for s in _steps())
     assert not any(s.get("name") == "Rebuild site" for s in _steps())
+
+
+def test_each_job_starts_the_next_unless_stopped_on_purpose():
+    # GitHub's timer alone left gaps of up to 111 minutes between jobs.
+    step = _named("Start the next job")
+    assert step == _steps()[-1]
+    assert step["run"].strip() == "gh workflow run live.yml --ref main"
+    assert "!cancelled()" in step["if"]
+    assert "steps.cloud.outputs.secret_leak != 'true'" in step["if"]
+    assert _live()["concurrency"]["cancel-in-progress"] is False
 
 
 def test_kept_raw_dirs_uploaded_only_when_kept_and_no_secret_was_found():

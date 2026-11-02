@@ -92,3 +92,13 @@ jobs:
             !${{ runner.temp }}/predictor-data/kept/*/raw/odds
             !${{ runner.temp }}/predictor-data/kept/*/raw/odds_history
           retention-days: 7
+
+      # GitHub's timer can leave hours between starts (gaps of 45-111 minutes
+      # measured 2026-11-01), so each job starts its successor as it ends. The
+      # new run queues behind this one in the `live` concurrency group. Never
+      # after a secret leak or a cancel: those stop on purpose for a person.
+      - name: Start the next job
+        if: ${{ !cancelled() && steps.cloud.outputs.secret_leak != 'true' }}
+        run: gh workflow run live.yml --ref main
+        env:
+          GH_TOKEN: ${{ github.token }}
