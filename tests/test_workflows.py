@@ -149,7 +149,7 @@ def test_each_job_starts_the_next_unless_stopped_on_purpose():
     assert step["run"].strip() == "gh workflow run live.yml --ref main"
     assert "!cancelled()" in step["if"]
     assert "steps.cloud.outputs.secret_leak != 'true'" in step["if"]
-    assert _live()["concurrency"]["cancel-in-progress"] is False
+    assert _live()["concurrency"]["cancel-in-progress"] == "false"
 
 
 def test_kept_raw_dirs_uploaded_only_when_kept_and_no_secret_was_found():
