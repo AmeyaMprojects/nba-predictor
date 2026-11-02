@@ -14,7 +14,10 @@ const b = backtest;
 const sw = getData().record.modelSwitch;
 const swDate = sw ? gameDate(sw) : null;
 const edges = homeEdges;
-const signed = (x: number) => `${x > 0 ? '+' : x < 0 ? '\u2212' : ''}${Math.abs(x).toFixed(1)}`;
+const signed = (x: number) => {
+  const t = Math.abs(x).toFixed(1);
+  return t === '0.0' ? t : `${x > 0 ? '+' : '\u2212'}${t}`;
+};
 ---
 <Base
   title="Method and backtest"
@@ -162,6 +165,7 @@ git log --format='%h %ci %s' -- predictions/</code></pre>
         <li><a class="draw" href="#m-what">What goes into a call</a></li>
         <li><a class="draw" href="#m-not">What it does not know</a></li>
         <li><a class="draw" href="#m-test">The backtest</a></li>
+        <li><a class="draw" href="#m-home">Home court, team by team</a></li>
         <li><a class="draw" href="#m-small">Reading the live record</a></li>
         <li><a class="draw" href="#m-verify">How to verify a call</a></li>
         <li><a class="draw" href="#m-no">Not betting advice</a></li>
