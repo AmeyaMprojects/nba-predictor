@@ -21,7 +21,7 @@ const signed = (x: number) => {
 ---
 <Base
   title="Method and backtest"
-  description="How the model builds a margin from five points terms, how it did against the closing market over 7,227 games, and how to check every call yourself."
+  description="How the model builds a margin from points terms, how it did against the closing market over 7,227 games, and how to check every call yourself."
   current="Method"
 >
   <div class="methodwrap">
@@ -30,19 +30,21 @@ const signed = (x: number) => {
       <p class="label">Method</p>
       <h1 class="method__title">A plain model, checked against the market in public</h1>
       <p class="method__lede">
-        The model adds up a handful of points terms into a predicted margin, then turns that margin into a chance to win. Over six seasons it picked {b.model.accuracy}% of winners. The betting market picked {b.market.accuracy}%. It does not beat the market, and this site never says it does.
+        The model adds up a handful of points terms into a predicted margin, then turns that margin into a chance to win. Over six seasons it picked {swDate && backtestV2 ? backtestV2.model.accuracy : b.model.accuracy}% of winners. The betting market picked {b.market.accuracy}%. It does not beat the market, and this site never says it does.
       </p>
     </header>
 
     <section aria-labelledby="m-what">
       <h2 id="m-what" class="h3">What goes into a call</h2>
-      <p>For each game the model estimates the home team's margin from five terms, all in points:</p>
+      <p>For each game the model estimates the home team's margin from {swDate ? 'seven' : 'five'} terms, all in points:</p>
       <ul class="plain">
         <li><b>Team rating</b>: the gap between the two teams' current strength, updated after every game and pulled halfway back to average between seasons.</li>
+        {swDate && <li><b>Roster</b>: the gap between the two teams' players, each rated from box scores and weighted by recent minutes.</li>}
+        {swDate && <li><b>Injuries</b>: the value of players on the official NBA injury report, each weighted by how often players with that status sit.</li>}
         <li><b>Home court</b>: the recent value of playing at home, measured over the last 1,230 games.</li>
         <li><b>Rest</b>, <b>travel</b> and <b>altitude</b>: small adjustments for back-to-backs, distance flown and playing in Denver or Utah.</li>
       </ul>
-      <p>The margin becomes a win chance through a normal curve with a spread of 12.8 points. The day page for each slate shows every term for every game, next to the log line the model wrote.</p>
+      <p>The margin becomes a win chance through a normal curve with a spread of {swDate ? '12.9' : '12.8'} points. The day page for each slate shows every term for every game, next to the log line the model wrote.</p>
     </section>
 
     <section aria-labelledby="m-not">
