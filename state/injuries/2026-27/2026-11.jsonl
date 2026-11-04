@@ -924,3 +924,4 @@
 {"game_date":"2026-11-04","game_time":"10:30(ET)","kind":"set","matchup":"MIA@LAC","player":"Gardner,Myron","player_display":"Gardner,Myron","reason":"Injury/Illness-RightQuadricepsContusion","status":"Available","team":"MIA","team_display":"MiamiHeat"}
 {"game_date":"2026-11-04","kind":"drop","player":"Smith,Dru","team":"MIA"}
 {"content_sha":"b705390feb28b659a4a80bde387ca88ea71f99a64a024e39ed92167b04056220","fetched_at":"2026-11-04T19:37:01.323358+00:00","kind":"report","report_at":"2026-11-04T19:30:00+00:00","rows":125,"source_key":"Injury-Report_2026-11-04_02_30PM.pdf","v":1}
+{"content_sha":"b705390feb28b659a4a80bde387ca88ea71f99a64a024e39ed92167b04056220","fetched_at":"2026-11-04T19:52:01.348211+00:00","kind":"report","report_at":"2026-11-04T19:45:00+00:00","rows":125,"source_key":"Injury-Report_2026-11-04_02_45PM.pdf","v":1}
