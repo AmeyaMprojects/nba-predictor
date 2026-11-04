@@ -925,3 +925,7 @@
 {"game_date":"2026-11-04","kind":"drop","player":"Smith,Dru","team":"MIA"}
 {"content_sha":"b705390feb28b659a4a80bde387ca88ea71f99a64a024e39ed92167b04056220","fetched_at":"2026-11-04T19:37:01.323358+00:00","kind":"report","report_at":"2026-11-04T19:30:00+00:00","rows":125,"source_key":"Injury-Report_2026-11-04_02_30PM.pdf","v":1}
 {"content_sha":"b705390feb28b659a4a80bde387ca88ea71f99a64a024e39ed92167b04056220","fetched_at":"2026-11-04T19:52:01.348211+00:00","kind":"report","report_at":"2026-11-04T19:45:00+00:00","rows":125,"source_key":"Injury-Report_2026-11-04_02_45PM.pdf","v":1}
+{"content_sha":"ddecf7ec9f7b9c49312f67ba007a75e562724b37df62d25b34cc7075d6ed09c6","fetched_at":"2026-11-04T20:07:01.397327+00:00","kind":"report","report_at":"2026-11-04T20:00:00+00:00","rows":125,"source_key":"Injury-Report_2026-11-04_03_00PM.pdf","v":1}
+{"game_date":"2026-11-04","game_time":"07:00(ET)","kind":"set","matchup":"ATL@WAS","player":"Dennis,RayJ","player_display":"Dennis,RayJ","reason":"GLeague-Two-Way","status":"Out","team":"ATL","team_display":"AtlantaHawks"}
+{"game_date":"2026-11-04","game_time":"07:00(ET)","kind":"set","matchup":"ATL@WAS","player":"Gilbert,Keshon","player_display":"Gilbert,Keshon","reason":"GLeague-Two-Way","status":"Out","team":"ATL","team_display":"AtlantaHawks"}
+{"game_date":"2026-11-04","game_time":"07:00(ET)","kind":"set","matchup":"ATL@WAS","player":"Wilson,Jalen","player_display":"Wilson,Jalen","reason":"GLeague-Two-Way","status":"Out","team":"ATL","team_display":"AtlantaHawks"}
