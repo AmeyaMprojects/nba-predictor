@@ -1373,3 +1373,10 @@
 {"game_date":"2026-11-07","kind":"drop","player":"Goodwin,Jordan","team":"PHX"}
 {"game_date":"2026-11-07","kind":"drop","player":"Williams,Mark","team":"PHX"}
 {"content_sha":"91e59a4dc45b2bad13abe8aa8fd9f2d66d3f70b9fb2c82b8dde08f6ed4f7bf52","fetched_at":"2026-11-20T23:37:01.070993+00:00","kind":"report","report_at":"2026-11-20T23:30:00+00:00","rows":143,"source_key":"Injury-Report_2026-11-20_06_30PM.pdf","v":1}
+{"content_sha":"692d2e27a059d5d5a46913af36dbd2e05e2a79628c00b5868dfd55709ecd06fe","fetched_at":"2026-11-20T23:52:01.112502+00:00","kind":"report","report_at":"2026-11-20T23:45:00+00:00","rows":144,"source_key":"Injury-Report_2026-11-20_06_45PM.pdf","v":1}
+{"game_date":"2026-11-20","game_time":"08:00(ET)","kind":"set","matchup":"WAS@CHI","player":"Essengue,Noa","player_display":"Essengue,Noa","reason":"-","status":"Available","team":"CHI","team_display":"ChicagoBulls"}
+{"game_date":"2026-11-20","game_time":"08:00(ET)","kind":"set","matchup":"WAS@CHI","player":"Smith,Jalen","player_display":"Smith,Jalen","reason":"Injury/Illness-GastrointestinalIllness","status":"Out","team":"CHI","team_display":"ChicagoBulls"}
+{"game_date":"2026-11-20","game_time":"07:30(ET)","kind":"set","matchup":"IND@CLE","player":"Austin,Zack","player_display":"Austin,Zack","reason":"GLeague-Two-Way","status":"Out","team":"CLE","team_display":"ClevelandCavaliers"}
+{"game_date":"2026-11-20","game_time":"07:30(ET)","kind":"set","matchup":"IND@CLE","player":"Watson,Peyton","player_display":"Watson,Peyton","reason":"Injury/Illness-LowBackContusion","status":"Available","team":"CLE","team_display":"ClevelandCavaliers"}
+{"game_date":"2026-11-20","game_time":"07:30(ET)","kind":"set","matchup":"IND@CLE","player":"McConnell,T.J.","player_display":"McConnell,T.J.","reason":"Injury/Illness-RightHamstringStrain","status":"Available","team":"IND","team_display":"IndianaPacers"}
+{"game_date":"2026-11-20","game_time":"08:00(ET)","kind":"set","matchup":"NOP@OKC","player":"MurphyIII,Trey","player_display":"MurphyIII,Trey","reason":"Injury/Illness-BilateralPatellarTendinopathy","status":"Available","team":"NOP","team_display":"NewOrleansPelicans"}
