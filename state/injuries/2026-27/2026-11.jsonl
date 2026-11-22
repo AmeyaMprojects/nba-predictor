@@ -1861,3 +1861,4 @@
 {"game_date":"2026-11-22","game_time":"03:30(ET)","kind":"set","matchup":"DET@ATL","player":"Dennis,RayJ","player_display":"Dennis,RayJ","reason":"GLeague-Two-Way","status":"Available","team":"ATL","team_display":"AtlantaHawks"}
 {"game_date":"2026-11-22","game_time":"03:30(ET)","kind":"set","matchup":"DET@ATL","player":"Wilson,Jalen","player_display":"Wilson,Jalen","reason":"GLeague-Two-Way","status":"Out","team":"ATL","team_display":"AtlantaHawks"}
 {"game_date":"2026-11-22","game_time":"07:00(ET)","kind":"set","matchup":"ORL@WAS","player":"Carrington,Bub","player_display":"Carrington,Bub","reason":"Injury/Illness-Illness","status":"Questionable","team":"WAS","team_display":"WashingtonWizards"}
+{"content_sha":"88156c7525d7609fb10afa2fbf2002a58187979b8db0ff143b28ba789c581dea","fetched_at":"2026-11-22T18:37:00.908982+00:00","kind":"report","report_at":"2026-11-22T18:30:00+00:00","rows":71,"source_key":"Injury-Report_2026-11-22_01_30PM.pdf","v":1}
