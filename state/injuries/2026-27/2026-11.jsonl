@@ -2259,3 +2259,4 @@
 {"game_date":"2026-11-23","game_time":"08:30(ET)","kind":"set","matchup":"LAC@HOU","player":"Miller,Jordan","player_display":"Miller,Jordan","reason":"Injury/Illness-LeftRotatorCuff","status":"Out","team":"LAC","team_display":"LAClippers"}
 {"game_date":"2026-11-23","game_time":"08:00(ET)","kind":"set","matchup":"PHX@NOP","player":"Spencer,Pat","player_display":"Spencer,Pat","reason":"GLeague-Two-Way","status":"Out","team":"PHX","team_display":"PhoenixSuns"}
 {"game_date":"2026-11-23","game_time":"08:00(ET)","kind":"set","matchup":"PHX@NOP","player":"Timme,Drew","player_display":"Timme,Drew","reason":"GLeague-Two-Way","status":"Out","team":"PHX","team_display":"PhoenixSuns"}
+{"content_sha":"c565f8741992d6736acfe206c1b395b4fe2261ebc3fcdefabc86da1393a7a462","fetched_at":"2026-11-24T00:07:01.146720+00:00","kind":"report","report_at":"2026-11-24T00:00:00+00:00","rows":126,"source_key":"Injury-Report_2026-11-23_07_00PM.pdf","v":1}
